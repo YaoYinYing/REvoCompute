@@ -1,4 +1,5 @@
 import { ApiError, beginDownload, downloadName, downloadUrl, getResultManifest, loadAuthorizedResult, requestResultArchive, taskIdFromLocation } from '../../api/result-api';
+import { getTaskType } from '../../api/app-api';
 import { resultFileName, type ArtifactRole, type LogicalResultFile, type ResultArtifact, type ResultFile, type ResultManifest,
   type ResultView, type TaskStatus } from '../../api/result-types';
 import { setButtonIcon } from '../../components/icons';
@@ -55,6 +56,16 @@ function isResultManifest(value: TaskStatus | ResultManifest): value is ResultMa
 const QUIET_OUTCOMES = new Set(['success', 'succeeded', 'completed', 'complete', 'ready']);
 const isQuietOutcome = (manifest: ResultManifest): boolean => manifest.status === 'finished' &&
   (!manifest.outcome || QUIET_OUTCOMES.has(manifest.outcome.trim().toLowerCase()));
+// The stage's scheduler status reuses the register's status tokens. Dependency is a
+// different fact and stays text: a NOT_STARTED stage that is blocked must read
+// "blocked", not borrow the queued/pending tone the status pill would imply.
+const STAGE_STATUS_CLASS: Record<string, string> = {
+  NOT_STARTED: 'status-pending', QUEUED: 'status-pending', RUNNING: 'status-running',
+  COMPLETED: 'status-finished', FAILED: 'status-failed', CANCELLED: 'status-cancelled', INTERRUPTED: 'status-failed',
+};
+function labeled(key: string, value: string): string { const label = t(key); return label === key ? value : label; }
+const stageStatusLabel = (status: string): string => labeled(`results.stage.status.${status}`, status);
+const dependencyLabel = (dependency: string): string => labeled(`results.stage.dependency.${dependency}`, dependency);
 
 /**
  * The one address a citation may link to.
@@ -72,7 +83,7 @@ const citationHref = (citation: { url?: string; doi?: string }): string | null =
   return citation.doi ? `https://doi.org/${encodeURIComponent(citation.doi)}` : null;
 };
 
-interface WorkspaceNodes {  status: HTMLElement; outcome: HTMLElement; badge: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
+interface WorkspaceNodes {  status: HTMLElement; stages: HTMLElement; outcome: HTMLElement; badge: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
   previewTitle: HTMLElement; previewDescription: HTMLElement; preview: HTMLElement; download: HTMLAnchorElement;
   rail: HTMLElement; railDetails: HTMLDetailsElement; reopen: HTMLButtonElement; search: HTMLInputElement;
   fileList: HTMLElement; integrity: HTMLElement; artifactSummary: HTMLElement; archive: HTMLButtonElement; archiveStatus: HTMLElement;
@@ -122,6 +133,8 @@ export class ResultWorkspace {
   private viewStructureColor = 'rainbow';
   private viewStructureTheme = theme();
   private readonly directoryExpansion = new Map<string, boolean>();
+  /** Whether a Task type declares a workflow, read once from its server detail. */
+  private readonly workflowTypes = new Map<string, boolean>();
   private readonly listeners = new AbortController();
 
   constructor(private readonly root: HTMLElement, private readonly createViewer: MolecularViewerFactory, local: LocalResultSource | null = null,
@@ -179,7 +192,15 @@ export class ResultWorkspace {
       const result = this.demoSource
         ? await this.demoSource.load(this.loadController.signal)
         : await loadAuthorizedResult(this.taskId, this.loadController.signal);
-      if (!isResultManifest(result)) { this.renderPending(result); return this; }
+      if (!isResultManifest(result)) {
+        // The status payload carries per-stage state but not whether the Task
+        // Type declares a workflow; the type's own detail is that declaration.
+        // A single-stage Task also reports one implicit stage, so stage count
+        // alone would mistake it for a workflow.
+        const workflow = result.stages?.items.length
+          ? await this.declaresWorkflow(result.task_type, this.loadController.signal) : false;
+        this.renderPending(result, workflow); return this;
+      }
       this.manifest = result; this.renderManifest(result);
     } catch (error) {
       if ((error as Error).name === 'AbortError') return this;
@@ -234,6 +255,9 @@ export class ResultWorkspace {
     const refresh = element('button', 'result-icon-button') as HTMLButtonElement; refresh.type = 'button'; refresh.title = t('results.refresh'); refresh.setAttribute('aria-label', t('results.refresh')); setButtonIcon(refresh, 'RefreshCw');
     refresh.addEventListener('click', () => void this.load()); actions.append(refresh); header.append(identity, actions);
     const status = element('section', 'result-status'); status.setAttribute('aria-live', 'polite');
+    // The stage list is present in the DOM from first paint so a poll can update it
+    // in place; a non-workflow Task never unhides it.
+    const stages = element('section', 'result-stages'); stages.hidden = true;
     const diagnostics = element('section'); diagnostics.hidden = true; diagnostics.tabIndex = -1;
     const viewError = element('button', 'result-button', t('diagnostics.viewError')); viewError.type = 'button'; viewError.hidden = true;
     viewError.addEventListener('click', () => { diagnostics.scrollIntoView({ block: 'start' }); diagnostics.focus(); }); actions.prepend(viewError);
@@ -259,8 +283,8 @@ export class ResultWorkspace {
     const fileList = element('nav', 'result-file-list'); fileList.setAttribute('aria-label', t('results.fileListLabel'));
     const integrity = element('div'); railDetails.append(summary, tools, fileList, integrity); rail.append(closeFiles, railDetails); actions.prepend(reopen);
     workspace.append(main); const record = element('dialog', 'result-record-dialog'); record.setAttribute('aria-label', t('results.run.title')); const recordSummary = element('h2', '', t('results.run.title')); const recordClose = element('button', 'result-button', t('ct.cancel')); recordClose.type = 'button'; recordClose.addEventListener('click', () => record.close()); const recordOpen = element('button', 'result-button', t('results.run.title')); recordOpen.type = 'button'; recordOpen.addEventListener('click', () => record.showModal()); actions.insertBefore(recordOpen, viewMenu); const recordBody = element('section', 'result-record'); const limitations = element('div'); const run = element('div'); recordBody.append(limitations, run); record.append(recordClose, recordSummary, recordBody);
-    page.append(header, status, diagnostics, workspace, record, rail); this.root.append(page);
-    return { status, outcome, badge, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, archiveStatus, limitations, run, diagnostics, viewError };
+    page.append(header, status, stages, diagnostics, workspace, record, rail); this.root.append(page);
+    return { status, stages, outcome, badge, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, archiveStatus, limitations, run, diagnostics, viewError };
   }
 
   private bind(): void {
@@ -278,15 +302,64 @@ export class ResultWorkspace {
   private readonly pagehide = (event: PageTransitionEvent): void => { if (!event.persisted) this.destroy(); };
   private readonly pageshow = (event: PageTransitionEvent): void => { if (event.persisted) this.resize(); };
 
-  private renderPending(payload: TaskStatus): void {
+  private async declaresWorkflow(taskType: string, signal: AbortSignal): Promise<boolean> {
+    const known = this.workflowTypes.get(taskType);
+    if (known !== undefined) return known;
+    try {
+      const declared = (await getTaskType(taskType, signal)).workflow.length > 0;
+      this.workflowTypes.set(taskType, declared);
+      return declared;
+    } catch (error) {
+      if ((error as Error).name === 'AbortError') throw error;
+      // An unreadable detail never invents a workflow; the next poll retries.
+      return false;
+    }
+  }
+
+  private renderPending(payload: TaskStatus, workflow: boolean): void {
     const terminal = payload.terminal === true; const status = payload.status || 'running';
     this.renderDiagnostics(status === 'failed');
     if (terminal && this.poll != null) { clearInterval(this.poll); this.poll = null; }
     this.nodes.title.textContent = payload.display_name || t('results.taskTitle', { id: this.taskId });
     this.setState(status, terminal ? (payload.error || payload.message || t('results.noManifest')) : (payload.message || t('results.running')));
+    this.renderStages(payload, workflow);
     this.resetPreview();
     this.nodes.preview.replaceChildren(element('p', 'result-empty', terminal ? t('results.pendingNone') : t('results.pendingWaiting')));
     if (!terminal && this.poll == null) this.poll = window.setInterval(() => void this.load(), 15_000);
+  }
+
+  /**
+   * The Task's declared stages, each as [stage] [scheduler status] [dependency].
+   *
+   * The scheduler status and the dependency state are separate facts: a stage
+   * with no attempt is NOT_STARTED and may still be ready or blocked, and the
+   * row must say so rather than imply the stage started.
+   */
+  private renderStages(payload: TaskStatus, workflow: boolean): void {
+    const stages = payload.stages;
+    if (!workflow || !stages?.items.length) return;
+    const section = this.nodes.stages;
+    const title = element('h2', '', t('results.stages.title')); title.id = 'result-stages-title';
+    section.setAttribute('aria-labelledby', title.id);
+    const list = element('ol', 'result-stage-list');
+    stages.items.forEach((stage) => {
+      const row = element('li', 'result-stage');
+      row.dataset.stage = stage.name; row.dataset.status = stage.status;
+      row.append(
+        element('span', 'result-stage-name', stage.display_name),
+        element('span', `status ${STAGE_STATUS_CLASS[stage.status] ?? 'status-pending'}`, stageStatusLabel(stage.status)),
+      );
+      // A projection without the dependency field keeps its scheduler status
+      // and shows no dependency phrase: absence is never filled with a guess.
+      const dependency = stage.dependency;
+      if (dependency) {
+        row.dataset.dependency = dependency;
+        row.append(element('span', 'result-stage-dependency', dependencyLabel(dependency)));
+      }
+      list.append(row);
+    });
+    section.replaceChildren(title, list);
+    section.hidden = false;
   }
 
   private renderManifest(manifest: ResultManifest): void {
@@ -709,6 +782,7 @@ export class ResultWorkspace {
   }
   // `status` is the task lifecycle; `quiet` is the runner's own success outcome, which the header states instead.
   private setState(status: string, message: string, quiet = false): void {
+    this.nodes.stages.replaceChildren(); this.nodes.stages.hidden = true;
     this.nodes.status.replaceChildren(element('strong', '', status), element('span', '', message));
     this.nodes.status.hidden = quiet;
     this.nodes.outcome.textContent = quiet ? `✓ ${status}` : status;

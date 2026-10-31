@@ -8,17 +8,24 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+import yaml
+
 from revocompute.artifact_evidence import read_staged_digest
 from revocompute.runner_live_test import (
     RunnerLiveTestError,
     RunnerLiveTestWorker,
     TaskResourceSnapshot,
     ValidationIdentity,
+    _composed_artifacts,
+    _verify_composed_artifacts,
+    receipt_valid_for_artifact,
     active_receipt_valid,
     candidate_receipt_valid,
     run_live_tests,
 )
-from revocompute.live_tests import LiveTestReport, sha256_file
+from revocompute.runner_readiness import bundle_digest
+from revocompute.live_tests import LiveTestConfigurationError, LiveTestReport, sha256_file
 from revocompute.artifact_evidence import write_artifact_evidence
 from revocompute.runner_registry import RuntimeFamily
 
@@ -77,7 +84,8 @@ def test_live_worker_records_explicit_success_lifecycle(tmp_path, monkeypatch):
     worker._load_identity = _identity
     worker._validate_candidate = lambda: None
 
-    def run_case(case, report, resources):
+    def run_case(case, report, resources, composed=()):
+        assert list(composed) == []
         assert report.resource_snapshots[case.task] == resources.as_dict()
         for state in ("SUBMITTED", "RUNNING", "ACCEPTING"):
             worker._transition(report, state)
@@ -96,6 +104,57 @@ def test_live_worker_records_explicit_success_lifecycle(tmp_path, monkeypatch):
     # A passing run binds the staged path to the bytes it validated, which is
     # also the repair for a candidate whose identity predates this record.
     assert read_staged_digest(worker.family) == digest
+
+
+def test_live_worker_submits_the_companion_records_the_identity_hashed(tmp_path, monkeypatch):
+    """The receipt's digest and the submitted pair must come from one snapshot."""
+    owner, companion = _composed_tree(tmp_path)
+    candidate = _accepted_companion(tmp_path, owner, companion)
+    worker = RunnerLiveTestWorker(_State(tmp_path), owner, families=[owner, companion])
+
+    digest = "sha256:6d27641e2684684537fb3f401639558228855c1d5721fd1b4b29fd70e8cffd1e"
+    monkeypatch.setattr("revocompute.runner_live_test.build_slurm_images", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.read_artifact_evidence",
+        lambda *_args: (digest, {"sif_sha256": digest, "build_provenance_digest": "build"}),
+    )
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance",
+        lambda *_args: {"build_provenance_digest": "build", "apptainer_version": "1.4"},
+    )
+    frozen = {
+        "family": companion.name,
+        "path": str(candidate.resolve()),
+        "mode": "candidate",
+        "sha256": sha256_file(candidate),
+        "build_provenance_digest": "build",
+        "runtime_bundle_sha256": None,
+    }
+    case = SimpleNamespace(id="case", task="composed_task", parameters={}, inputs={})
+    plan = SimpleNamespace(
+        digest="test", select=lambda *_args, **_kwargs: [case], omitted=(), collections={}, fixture_hashes={}
+    )
+    seen = []
+
+    def identity():
+        return ValidationIdentity(plan, "config", (TaskResourceSnapshot("composed_task", None, ()),), (frozen,))
+
+    def recompute(*_args, **_kwargs):
+        raise AssertionError("the run must submit the identity's snapshot, not a fresh selection")
+
+    def run_case(case, report, resources, composed=()):
+        seen.append(list(composed))
+        for state in ("SUBMITTED", "RUNNING", "ACCEPTING"):
+            worker._transition(report, state)
+        return {"case_id": "case", "passed": True}
+
+    worker._load_identity = identity
+    worker._validate_candidate = lambda: None
+    worker._run_case = run_case
+    monkeypatch.setattr("revocompute.runner_live_test._composed_artifacts", recompute)
+
+    assert worker.run().passed
+    assert seen == [[frozen]]
 
 
 def test_live_worker_reports_validation_failure_and_timeout_category(tmp_path, monkeypatch):
@@ -160,17 +219,35 @@ def test_live_worker_keeps_structured_case_when_seeding_fails(tmp_path, monkeypa
     ]
 
 
-def test_live_worker_targets_explicit_active_artifact(tmp_path):
+def test_live_worker_runs_an_explicit_artifact_not_a_staged_candidate(tmp_path, monkeypatch):
     worker = _worker(tmp_path)
     active = Path(worker.family.slurm_image)
-
+    active.parent.mkdir(parents=True)
+    active.write_bytes(b"active")
+    worker.candidate.write_bytes(b"staged candidate")
     targeted = RunnerLiveTestWorker(worker.state, worker.family, artifact_path=active)
-
-    assert targeted.artifact == active
-    environment = targeted._runtime_environment(tmp_path / "work")
-    assert environment["REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES"] == (
-        '{"demo": "' + str(active.resolve()) + '"}'
+    request_result = targeted.work_root / "live-test-execution.json"
+    request_result.parent.mkdir(parents=True)
+    request_result.write_text(json.dumps({
+        "execution_uid": 129, "execution_gid": 137, "scheduler_user": "revodesign",
+        "slurm_job_id": "42", "slurm_jobs": [],
+    }))
+    commands = []
+    monkeypatch.setattr("revocompute_ctl.build.build_web_images", lambda *_args: None)
+    monkeypatch.setattr("revocompute.runner_live_test.detect_compose_cmd", lambda: ("docker", "compose"))
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.run_cmd",
+        lambda argv, **_kwargs: commands.append(list(argv)) or type(
+            "Result", (), {"returncode": 0, "stdout": "", "stderr": ""}
+        )(),
     )
+
+    targeted._execute_in_worker("a" * 32, "predict", targeted.work_root)
+
+    command = commands[-1]
+    assert targeted.artifact == active
+    assert f"{active.resolve()}:{active.resolve()}:ro" in command
+    assert f"{worker.candidate.resolve()}:{worker.candidate.resolve()}:ro" not in command
 
 
 def test_active_and_candidate_receipts_bind_to_artifact_bytes(tmp_path, monkeypatch):
@@ -267,6 +344,286 @@ def test_live_worker_uses_candidate_image_one_off_worker_and_contract_mount(tmp_
     assert f"SERVER_DIR={worker.state.server_dir()}/live-tests/{'a' * 32}" in command
     assert f"DB_PATH={worker.state.server_dir()}/live-tests/{'a' * 32}/live-test.sqlite3" in command
     assert any("/run/revocompute-candidate-runners" in value and value.endswith(":ro") for value in command)
+
+
+def _composed_tree(tmp_path: Path) -> tuple[RuntimeFamily, RuntimeFamily]:
+    """A synthetic family whose Task runs its second stage in another family."""
+    runners = tmp_path / "runners"
+    owner_root = runners / "composed_runner"
+    (owner_root / "tasks" / "compose").mkdir(parents=True)
+    (owner_root / "plugin.yaml").write_text(
+        yaml.safe_dump({
+            "api_version": 1,
+            "id": "composed_runner",
+            "version": "1",
+            "runtime": {
+                "image_artifact": "composed_runner_v1.sif",
+                "definition": "composed_runner.def",
+                "entrypoint": ["bash", "/app/run.sh"],
+                "build_inputs": ["composed_runner/run.sh"],
+            },
+            "tasks": ["tasks/compose/task.yaml"],
+        }),
+        encoding="utf-8",
+    )
+    (owner_root / "tasks" / "compose" / "task.yaml").write_text(
+        yaml.safe_dump({
+            "id": "composed_task",
+            "display_name": "Composed",
+            "category": "analysis",
+            "inputs": {
+                "sequence": {
+                    "title": "Sequence",
+                    "type": "protein_sequence",
+                    "formats": ["fasta"],
+                    "cardinality": {"min": 1, "max": 1},
+                }
+            },
+            "workflow": [
+                {"name": "prepare", "runner_args": ["-s", "prepare"]},
+                {"name": "calculate", "family": "companion_runner", "runner_args": ["-s", "run"]},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    companion_root = runners / "companion_runner"
+    companion_root.mkdir()
+    (companion_root / "plugin.yaml").write_text(
+        yaml.safe_dump({
+            "api_version": 1,
+            "id": "companion_runner",
+            "version": "1",
+            "runtime": {
+                "image_artifact": "companion_runner_v1.sif",
+                "definition": "companion_runner.def",
+                "entrypoint": ["bash", "/app/run.sh"],
+                "build_inputs": ["companion_runner/run.sh"],
+            },
+            "tasks": [],
+        }),
+        encoding="utf-8",
+    )
+    return (
+        RuntimeFamily(
+            "composed_runner",
+            "1",
+            "composed_runner.def",
+            "composed_runner_v1.sif",
+            str(tmp_path / "images" / "composed_runner_v1.sif"),
+            root=owner_root,
+        ),
+        RuntimeFamily(
+            "companion_runner",
+            "1",
+            "companion_runner.def",
+            "companion_runner_v1.sif",
+            str(tmp_path / "images" / "companion_runner_v1.sif"),
+            root=companion_root,
+        ),
+    )
+
+
+def test_a_promoted_companion_satisfies_the_acceptance_that_covered_its_bytes(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    candidate = _accepted_companion(tmp_path, owner, companion)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance", lambda _state, _family: {"build_provenance_digest": "build-b"}
+    )
+    state = _State(tmp_path)
+    records = _composed_artifacts(state, owner, families, {"composed_task"})
+
+    # Promotion moves the same validated bytes to the active path.
+    active = Path(companion.slurm_image)
+    candidate.rename(active)
+    _verify_composed_artifacts(state, records, families)
+
+    assert _composed_artifacts(state, owner, families, {"composed_task"}) == records
+
+
+def test_live_worker_enables_and_mounts_every_family_a_composed_task_runs(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    artifact = Path(owner.slurm_image)
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"candidate")
+    companion_candidate = Path(f"{companion.slurm_image}.next")
+    companion_candidate.write_bytes(b"companion candidate")
+    worker = RunnerLiveTestWorker(_State(tmp_path), owner, families=[owner, companion])
+    request_result = worker.work_root / "live-test-execution.json"
+    request_result.parent.mkdir(parents=True)
+    request_result.write_text(json.dumps({
+        "execution_uid": 129, "execution_gid": 137, "scheduler_user": "revodesign",
+        "slurm_job_id": "42", "slurm_jobs": [],
+    }))
+    commands = []
+    monkeypatch.setattr("revocompute_ctl.build.build_web_images", lambda *_args: None)
+    monkeypatch.setattr("revocompute.runner_live_test.detect_compose_cmd", lambda: ("docker", "compose"))
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.run_cmd",
+        lambda argv, **_kwargs: commands.append(list(argv)) or type(
+            "Result", (), {"returncode": 0, "stdout": "", "stderr": ""}
+        )(),
+    )
+
+    worker._execute_in_worker("a" * 32, "composed_task", worker.work_root)
+
+    command = commands[-1]
+    # The Slurm wrapper runs on the host, so every composed family resolves to
+    # the artifact's own path; the worker only needs those files readable.
+    assert "ENABLED_TASKRUNNERS=composed_runner,companion_runner" in command
+    assert f"{artifact.resolve()}:{artifact.resolve()}:ro" in command
+    assert f"{companion_candidate.resolve()}:{companion_candidate.resolve()}:ro" in command
+    overrides = next(item for item in command if item.startswith("REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES="))
+    assert json.loads(overrides.split("=", 1)[1]) == {
+        "composed_runner": str(artifact.resolve()),
+        "companion_runner": str(companion_candidate.resolve()),
+    }
+
+
+def test_live_worker_refuses_a_stage_family_the_invocation_did_not_load(tmp_path):
+    owner, _companion = _composed_tree(tmp_path)
+    worker = RunnerLiveTestWorker(_State(tmp_path), owner)
+
+    with pytest.raises(RunnerLiveTestError) as excinfo:
+        worker._graph_families("composed_task")
+
+    assert excinfo.value.category == "TEST_CONFIGURATION_FAILURE"
+
+
+def _accepted_companion(tmp_path, owner, companion, provenance="build-b"):
+    """A companion candidate with matching direct-build evidence."""
+    artifact = Path(owner.slurm_image)
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"owner candidate")
+    candidate = Path(f"{companion.slurm_image}.next")
+    candidate.write_bytes(b"companion candidate")
+    write_artifact_evidence(companion, sha256_file(candidate), "build", {"build_provenance_digest": provenance})
+    return candidate
+
+
+def test_composed_case_records_and_runs_the_exact_companion_artifact(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    candidate = _accepted_companion(tmp_path, owner, companion)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance", lambda _state, _family: {"build_provenance_digest": "build-b"}
+    )
+    state = _State(tmp_path)
+
+    records = _composed_artifacts(state, owner, families, {"composed_task"})
+    _verify_composed_artifacts(state, records, families)
+
+    assert [item["family"] for item in records] == ["companion_runner"]
+    assert records[0]["sha256"] == sha256_file(candidate)
+    # Content is what the acceptance names: a promoted candidate keeps the
+    # receipt that covered its bytes, so no path is recorded.
+    assert "path" not in records[0] and "mode" not in records[0]
+
+
+def test_composed_case_refuses_a_changed_companion_before_submission(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    candidate = _accepted_companion(tmp_path, owner, companion)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance", lambda _state, _family: {"build_provenance_digest": "build-b"}
+    )
+    state = _State(tmp_path)
+    records = _composed_artifacts(state, owner, families, {"composed_task"})
+    candidate.write_bytes(b"replaced after acceptance")
+
+    with pytest.raises(LiveTestConfigurationError, match="changed after its identity was recorded"):
+        _verify_composed_artifacts(state, records, families)
+
+
+def test_composed_case_refuses_a_companion_without_matching_build_provenance(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    _accepted_companion(tmp_path, owner, companion, provenance="stale-build")
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance", lambda _state, _family: {"build_provenance_digest": "build-b"}
+    )
+    state = _State(tmp_path)
+
+    records = _composed_artifacts(state, owner, families, {"composed_task"})
+    with pytest.raises(LiveTestConfigurationError, match="no matching direct-build provenance"):
+        _verify_composed_artifacts(state, records, families)
+
+
+def test_composed_case_refuses_a_changed_companion_before_any_submission(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    candidate = _accepted_companion(tmp_path, owner, companion)
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance", lambda _state, _family: {"build_provenance_digest": "build-b"}
+    )
+    worker = RunnerLiveTestWorker(_State(tmp_path), owner, families=[owner, companion])
+    worker.candidate.parent.mkdir(parents=True, exist_ok=True)
+    worker.candidate.write_bytes(b"owner candidate")
+    families = {owner.name: owner, companion.name: companion}
+    frozen = _composed_artifacts(_State(tmp_path), owner, families, {"composed_task"})
+    submissions = []
+    monkeypatch.setattr(worker, "_execute_in_worker", lambda *args, **kwargs: submissions.append(args))
+    candidate.write_bytes(b"swapped between identity and launch")
+
+    with pytest.raises(RunnerLiveTestError, match="changed after its identity was recorded"):
+        worker._run_case(
+            SimpleNamespace(id="case", task="composed_task", parameters={}, inputs={}),
+            LiveTestReport(owner.name, "smoke", "", "", "", ""),
+            TaskResourceSnapshot("composed_task", None, ()),
+            frozen,
+        )
+
+    assert submissions == []
+
+
+def test_composed_case_refuses_a_companion_bundle_that_changed(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    _accepted_companion(tmp_path, owner, companion)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance", lambda _state, _family: {"build_provenance_digest": "build-b"}
+    )
+    monkeypatch.setattr("revocompute.runner_readiness.bundle_digest", lambda _state, _family: "sha256:published")
+    state = _State(tmp_path)
+    records = _composed_artifacts(state, owner, families, {"composed_task"})
+    _verify_composed_artifacts(state, records, families)
+
+    monkeypatch.setattr("revocompute.runner_readiness.bundle_digest", lambda _state, _family: "sha256:changed")
+    with pytest.raises(LiveTestConfigurationError, match="runtime bundle for 'companion_runner' changed"):
+        _verify_composed_artifacts(state, records, families)
+
+
+def test_a_promotion_check_resolves_the_companion_the_deployment_runs(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._identity_families", lambda *_args, **_kwargs: families
+    )
+    resolved: list[list[str]] = []
+    construct = RunnerLiveTestWorker.__init__
+
+    def _spy(self, *args, **kwargs):
+        resolved.append(sorted(item.name for item in kwargs.get("families", ())))
+        return construct(self, *args, **kwargs)
+
+    monkeypatch.setattr(RunnerLiveTestWorker, "__init__", _spy)
+
+    receipt_valid_for_artifact(
+        _State(tmp_path),
+        owner,
+        f"{owner.slurm_image}.next",
+        expected_runtime_bundle=bundle_digest(_State(tmp_path), owner),
+    )
+
+    # The promotion check answers for the deployment, so it must hand the worker
+    # every installed family; knowing only its own would report a composed Task
+    # as unloaded and refuse a candidate that passed its composed acceptance.
+    assert resolved == [[companion.name, owner.name]]
+
+
+def test_a_single_family_task_records_no_composed_artifacts(tmp_path):
+    worker = _worker(tmp_path)
+
+    assert _composed_artifacts(worker.state, worker.family, {worker.family.name: worker.family}, {"predict"}) == []
 
 
 def test_live_workers_share_candidate_server_image_build(tmp_path, monkeypatch):

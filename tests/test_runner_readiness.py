@@ -88,6 +88,7 @@ def evidence(tmp_path: Path, monkeypatch):
     plan = SimpleNamespace(
         digest="sha256:test-current",
         select=lambda collection: (SimpleNamespace(id="minimal"),) if collection == "smoke" else (),
+        omitted=(),
     )
     monkeypatch.setattr("revocompute.runner_readiness.diagnose", lambda *_args, **_kwargs: DoctorReport(()))
     monkeypatch.setattr("revocompute.runner_readiness._build_provenance", lambda *_args: current)
@@ -255,6 +256,56 @@ def test_staged_candidate_lifecycle_preserves_active_and_unrelated_evidence(evid
     assert promoted.sif_sha256 == candidate_sha
     assert resolve_runner_readiness(state, other).sif_sha256 == other_sha
     assert other_receipt_path.read_bytes() == other_receipt
+
+
+def test_a_plan_that_omitted_a_declared_case_names_the_task_it_cannot_admit(evidence, monkeypatch):
+    state, family, active = evidence
+    _write_receipt(family, active)
+    plan = SimpleNamespace(
+        digest="sha256:test-current",
+        select=lambda collection: (SimpleNamespace(id="minimal"),) if collection == "smoke" else (),
+        omitted=(("composed-case", "composed_task"),),
+    )
+    monkeypatch.setattr(
+        "revocompute.runner_readiness.load_validation_identity",
+        lambda *_args, **_kwargs: ValidationIdentity(
+            plan, "sha256:config-current", (TaskResourceSnapshot("predict", None, ()),)
+        ),
+    )
+
+    result = resolve_runner_readiness(state, family)
+
+    # The cases the scope ran are still evidence for their own Tasks, so the
+    # family stays ready; the Task whose case was skipped is published so its
+    # own submission can be refused.
+    assert result.status is RunnerReadinessStatus.READY
+    assert result.omitted_tasks == ("composed_task",)
+    assert json.loads(format_readiness_json([result]))["runners"][0]["omitted_tasks"] == ["composed_task"]
+
+
+def test_submission_evidence_refuses_only_the_task_whose_case_was_omitted(tmp_path):
+    from revocompute.admission import resolve_submission_readiness
+
+    directory = tmp_path / "readiness"
+    directory.mkdir()
+    (directory / "demo.json").write_text(
+        json.dumps(
+            {
+                "runner_family": "demo",
+                "status": "READY",
+                "ready": True,
+                "omitted_tasks": ["composed_task"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = resolve_submission_readiness(tmp_path, "demo")
+
+    # A narrowed live test still validated the cases it ran; only the Task whose
+    # own case it skipped is refused.
+    assert evidence.accepts("plain_task")
+    assert not evidence.accepts("composed_task")
 
 
 def test_wrong_scheduler_identity_is_validation_stale_even_with_correct_uid_gid(evidence):

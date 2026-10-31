@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import time
@@ -34,7 +35,9 @@ def test_fileless_live_case_serializes_explicit_task_workspace_identity(tmp_path
     snapshot_root = tmp_path / "workspace" / ("a" * 32) / "inputs"
     form = json.loads(
         live_test_executor._task_input_form(
-            [], snapshot_root, "live-test-fileless_runner", {"resource_policy": None}, "sha256:" + "a" * 64
+            [], snapshot_root, "live-test-fileless_runner", {"resource_policy": None},
+            {"fileless_runner": "sha256:" + "a" * 64},
+            {"fileless_runner": "sha256:" + "b" * 64}, None,
         )
     )
     assert form["entities"] == []
@@ -43,7 +46,150 @@ def test_fileless_live_case_serializes_explicit_task_workspace_identity(tmp_path
     assert form["workspace_key"] == "live-test-fileless_runner"
     assert form["snapshot_root"] == str(snapshot_root)
     assert form["resource_policy"] is None
-    assert form["runtime_bundle_sha256"] == "sha256:" + "a" * 64
+    assert form["runtime_bundles"] == {"fileless_runner": "sha256:" + "a" * 64}
+    assert form["runtime_images"] == {"fileless_runner": "sha256:" + "b" * 64}
+
+
+def test_live_test_pins_candidate_image_bytes_before_a_receipt_exists(tmp_path):
+    """The live test is the run that produces the receipt, so it pins the bytes."""
+    from revocompute.task_types import RuntimeFamily, TaskType
+
+    image = tmp_path / "candidate.sif"
+    image.write_bytes(b"candidate")
+    runtime = RuntimeFamily("live_family", ("bash", "run.sh"), "runner.def", str(image))
+    task_type = TaskType("live", "Live", runtime, ())
+
+    assert live_test_executor._pinned_runtime_images(task_type) == {
+        "live_family": "sha256:" + hashlib.sha256(b"candidate").hexdigest()
+    }
+
+    image.unlink()
+    with pytest.raises(ValueError, match="runtime image is unavailable"):
+        live_test_executor._pinned_runtime_images(task_type)
+
+
+def test_live_storage_key_survives_a_composed_enabled_scope(tmp_path, monkeypatch):
+    """A composed run enables several families; the resolver rejects a comma."""
+    from revocompute.storage import StorageResolver
+
+    monkeypatch.setenv("ENABLED_TASKRUNNERS", "alpha_runner,beta_runner")
+    resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"), None)
+    root = resolver.get_input_root({"md5sum": "a" * 32, "storage_key": live_test_executor._live_storage_key()})
+    assert Path(root).name == "a" * 32
+
+    monkeypatch.setenv("ENABLED_TASKRUNNERS", "alpha_runner")
+    assert live_test_executor._live_storage_key() == "live-test-alpha_runner"
+
+
+def test_workflow_live_task_form_carries_a_dispatchable_frozen_graph(tmp_path):
+    from revocompute import task_runtime
+    from revocompute.execution_graph import execution_graph_payload
+    from revocompute.task_types import RuntimeFamily, StagePortSpec, TaskType, WorkflowStage
+
+    runtime = RuntimeFamily("live_family", ("bash", "run.sh"), "runner.def", "image.sif")
+    first = WorkflowStage(
+        "live.first", "First", False, (), ("first",),
+        outputs=(StagePortSpec("out", "x", path="first.dat"),),
+    )
+    second = WorkflowStage(
+        "live.second", "Second", False, (), ("second",),
+        inputs=(StagePortSpec("in", "x", source="live.first:out"),),
+    )
+    task_type = TaskType(
+        "live", "Live", runtime, (),
+        stage_markers={"first": "First", "second": "Second"},
+        workflow=(first, second),
+    )
+    graph = execution_graph_payload(task_type)
+    form = json.loads(
+        live_test_executor._task_input_form([], tmp_path / "inputs", "live-key", {}, {}, {}, graph)
+    )
+
+    frozen = task_runtime._frozen_execution_graph({"input_form": json.dumps(form)})
+
+    assert frozen is not None
+    assert frozen["digest"] == graph["digest"]
+
+
+def test_composed_live_test_pins_every_referenced_family(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    from revocompute import runtime_bundle
+    from revocompute.task_types import get, get_family
+
+    base, _ = get("multistage_runner")
+    foreign_runtime, _ = get_family("cpu_runner")
+    composed = replace(
+        base,
+        workflow=(base.workflow[0], replace(base.workflow[1], family=foreign_runtime.name)),
+    )
+    runner_root = tmp_path / "runner_root"
+    for family in (base.runtime, foreign_runtime):
+        for relative in family.runtime_overlay:
+            path = runner_root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(family.name, encoding="utf-8")
+    store = tmp_path / "bundles"
+    published = {
+        family.name: runtime_bundle.materialize(runner_root, family.runtime_overlay, store)[0]
+        for family in (base.runtime, foreign_runtime)
+    }
+    runtime_bundle.write_index(store, published)
+    for relative in base.runtime.runtime_overlay:
+        (runner_root / relative).write_text("candidate", encoding="utf-8")
+    candidate = runtime_bundle.materialize(runner_root, base.runtime.runtime_overlay, store)[0]
+    assert candidate != published[base.runtime.name]
+    monkeypatch.setattr(
+        live_test_executor.task_runtime,
+        "CONFIG",
+        replace(live_test_executor.task_runtime.CONFIG, runtime_bundle_root=str(store)),
+    )
+
+    pins = live_test_executor._pinned_runtime_bundles(composed, candidate)
+
+    assert pins == {
+        base.runtime.name: candidate,
+        foreign_runtime.name: published[foreign_runtime.name],
+    }
+
+    runtime_bundle.write_index(store, {base.runtime.name: published[base.runtime.name]})
+    with pytest.raises(ValueError, match="runtime bundle is unavailable"):
+        live_test_executor._pinned_runtime_bundles(composed, candidate)
+
+
+def test_gpu_accounting_uses_any_gpu_stage_in_the_graph(monkeypatch):
+    from revocompute.task_types import RuntimeFamily, TaskType, WorkflowStage
+
+    runtime = RuntimeFamily("live_cpu_family", ("bash", "run.sh"), "runner.def", "image.sif")
+    cpu = WorkflowStage("live.prepare", "Prepare", False, (), ("prepare",))
+    gpu = WorkflowStage("live.model", "Model", True, (), ("model",))
+    task_type = TaskType(
+        "live_cpu", "Live CPU", runtime, (), gpus=False,
+        stage_markers={"prepare": "Prepare", "model": "Model"},
+        workflow=(cpu, gpu),
+    )
+    published = []
+    monkeypatch.setattr(
+        live_test_executor.task_runtime.task_store,
+        "project_gpu_authorization",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        live_test_executor.task_runtime.task_store,
+        "gpu_credit_summary",
+        lambda _user_id: {"period": "2026-10", "remaining_gpu_seconds": 10},
+    )
+    monkeypatch.setattr(
+        live_test_executor, "atomic_write_json", lambda path, payload: published.append((path, payload))
+    )
+
+    context = live_test_executor._prepare_gpu_accounting(task_type)
+
+    assert context == {
+        "user_id": live_test_executor._LIVE_TEST_GPU_USER_ID,
+        "before": {"period": "2026-10", "remaining_gpu_seconds": 10},
+    }
+    assert published
 
 
 def test_worker_executor_records_every_workflow_scheduler_identity(monkeypatch):

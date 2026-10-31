@@ -24,7 +24,7 @@ class RunnerReadinessStatus(str, Enum):
 
 
 class AdmissionEvidence:
-    __slots__ = ("runner_family", "status", "reason_code", "message", "next_action", "ready")
+    __slots__ = ("runner_family", "status", "reason_code", "message", "next_action", "ready", "omitted_tasks")
 
     def __init__(self, payload: dict[str, Any]):
         self.runner_family = str(payload.get("runner_family") or "")
@@ -37,6 +37,14 @@ class AdmissionEvidence:
         self.message = str(payload.get("message") or "Runner readiness evidence is unavailable")
         self.next_action = str(payload.get("next_action") or "doctor")
         self.ready = self.status is RunnerReadinessStatus.READY and payload.get("ready") is True
+        #: Tasks whose declared live-test case the accepting scope skipped.
+        self.omitted_tasks = tuple(
+            str(item) for item in payload.get("omitted_tasks") or () if isinstance(item, str)
+        )
+
+    def accepts(self, task_type: str) -> bool:
+        """Whether this evidence authorizes a submission of ``task_type``."""
+        return self.ready and task_type not in self.omitted_tasks
 
 
 def resolve_submission_readiness(server_dir: str | Path, runner_name: str) -> AdmissionEvidence:

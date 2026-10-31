@@ -1,0 +1,92 @@
+result:
+  files:
+    msa_alignment:
+      pattern: gremlin_msa/*.i90c75_aln.fas
+      cardinality: one
+      required: true
+      type: alignment
+      role: evidence
+    summary:
+      path: summary.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    query:
+      path: query.fasta
+      cardinality: one
+      required: true
+      type: fasta
+      role: artifact
+    alignment:
+      path: alignment/filtered_alignment.a3m
+      cardinality: one
+      required: true
+      type: alignment
+      role: evidence
+    alignment_statistics:
+      path: alignment/statistics.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    sequence_weights:
+      path: alignment/sequence_weights.tsv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    mrf_model:
+      path: model/gremlin_mrf.npz
+      cardinality: one
+      required: true
+      type: model
+      role: evidence
+    model_metadata:
+      path: model/metadata.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    training_history:
+      path: model/training_history.csv
+      cardinality: one
+      required: true
+      type: table
+      role: diagnostic
+    sequence_scores:
+      path: model/sequence_scores.tsv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    profile:
+      path: profiles/profile.tsv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    pairwise_scores:
+      path: couplings/pairwise_scores.tsv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    raw_matrix:
+      path: couplings/raw_scores.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    apc_matrix:
+      path: couplings/apc_scores.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    coupling_plot:
+      path: plots/coupling_apc.png
+      cardinality: one
+      required: true
+      type: image
+      role: diagnostic

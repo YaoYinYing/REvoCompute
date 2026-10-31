@@ -56,6 +56,18 @@ DEFAULT_MONTHLY_GPU_SECONDS = 60_000
 
 _MANIFEST_SHA256 = re.compile("[0-9a-f]{64}\\Z")
 
+#: The observed runtime-image digest a wrapper receipt reports.  Stored with
+#: its algorithm prefix so it is directly comparable to the ``task.json`` pin.
+_RUNTIME_IMAGE_SHA256 = re.compile("sha256:[0-9a-f]{64}\\Z")
+
+
+def _runtime_image_digest(value: Any) -> str | None:
+    """A normalized image digest, or ``None`` for absent/malformed evidence."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip().lower()
+    return value if _RUNTIME_IMAGE_SHA256.fullmatch(value) else None
+
 
 #: Default per-subject durable-storage ceiling, in logical bytes.  Soft: a
 #: result that crosses it is preserved and only later admission is restricted.
@@ -732,10 +744,24 @@ class TaskDatabase:
             Column("attempt", Integer, nullable=False),
             Column("status", String, nullable=False),
             Column("slurm_job_id", String),
+            # The one dispatch that may launch this attempt.  Written before the
+            # adapter can create a scheduler request and never cleared, so a
+            # duplicate or resumed caller that finds it set fails closed instead
+            # of starting a second allocation under the same attempt.
+            Column("dispatch_claim", String),
             Column("planned_resources", Text),
             Column("started_at", Float),
             Column("ended_at", Float),
             Column("reason_code", String),
+            # Validated declared outputs of a COMPLETED attempt, written in the
+            # same guarded UPDATE that settles it: a versioned JSON document of
+            # sorted relative path, size and sha256. NULL on older attempts.
+            Column("output_identity", Text),
+            # The runtime image digest the compute-node wrapper observed
+            # immediately before Apptainer, written ONLY by the guarded
+            # COMPLETED transition after it matched the attempt's pin.  NULL on
+            # every non-completed attempt and on attempts that predate the pin.
+            Column("runtime_image_sha256", Text),
             Column("created_at", Float, nullable=False),
             Column("updated_at", Float, nullable=False),
         )
@@ -870,6 +896,15 @@ class TaskDatabase:
         try:
             for name in self._LEGACY_STAGE_RUN_INDEXES:
                 conn.exec_driver_sql(f'DROP INDEX IF EXISTS "{name}"')
+            columns = {column["name"] for column in sa_inspect(conn).get_columns("stage_runs")}
+            if "output_identity" not in columns:
+                conn.exec_driver_sql("ALTER TABLE stage_runs ADD COLUMN output_identity TEXT DEFAULT NULL")
+            if "runtime_image_sha256" not in columns:
+                conn.exec_driver_sql(
+                    "ALTER TABLE stage_runs ADD COLUMN runtime_image_sha256 TEXT DEFAULT NULL"
+                )
+            if "dispatch_claim" not in columns:
+                conn.exec_driver_sql("ALTER TABLE stage_runs ADD COLUMN dispatch_claim TEXT DEFAULT NULL")
             for index in self.stage_runs_table.indexes:
                 index.create(bind=conn, checkfirst=True)
         except IntegrityError as exc:
@@ -2981,6 +3016,44 @@ class TaskDatabase:
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
+    def claim_stage_dispatch(
+        self,
+        *,
+        task_id: str,
+        stage_name: str,
+        attempt: int,
+        claim_id: str,
+    ) -> bool:
+        """Make ``claim_id`` the only launch owner of one live attempt.
+
+        The compare-and-set runs before the caller may create a scheduler
+        request, so of two concurrent dispatches exactly one proceeds and the
+        other observes ``False`` and must not submit.  A terminal attempt, an
+        attempt that already recorded a scheduler handle, or one another caller
+        already claimed is never claimable.  The claim is not a lease: it is
+        never taken over, because no later caller can prove that the first
+        claimant's ``srun`` was not accepted.
+        """
+        if not str(claim_id or "").strip():
+            raise ValueError("claim_id must be non-empty")
+        stmt = (
+            update(self.stage_runs_table)
+            .where(
+                self.stage_runs_table.c.task_id == task_id,
+                self.stage_runs_table.c.stage_name == stage_name,
+                self.stage_runs_table.c.attempt == attempt,
+                self.stage_runs_table.c.status == stage_state.QUEUED,
+                self.stage_runs_table.c.slurm_job_id.is_(None),
+                or_(
+                    self.stage_runs_table.c.dispatch_claim.is_(None),
+                    self.stage_runs_table.c.dispatch_claim == str(claim_id),
+                ),
+            )
+            .values(dispatch_claim=str(claim_id), updated_at=time.time())
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
     def record_stage_running(
         self,
         *,
@@ -3029,15 +3102,30 @@ class TaskDatabase:
         status: str,
         reason_code: str | None = None,
         ended_at: float | None = None,
+        output_identity: str | None = None,
+        require_identity: bool = False,
+        expected_runtime_image: str | None = None,
+        observed_runtime_image: str | None = None,
     ) -> bool:
         """Settle one attempt with a terminal status, monotonically.
 
         The predicate is the legal-predecessor set, so a late or stale write
         aimed at an already-terminal attempt changes nothing and reports
-        ``False`` instead of regressing recorded evidence.
+        ``False`` instead of regressing recorded evidence.  A workflow caller
+        sets ``require_identity`` so a COMPLETED transition without its
+        artifact identity is refused rather than recorded.
+
+        A COMPLETED transition additionally requires the attempt's pinned image
+        digest and the digest the compute-node wrapper observed immediately
+        before Apptainer, and records the observation only when the two agree.
+        Missing, malformed, mismatched, or inherited NULL evidence is refused,
+        so a completed row always means "observed equal", never a copy of the
+        submission pin.
         """
         if status not in stage_state.TERMINAL_STATUSES:
             raise ValueError(f"finish_stage_attempt needs a terminal status, got {status!r}")
+        if require_identity and status == stage_state.COMPLETED and not output_identity:
+            return False
         timestamp = time.time() if ended_at is None else ended_at
         values: dict[str, Any] = {
             "status": status,
@@ -3045,6 +3133,13 @@ class TaskDatabase:
             "ended_at": timestamp,
             "updated_at": time.time(),
         }
+        if status == stage_state.COMPLETED:
+            expected = _runtime_image_digest(expected_runtime_image)
+            observed = _runtime_image_digest(observed_runtime_image)
+            if expected is None or observed is None or expected != observed:
+                return False
+            values["output_identity"] = output_identity
+            values["runtime_image_sha256"] = observed
         stmt = (
             update(self.stage_runs_table)
             .where(

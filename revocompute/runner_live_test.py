@@ -16,7 +16,7 @@ import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping, Sequence
 
 import yaml
 
@@ -114,6 +114,9 @@ class ValidationIdentity:
     plan: LiveTestPlan
     configuration_digest: str
     resources: tuple[TaskResourceSnapshot, ...]
+    #: The exact companion artifacts hashed into ``configuration_digest``.  The
+    #: run submits these records, never a fresher selection under an older digest.
+    composed_artifacts: tuple[dict[str, Any], ...] = ()
 
     def resources_for(self, task_type: str) -> TaskResourceSnapshot:
         try:
@@ -184,30 +187,56 @@ def _validation_workspace_capabilities(family_root: Path, plugin_doc: Mapping[st
     return projection
 
 
+def _enabled_scope(state) -> set[str] | None:
+    """The deployment's enabled-family universe, or ``None`` when it enables all."""
+    raw = state.get("ENABLED_TASKRUNNERS") if state is not None else None
+    if not raw:
+        raw = os.environ.get("ENABLED_TASKRUNNERS")
+    names = {value for part in str(raw or "").split(",") if (value := part.strip())}
+    return names or None
+
+
 def load_validation_identity(
     family: RuntimeFamily,
     *,
     state=None,
     resource_provider=None,
     repo_root: str | Path = SERVER_ROOT,
+    families: Mapping[str, RuntimeFamily] | None = None,
+    discover: bool = True,
 ) -> ValidationIdentity:
-    """Resolve the family contract and effective resources into one replayable identity."""
+    """Resolve the family contract and effective resources into one replayable identity.
+
+    ``discover=False`` is for a process whose registry already holds this plugin
+    tree (the web service).  Discovery otherwise installs a process-wide
+    snapshot, which a concurrent request must not trigger; callers that opt out
+    have already established the tree and enabled scope.
+    """
     if family.root is None:
         raise LiveTestConfigurationError("Runner family source root is unavailable")
     from revocompute.task_types import _RESULT_VIEW_PRESENTATION_KEYS, discover_plugins, get
 
     plugin_root = family.root.parent
-    discover_plugins(str(plugin_root))
+    if discover:
+        discover_plugins(str(plugin_root), _enabled_scope(state))
     manifest = next(item for item in load_plugin_families(plugin_root) if item.name == family.name)
     schemas: dict[str, dict[str, Any]] = {}
     definitions: dict[str, tuple[Any, Any]] = {}
     task_dirs: dict[str, str] = {}
     plugin_doc = yaml.safe_load((manifest.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
+    # A Task declared here whose composed family this deployment does not enable
+    # was never registered.  Its contract cannot be validated, so the plan
+    # records its cases as omitted instead of failing the whole identity.
+    unavailable: set[str] = set()
     for ref in plugin_doc.get("tasks", ()):
         ref_path = Path(str(ref))
         task_doc = yaml.safe_load((manifest.root / ref_path).read_text(encoding="utf-8")) or {}
         task_id = str(task_doc.get("id") or ref_path.parent.name)
-        task_type, runner = get(task_id)
+        try:
+            task_type, runner = get(task_id)
+        except KeyError:
+            unavailable.add(task_id)
+            continue
         definitions[task_id] = (task_type, runner)
         schemas[task_id] = task_type.schema
         task_dirs[task_id] = ref_path.parent.as_posix() if ref_path.parent != Path(".") else ""
@@ -215,6 +244,7 @@ def load_validation_identity(
         manifest.root / "test.yaml",
         repo_root=repo_root,
         task_schemas=schemas,
+        unavailable_tasks=unavailable,
     )
     if resource_provider is None and state is None:
         raise LiveTestConfigurationError("Validation identity requires current effective resource configuration")
@@ -243,6 +273,14 @@ def load_validation_identity(
         for snapshot in resource_snapshots
         if snapshot.task_type in required_tasks
     }
+    # A composed acceptance names the exact companion artifacts it will run, so
+    # a later change to a companion SIF is invalidated rather than inherited.
+    known_families = _identity_families(family, plugin_root, families, state)
+    composed_artifacts = (
+        _composed_artifacts(state, family, known_families, required_tasks) if state is not None and known_families else []
+    )
+    if composed_artifacts:
+        _verify_composed_artifacts(state, composed_artifacts, known_families)
 
     def result_contract(view) -> dict[str, Any]:
         # Keep every mapping key except the label/scale-only ones, so a new
@@ -321,9 +359,18 @@ def load_validation_identity(
         "expected_files": declared_result_contracts(manifest.root, task_dirs),
         "policies": policies,
         "workspace_capabilities": _validation_workspace_capabilities(manifest.root, plugin_doc),
+        # Cases this deployment cannot run are named in the identity, so a
+        # filtered plan is visible in the receipt and never reads as a pass.
+        "omitted_cases": [{"id": case_id, "task": task} for case_id, task in plan.omitted],
         "resources": required_resources,
     })
-    return ValidationIdentity(plan, canonical_digest(config_public), tuple(resource_snapshots))
+    if composed_artifacts:
+        # Only a family with a composed case carries this, so the identity of a
+        # family that runs alone is unchanged and its existing receipt stands.
+        config_public["composed_artifacts"] = composed_artifacts
+    return ValidationIdentity(
+        plan, canonical_digest(config_public), tuple(resource_snapshots), tuple(composed_artifacts)
+    )
 
 
 class RunnerLiveTestWorker:
@@ -338,12 +385,19 @@ class RunnerLiveTestWorker:
         task: str | None = None,
         artifact_path: str | Path | None = None,
         candidate_bundle: str | None = None,
+        families: Sequence[RuntimeFamily] = (),
+        discover: bool = True,
     ):
         self.state = state
         self.family = family
+        self._discover = discover
         self.collection = collection
         self.task = task
         self._explicit_artifact = Path(artifact_path) if artifact_path is not None else None
+        #: Every family this invocation loaded, so a composed Task's stage can
+        #: run another family's artifact rather than being dropped as unknown.
+        self._families = {item.name: item for item in families}
+        self._families.setdefault(family.name, family)
         #: The exact Runtime Bundle digest this run validates.  The controller
         #: materializes it before the run; the worker binds this digest rather
         #: than the published binding.
@@ -412,11 +466,21 @@ class RunnerLiveTestWorker:
                 raise RunnerLiveTestError(
                     "TEST_CONFIGURATION_FAILURE", "The selected live-test scope contains no cases"
                 )
+            # The identity already froze and hashed the companion artifacts;
+            # submit those exact records, never a fresher selection, and
+            # re-verify their bytes at each launch.
+            composed = list(identity.composed_artifacts)
+            _verify_composed_artifacts(self.state, composed, self._families)
             for case in selected:
                 self._transition(report, "SEEDING")
                 case_started = time.monotonic()
                 try:
-                    case_result = self._run_case(case, report, identity.resources_for(case.task))
+                    case_result = self._run_case(
+                        case,
+                        report,
+                        identity.resources_for(case.task),
+                        _composed_for(self.family, case.task, composed, self._families),
+                    )
                 except RunnerLiveTestError as exc:
                     # Preserve the failed case in the machine report before
                     # propagating its structured category to the run level.
@@ -464,7 +528,13 @@ class RunnerLiveTestWorker:
             report.transitions.append(state)
 
     def _load_identity(self) -> ValidationIdentity:
-        return load_validation_identity(self.family, state=self.state, repo_root=self.repo_root)
+        return load_validation_identity(
+            self.family,
+            state=self.state,
+            repo_root=self.repo_root,
+            families=self._families,
+            discover=self._discover,
+        )
 
     def _validate_candidate(self) -> None:
         artifact = self.artifact
@@ -477,28 +547,26 @@ class RunnerLiveTestWorker:
                 message = (result.stderr or result.stdout or "Apptainer validation failed").strip()
                 raise RunnerLiveTestError("SIF_VALIDATION_FAILURE", message[-2000:])
 
-    def _runtime_environment(self, work_root: Path) -> dict[str, str]:
-        environment = self.state.exported()
-        environment.update(
-            {
-                "SERVER_DIR": str(work_root),
-                "DB_PATH": str(work_root / "live-test.sqlite3"),
-                "MANAGE_DB_PATH": self.state.get("MANAGE_DB_PATH")
-                or str(Path(self.state.server_dir()) / "manage.sqlite"),
-                "RUNNERS_DIR": str(self.family.root.parent),
-                "REVOCOMPUTE_IMAGE_DIR": str(Path(self.family.slurm_image).parent),
-                "REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES": json.dumps(
-                    {self.family.name: str(self.artifact.resolve())}, sort_keys=True
-                ),
-                "ENABLED_TASKRUNNERS": self.family.name,
-                "REVOCOMPUTE_JOB_EXECUTOR": "slurm",
-                "REVOCOMPUTE_CONTAINER_RUNTIME": "apptainer",
-                "REVOCOMPUTE_SCRATCH_BACKEND": self.state.get("REVOCOMPUTE_SCRATCH_BACKEND") or "disk",
-            }
-        )
-        return environment
+    def _graph_families(self, task_type: str) -> list[RuntimeFamily]:
+        """This Task's own family, then every other family its stages run."""
+        try:
+            return _task_graph_families(self.family, task_type, self._families)
+        except LiveTestConfigurationError as exc:
+            raise RunnerLiveTestError("TEST_CONFIGURATION_FAILURE", str(exc)) from exc
 
-    def _run_case(self, case, report: LiveTestReport, resources: TaskResourceSnapshot) -> dict[str, Any]:
+    def _artifact_for(self, family: RuntimeFamily) -> Path:
+        """The artifact a submission in ``family`` would run right now."""
+        if family.name == self.family.name:
+            return self.artifact
+        return _selected_artifact(family)
+
+    def _run_case(
+        self,
+        case,
+        report: LiveTestReport,
+        resources: TaskResourceSnapshot,
+        composed: Sequence[Mapping[str, Any]] = (),
+    ) -> dict[str, Any]:
         case_started = time.monotonic()
         self.work_root.mkdir(parents=True, exist_ok=True)
         task_id = hashlib.sha256(f"{self.work_root.name}-{case.id}".encode()).hexdigest()[:32]
@@ -511,7 +579,13 @@ class RunnerLiveTestWorker:
                 files.append(
                     {"role": role, "relative_path": str(source.relative_to(self.repo_root)), "sha256": sha256_file(source)}
                 )
-        atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": "/run/revocompute-live/artifact.sif", "artifact_sha256": sha256_file(self.artifact), "runtime_bundle_sha256": self._candidate_bundle})
+        # The frozen companion artifacts are re-verified here, immediately before
+        # submission: bytes that moved since the identity cannot launch.
+        try:
+            _verify_composed_artifacts(self.state, composed, self._families)
+        except LiveTestConfigurationError as exc:
+            raise RunnerLiveTestError("TEST_CONFIGURATION_FAILURE", str(exc)) from exc
+        atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": str(self.artifact.resolve()), "artifact_sha256": sha256_file(self.artifact), "runtime_bundle_sha256": self._candidate_bundle})
         request_path.chmod(0o444)
         self._transition(report, "SUBMITTED")
         self._transition(report, "RUNNING")
@@ -584,6 +658,9 @@ class RunnerLiveTestWorker:
                 "artifact_count": len(artifacts),
                 "output_check": output_check,
                 "gpu_accounting": gpu_accounting,
+                # Which exact companion artifacts this case ran, so a composed
+                # receipt names the pair it accepted.
+                "composed_artifacts": composed,
                 "duration_seconds": round(time.monotonic() - case_started, 3),
             }
         except RunnerLiveTestError:
@@ -866,7 +943,14 @@ class RunnerLiveTestWorker:
             and total == entry_usage == balance_delta == reported_usage
         )
 
-    def _execute_in_worker(self, task_id: str, task_type: str, work_root: Path, request_path: Path | None = None, result_path: Path | None = None) -> dict[str, Any]:
+    def _execute_in_worker(
+        self,
+        task_id: str,
+        task_type: str,
+        work_root: Path,
+        request_path: Path | None = None,
+        result_path: Path | None = None,
+    ) -> dict[str, Any]:
         request_path = request_path or work_root / "live-test-request.json"
         result_path = result_path or work_root / "live-test-execution.json"
         # Build the candidate server image without touching running containers.
@@ -881,20 +965,34 @@ class RunnerLiveTestWorker:
             raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
         runner_mount = "/run/revocompute-candidate-runners"
         isolated_server_dir = Path(self.state.server_dir()) / "live-tests" / task_id
+        # Every family this Task's graph runs gets its artifact mounted where it
+        # already lives, so the artifact identity the worker records is the path
+        # the Slurm wrapper executes on the host -- not a container path the host
+        # cannot resolve.
+        families = self._graph_families(task_type)
+        # The case verified these exact bytes immediately before this call; the
+        # path is resolved here only because the Slurm wrapper runs on the host.
+        artifacts = {family.name: str(self._artifact_for(family).resolve()) for family in families}
+        mounts = [
+            argument
+            for artifact in artifacts.values()
+            for argument in ("-v", f"{artifact}:{artifact}:ro")
+        ]
+        image_dir = Path(self.family.slurm_image).parent
         command = [
             *detect_compose_cmd(), *self.state.compose_args(), "--env-file", self.state.env_file,
             "run", "--rm", "--no-deps", "-T",
             "-v", f"{request_path}:/run/revocompute-live/request.json:ro",
             "-v", f"{self.repo_root}:/run/revocompute-live/fixtures:ro",
-            "-v", f"{self.artifact.resolve()}:/run/revocompute-live/artifact.sif:ro",
+            *mounts,
             "-v", f"{self.family.root.parent}:{runner_mount}:ro",
             "-e", f"SERVER_DIR={isolated_server_dir}",
             "-e", f"DB_PATH={isolated_server_dir}/live-test.sqlite3",
             "-e", f"MANAGE_DB_PATH={self.state.get('MANAGE_DB_PATH') or Path(self.state.server_dir()) / 'manage.sqlite'}",
             "-e", f"RUNNERS_DIR={runner_mount}",
-            "-e", "REVOCOMPUTE_IMAGE_DIR=/run/revocompute-live",
-            "-e", f"REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES={json.dumps({self.family.name: str(self.artifact.resolve())}, sort_keys=True)}",
-            "-e", f"ENABLED_TASKRUNNERS={self.family.name}",
+            "-e", f"REVOCOMPUTE_IMAGE_DIR={image_dir}",
+            "-e", f"REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES={json.dumps(artifacts, sort_keys=True)}",
+            "-e", f"ENABLED_TASKRUNNERS={','.join(artifacts)}",
             "-e", "REVOCOMPUTE_LIVE_FIXTURES=/run/revocompute-live/fixtures",
             "worker", "python", "-m", "revocompute.live_test_executor", "/run/revocompute-live/request.json",
         ]
@@ -1024,7 +1122,12 @@ def run_live_tests(
     passed = True
     for family in selected:
         report = RunnerLiveTestWorker(
-            state, family, collection=collection, task=task, candidate_bundle=candidate_bundles.get(family.name)
+            state,
+            family,
+            collection=collection,
+            task=task,
+            candidate_bundle=candidate_bundles.get(family.name),
+            families=families,
         ).run(build=build)
         passed = passed and report.passed
     # A successful case writes a new receipt, so the immutable admission
@@ -1062,19 +1165,162 @@ def prepare_live_test_server_image(state, proxy_build_args: list[str] | None = N
         raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
 
 
-def _family_owns_task(family: RuntimeFamily, task: str) -> bool:
-    if family.root is None:
-        return False
+def _declared_task(family: RuntimeFamily, task: str) -> dict[str, Any] | None:
+    """The Task document ``family`` declares under ``task``, or ``None``."""
+    if family.root is None or not (family.root / "plugin.yaml").is_file():
+        return None
     doc = yaml.safe_load((family.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
     for ref in doc.get("tasks", ()):
         task_doc = yaml.safe_load((family.root / ref).read_text(encoding="utf-8")) or {}
         if str(task_doc.get("id") or Path(ref).parent.name) == task:
-            return True
-    return False
+            return task_doc
+    return None
+
+
+def _family_owns_task(family: RuntimeFamily, task: str) -> bool:
+    return _declared_task(family, task) is not None
+
+
+def _selected_artifact(family: RuntimeFamily) -> Path:
+    """The artifact a submission in ``family`` would run: a staged candidate first."""
+    candidate = Path(f"{family.slurm_image}.next")
+    return candidate if candidate.is_file() else Path(family.slurm_image)
+
+
+def _task_graph_families(
+    owner: RuntimeFamily, task_type: str, families: Mapping[str, RuntimeFamily]
+) -> list[RuntimeFamily]:
+    """This Task's own family, then every other family its stages run.
+
+    A family with no declaration to inspect falls back to itself: the worker is
+    also used to re-check one explicit artifact.
+    """
+    document = _declared_task(owner, task_type)
+    selected = [owner]
+    if document is None:
+        return selected
+    owner_id = str(
+        (yaml.safe_load((owner.root / "plugin.yaml").read_text(encoding="utf-8")) or {}).get("id") or owner.name
+    )
+    for stage in document.get("workflow") or ():
+        if not isinstance(stage, dict):
+            continue
+        name = str(stage.get("family") or owner_id)
+        if any(item.name == name for item in selected):
+            continue
+        companion = families.get(name)
+        if companion is None:
+            raise LiveTestConfigurationError(
+                f"Task {task_type!r} runs stage family {name!r}, which this invocation did not load"
+            )
+        selected.append(companion)
+    return selected
+
+
+def _identity_families(
+    owner: RuntimeFamily,
+    plugin_root: Path,
+    families: Mapping[str, RuntimeFamily] | None,
+    state,
+) -> Mapping[str, RuntimeFamily]:
+    """Every family a composed stage could name, with absolute image paths.
+
+    The live-test worker passes the families it already resolved; readiness and
+    registry callers get the same set derived from the deployment's image root,
+    so one family's identity digest does not depend on which caller computed it.
+    """
+    if families:
+        return dict(families)
+    if state is None:
+        return {}
+    images = Path(state.server_dir()).parent / "images"
+    return {
+        item.name: replace(
+            item,
+            slurm_image=item.slurm_image if Path(item.slurm_image).is_absolute() else str(images / item.slurm_image),
+        )
+        for item in load_plugin_families(plugin_root)
+        if item.name != owner.name
+    } | {owner.name: owner}
+
+
+def _composed_artifacts(
+    state, owner: RuntimeFamily, families: Mapping[str, RuntimeFamily], tasks: Collection[str]
+) -> list[dict[str, Any]]:
+    """The exact companion artifacts and bundles a composed acceptance would run.
+
+    Recorded before launch and re-verified before every submission: a composed
+    acceptance names the pair it accepted, and a companion whose bytes, build
+    provenance or bundle changed afterwards cannot reuse it.  Only content is
+    recorded, never a path: promoting a validated candidate moves its bytes to
+    the active path without changing the acceptance that covered them.
+    """
+    from revocompute.runner_readiness import bundle_digest
+
+    records: dict[str, dict[str, Any]] = {}
+    for task_id in sorted(tasks):
+        for family in _task_graph_families(owner, task_id, families):
+            if family.name == owner.name:
+                continue
+            artifact = _selected_artifact(family)
+            digest = sha256_file(artifact) if artifact.is_file() else ""
+            evidence = read_artifact_evidence(family, artifact, "build")[1] if artifact.is_file() else None
+            records[family.name] = {
+                "family": family.name,
+                "sha256": digest,
+                "build_provenance_digest": (evidence or {}).get("build_provenance_digest"),
+                "runtime_bundle_sha256": bundle_digest(state, family),
+            }
+    return [records[name] for name in sorted(records)]
+
+
+def _composed_for(
+    owner: RuntimeFamily, task_type: str, records: Sequence[Mapping[str, Any]], families: Mapping[str, RuntimeFamily]
+) -> list[Mapping[str, Any]]:
+    """The frozen records that belong to one case's graph."""
+    names = {family.name for family in _task_graph_families(owner, task_type, families)} - {owner.name}
+    return [record for record in records if str(record["family"]) in names]
+
+
+def _verify_composed_artifacts(
+    state, records: Sequence[Mapping[str, Any]], families: Mapping[str, RuntimeFamily]
+) -> None:
+    """Refuse a composed run whose companion artifact is not the recorded one.
+
+    A configuration problem here is reported as ``LiveTestConfigurationError``:
+    readiness and attestation callers treat identity resolution as a bounded
+    failure, so one family's companion cannot fail the whole deployment's view.
+    """
+    from revocompute.runner_readiness import bundle_digest
+
+    for record in records:
+        name = str(record["family"])
+        if record.get("runtime_bundle_sha256") != bundle_digest(state, families[name]):
+            raise LiveTestConfigurationError(
+                f"Composed stage runtime bundle for {name!r} changed after its identity was recorded"
+            )
+        artifact = _selected_artifact(families[name])
+        if not artifact.is_file():
+            raise LiveTestConfigurationError(f"Composed stage family {name!r} has no artifact")
+        if sha256_file(artifact) != record["sha256"]:
+            raise LiveTestConfigurationError(
+                f"Composed stage artifact for {name!r} changed after its identity was recorded"
+            )
+        expected = str(_build_provenance(state, families[name])["build_provenance_digest"])
+        if record.get("build_provenance_digest") != expected:
+            raise LiveTestConfigurationError(
+                f"Composed stage artifact for {name!r} has no matching direct-build provenance"
+            )
 
 
 def receipt_valid_for_artifact(
-    state, family: RuntimeFamily, artifact_path: str | Path, *, sif_sha256: str | None = None
+    state,
+    family: RuntimeFamily,
+    artifact_path: str | Path,
+    *,
+    sif_sha256: str | None = None,
+    discover: bool = True,
+    expected_runtime_bundle: str | None,
 ) -> bool:
     """Return whether required smoke tests passed for the exact artifact identity.
 
@@ -1082,21 +1328,34 @@ def receipt_valid_for_artifact(
     identity alone: two artifacts built from the same inputs share an identity,
     so an identity-only lookup can return another artifact's receipt.  When
     ``sif_sha256`` is supplied, the artifact must still hash to it; a file that
-    changed after the caller measured it is not validated.
+    changed after the caller measured it is not validated.  ``expected_runtime_bundle``
+    is the binding the caller will pin; the receipt is validated against that
+    digest and never against a later read of the activation index.
+
+    ``discover=False`` is for a caller whose process already holds this plugin
+    tree; see ``load_validation_identity``.
     """
-    worker = RunnerLiveTestWorker(state, family, artifact_path=artifact_path)
-    artifact = worker.artifact
-    if not artifact.is_file():
-        return False
     try:
+        # This check answers for the deployment, so it resolves the deployment's
+        # families exactly as readiness does; a composed Task whose companion is
+        # installed must not read as unloaded here and block its own promotion.
+        families = _identity_families(family, family.root.parent, None, state) if family.root is not None else {}
+        worker = RunnerLiveTestWorker(
+            state,
+            family,
+            artifact_path=artifact_path,
+            families=tuple(families.values()),
+            discover=discover,
+        )
+        artifact = worker.artifact
+        if not artifact.is_file():
+            return False
         identity = worker._load_identity()
         provenance = _build_provenance(state, family)
         required = {case.id for case in identity.plan.select("smoke")}
-        from revocompute.runner_readiness import bundle_digest
-
         expected_identity = {
             "build_provenance_digest": str(provenance["build_provenance_digest"]),
-            "runtime_bundle_sha256": bundle_digest(state, family),
+            "runtime_bundle_sha256": expected_runtime_bundle,
             "test_definition_digest": identity.plan.digest,
             "configuration_digest": identity.configuration_digest,
             "execution_uid": int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None,
@@ -1137,9 +1396,25 @@ def receipt_valid_for_artifact(
 
 def candidate_receipt_valid(state, family: RuntimeFamily, *, sif_sha256: str | None = None) -> bool:
     """Return whether required smoke tests passed for the staged candidate."""
-    return receipt_valid_for_artifact(state, family, f"{family.slurm_image}.next", sif_sha256=sif_sha256)
+    from revocompute.runner_readiness import bundle_digest
+
+    return receipt_valid_for_artifact(
+        state,
+        family,
+        f"{family.slurm_image}.next",
+        sif_sha256=sif_sha256,
+        expected_runtime_bundle=bundle_digest(state, family),
+    )
 
 
 def active_receipt_valid(state, family: RuntimeFamily, *, sif_sha256: str | None = None) -> bool:
     """Return whether required smoke tests passed for the active SIF."""
-    return receipt_valid_for_artifact(state, family, family.slurm_image, sif_sha256=sif_sha256)
+    from revocompute.runner_readiness import bundle_digest
+
+    return receipt_valid_for_artifact(
+        state,
+        family,
+        family.slurm_image,
+        sif_sha256=sif_sha256,
+        expected_runtime_bundle=bundle_digest(state, family),
+    )

@@ -44,6 +44,7 @@ maxfilt=100000000
 neffmax=20
 num_iterations=3
 maxmem=${MAXMEM:-64}
+stage=all
 
 # make it stop if error occurs.
 set -e
@@ -53,23 +54,25 @@ usage() {
     echo "Usage: $0 <OPTIONS>"
     echo "Optional Parameters:"
     echo "      -i                  <task.json> task manifest"
+    echo "      -s                  <stage> all|msa|fit|pssm. 'all' runs msa, fit, then pssm."
     echo "      -j                  <nproc> Number of threads used in this run. All processors will be used by default."
     echo "      -o                  <output_dir>   Output directory."
     echo "      -r                  <gremlin_iter> Iteration of GREMLIN, 100 by default"
     echo "      -U                  <uniref30_db> Path/prefix to Uniclust30 database, default for JAPS sever."
     echo "      -u                  <uniref90_db> Path/prefix to Uniref90, default for JAPS sever. "
-    echo "      -B                  <blast_bin> Path/prefix to NCBI BLAST, default as $(dirname "$(command -v psiblast)")"
+    echo "      -B                  <blast_bin> Path/prefix to NCBI BLAST, default as found on PATH"
     echo "      -h                  print help message and exit."
     echo ""
     exit 1
 }
 
-while getopts ":i:o:j:r:U:u:B:h:" opt; do
+while getopts ":i:o:j:r:s:U:u:B:h:" opt; do
     case "${opt}" in
     i) fasta=$OPTARG ;;
     j) nproc=$OPTARG ;;
     o) output_dir=$OPTARG ;;
     r) gremlin_iter=$OPTARG ;;
+    s) stage=$OPTARG ;;
     U) uniref30_db=$OPTARG ;;
     u) uniref90_db=$OPTARG ;;
     B) blast_bin=$OPTARG ;;
@@ -78,6 +81,14 @@ while getopts ":i:o:j:r:U:u:B:h:" opt; do
 
     esac
 done
+
+case "${stage}" in
+  all|msa|fit|pssm) ;;
+  *)
+    echo "Unknown stage: ${stage}. Expected one of: all, msa, fit, pssm." >&2
+    usage
+    ;;
+esac
 
 fasta=$(task_input sequence)
 if [[ -z "${gremlin_iter:-}" ]]; then
@@ -99,12 +110,6 @@ if [[ -z "${fasta:-}" ]]; then
   echo "Missing required option: -i <fasta>"
   usage
 fi
-
-if [[ "$blast_bin" == "" ]]; then
-  blast_bin="$(dirname "$(command -v psiblast)")"
-fi
-
-echo "Checking blast version: $("${blast_bin}/psiblast" -version)"
 
 SCRIPT_PATH='scripts'
 echo "${REVODESIGN_RUNSCRIPT_PATH}/${SCRIPT_PATH}"
@@ -152,124 +157,187 @@ fi
 
 if [[ "$uniref90_db" == "" ]]; then
     uniref90_db=/mnt/db/uniref90/uniref90
-    
-fi
 
-uniref90_db_dir=$(dirname "$uniref90_db")
-
-if compgen -G "${uniref90_db_dir}"/*.phr > /dev/null; then
-  echo "Uniref90 is already formatted as BLAST+ readable."
-else 
-  if compgen -G "${uniref90_db_dir}"/*.fasta > /dev/null; then 
-    echo "find ${uniref90_db}.fasta"
-  else
-    echo "${uniref90_db}.fasta not found, exit."
-    exit 1
-  fi
-  echo "Making BLAST DB Uniref90 for the first time use... this will take a long time."
-  pushd "${uniref90_db_dir}"
-  makeblastdb -in uniref90.fasta -dbtype prot -parse_seqids -out uniref90
-  popd
-  echo "Uniref90 is now formatted."
 fi
 
 # into workingdir
 cd "$pth"
 
-RUN_GREMLIN() {
+# Stage msa: HHblits search, HHfilter redundancy filter, insertion removal.
+# Output: gremlin_msa/<instance>.i90c75_aln.fas, the alignment the fit stage reads.
+RUN_MSA() {
     local fasta
     fasta=$(readlink -f "$1")
     local fasta_fn
     fasta_fn=$(basename "$1")
     if [[ ! -f "$fasta" ]]; then
-        echo "FASTA not exist: $fasta"
+        echo "FASTA not exist: $fasta" >&2
         exit 1
     fi
 
     local instance=${fasta_fn%.fasta}
 
+    local dst
+    dst=$(readlink -f "$(pwd)")
+    local dst_msa="${dst}/gremlin_msa"
+    mkdir -p "$dst_msa"
+
+    local expected_msa="${instance}.i90c75.a3m"
+    local alignment="${instance}.i90c75_aln.fas"
+
+    command -v hhblits >/dev/null 2>&1 || { echo "msa stage requires hhblits on PATH" >&2; exit 1; }
+    command -v hhfilter >/dev/null 2>&1 || { echo "msa stage requires hhfilter on PATH" >&2; exit 1; }
+
+    # This stage is recomputed on every invocation. Outputs and intermediates
+    # left in the shared tree came from an earlier attempt and are never reused.
+    rm -f "${dst_msa}/${alignment}" "${dst_msa}/${expected_msa}" \
+          "${dst_msa}/${instance}.a3m" "${dst_msa}/${instance}.hhr"
+
     echo Running GREMLIN sequence searching ...
+    pushd "$dst_msa"
+    echo "REVODESIGN_STAGE:hhblits"
+    local -a cmd=(
+        hhblits
+        -i "$fasta"
+        -oa3m "${instance}.a3m"
+        -o "${instance}.hhr"
+        -d "$uniref30_db"
+        -n "$iter"
+        -e "$evalue"
+        -mact "$mact"
+        -maxfilt "$maxfilt"
+        -neffmax "$neffmax"
+        -cpu "$nproc"
+        -nodiff
+        -realign_max 10000000
+        -maxmem "$maxmem"
+    )
+    echo "${cmd[*]}"
+    "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhblits.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhblits.err
+
+    echo "REVODESIGN_STAGE:hhfilter"
+    cmd=(hhfilter -i "${instance}.a3m" -id 90 -cov 75 -o "$expected_msa")
+    echo "${cmd[*]}"
+    "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhfilter.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhfilter.err
+
+    # post-processing
+    # remove lower case
+    cmd=(python "${REVODESIGN_RUNSCRIPT_PATH}/${SCRIPT_PATH}/fasta_lower_char_rm.py" "$expected_msa")
+    echo "${cmd[*]}"
+    "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_remove_inserts.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_remove_inserts.err
+    popd
+
+    if [[ ! -s "${dst_msa}/${alignment}" ]]; then
+        echo "msa stage did not produce ${dst_msa}/${alignment}" >&2
+        exit 1
+    fi
+}
+
+# Stage fit: GREMLIN_TFv1 fits fields and couplings to the msa-stage alignment.
+# It needs no sequence database. Output: gremlin_res/<alignment stem>.GREMLIN.mrf.pkl
+RUN_FIT() {
+    local fasta
+    fasta=$(readlink -f "$1")
+    local fasta_fn
+    fasta_fn=$(basename "$1")
+    if [[ ! -f "$fasta" ]]; then
+        echo "FASTA not exist: $fasta" >&2
+        exit 1
+    fi
+
+    local instance=${fasta_fn%.fasta}
 
     local dst
     dst=$(readlink -f "$(pwd)")
     local dst_msa="${dst}/gremlin_msa"
     local dst_gremlin="${dst}/gremlin_res"
-
-    mkdir -p "$dst_msa"
-    mkdir -p "$dst_gremlin"
-    
-    pushd "$dst_msa"
-    echo "REVODESIGN_STAGE:hhblits"
-    if [[ ! -f "${instance}.a3m" ]]; then
-        local -a cmd=(
-            hhblits
-            -i "$fasta"
-            -oa3m "${instance}.a3m"
-            -o "${instance}.hhr"
-            -d "$uniref30_db"
-            -n "$iter"
-            -e "$evalue"
-            -mact "$mact"
-            -maxfilt "$maxfilt"
-            -neffmax "$neffmax"
-            -cpu "$nproc"
-            -nodiff
-            -realign_max 10000000
-            -maxmem "$maxmem"
-        )
-        echo "${cmd[*]}"
-        "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhblits.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhblits.err
-    fi
-
-    echo "REVODESIGN_STAGE:hhfilter"
-    local -a cmd=(hhfilter -i "${instance}.a3m" -id 90 -cov 75 -o "${instance}.i90c75.a3m")
-    echo "${cmd[*]}"
-    local expected_msa=${instance}.i90c75.a3m
-    if [[ ! -f "$expected_msa" ]]; then
-      "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhfilter.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhfilter.err
-    fi
-
-    # post-processing
-    # remove lower case
-    local -a cmd=(python "${REVODESIGN_RUNSCRIPT_PATH}/${SCRIPT_PATH}/fasta_lower_char_rm.py" "$expected_msa")
-    echo "${cmd[*]}"
-    "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_remove_inserts.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_remove_inserts.err
-    # expected output is "$dst_msa/${expected_msa%.a3m}_aln.fas"
-    popd
-    echo Running GREMLIN ...
-
-    echo "REVODESIGN_STAGE:gremlin"
-    pushd "$dst_gremlin"
-    if [[ ! -f "${dst_gremlin}/${instance}.i90c75_aln.GREMLIN.mrf.pkl" ]]; then
-
-      local -a cmd=(
-          python
-          "${REVODESIGN_RUNSCRIPT_PATH}/${SCRIPT_PATH}/GREMLIN_TFv1.py"
-          "${dst_msa}/${expected_msa%.a3m}_aln.fas"
-          "$dst_gremlin"
-          "$gremlin_iter"
-      )
-      echo "${cmd[*]}"
-      "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_tfv1.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_tfv1.err
-      
+    local alignment
+    if [[ -n "${TASK_STAGE_INPUTS:-}" ]]; then
+        # A composed stage consumes only the Server's verified copy of the
+        # producer's artifact, never the shared writable output tree.
+        alignment=$("${GREMLIN_PYTHON:-python3}" "${REVODESIGN_RUNSCRIPT_PATH}/stage_inputs.py" resolve "$TASK_STAGE_INPUTS" alignment)
     else
-      echo "Checkpoint file exists: ${dst_gremlin}/${instance}.i90c75_aln.GREMLIN.mrf.pkl skip GREMLIN_TFv1"
+        alignment="${dst_msa}/${instance}.i90c75_aln.fas"
+        if [[ ! -s "$alignment" ]]; then
+            echo "fit stage requires the msa-stage alignment ${alignment}; run -s msa (or -s all) first." >&2
+            exit 1
+        fi
     fi
 
+    local alignment_stem
+    alignment_stem=$(basename "${alignment%.fas}")
+    local model="${dst_gremlin}/${alignment_stem}.GREMLIN.mrf.pkl"
+    local plot="${dst_gremlin}/${alignment_stem}_GREMLIN_mtx.png"
+
+    # The fit is recomputed on every attempt: this Runner cannot bind the runtime
+    # image identity, so a cache would require an immutable image pin.
+    # Recomputation keeps the published outputs attributable to the attempt that
+    # ran. A model or plot left in the shared tree is never trusted or reused.
+    local fit_script="${GREMLIN_TFV1_SCRIPT:-${REVODESIGN_RUNSCRIPT_PATH}/${SCRIPT_PATH}/GREMLIN_TFv1.py}"
+    mkdir -p "$dst_gremlin"
+    # The result tree is published wholesale, so undeclared contact sidecars
+    # from another alignment must not survive a recompute either.
+    rm -f "$model" "$plot" "${dst_gremlin}"/W_for_positions_*
+    echo Running GREMLIN ...
+    pushd "$dst_gremlin"
+    echo "REVODESIGN_STAGE:gremlin"
+    local -a cmd=(
+        python
+        "$fit_script"
+        "$alignment"
+        "$dst_gremlin"
+        "$gremlin_iter"
+    )
+    echo "${cmd[*]}"
+    "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_tfv1.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_tfv1.err
     popd
+
+    if [[ ! -s "$model" || ! -s "$plot" ]]; then
+        echo "fit stage did not produce ${model} and ${plot}" >&2
+        exit 1
+    fi
 }
 
+# Stage pssm: PSI-BLAST against UniRef90. Independent of the msa and fit stages.
 RUN_PSSM() {
     local fasta
     fasta=$(readlink -f "$1")
     local fasta_fn
     fasta_fn=$(basename "$1")
     if [[ ! -f "$fasta" ]]; then
-        echo FASTA not exist: "$fasta"
+        echo FASTA not exist: "$fasta" >&2
         exit 1
     fi
 
     local instance=${fasta_fn%.fasta}
+
+    local uniref90_db_dir
+    uniref90_db_dir=$(dirname "$uniref90_db")
+    if compgen -G "${uniref90_db_dir}"/*.phr > /dev/null; then
+      echo "Uniref90 is already formatted as BLAST+ readable."
+    else
+      if compgen -G "${uniref90_db_dir}"/*.fasta > /dev/null; then
+        echo "find ${uniref90_db}.fasta"
+      else
+        echo "${uniref90_db}.fasta not found: the pssm stage needs a UniRef90 BLAST database." >&2
+        exit 1
+      fi
+      echo "Making BLAST DB Uniref90 for the first time use... this will take a long time."
+      pushd "${uniref90_db_dir}"
+      makeblastdb -in uniref90.fasta -dbtype prot -parse_seqids -out uniref90
+      popd
+      echo "Uniref90 is now formatted."
+    fi
+
+    if [[ -z "${blast_bin:-}" ]]; then
+      blast_bin="$(dirname "$(command -v psiblast 2>/dev/null || true)")"
+    fi
+    if [[ ! -x "${blast_bin}/psiblast" ]]; then
+      echo "pssm stage requires psiblast; pass -B or put it on PATH" >&2
+      exit 1
+    fi
+
+    echo "Checking blast version: $("${blast_bin}/psiblast" -version)"
 
     echo Running BLAST sequence searching ...
     echo "REVODESIGN_STAGE:blast"
@@ -278,30 +346,33 @@ RUN_PSSM() {
     local dst
     dst=$(readlink -f "$(pwd)")
     local dst_msa="${dst}/pssm_msa"
-    
+
     mkdir -p "$dst_msa"
-    
-    #cp $fasta $dst;
+
+    # This stage is recomputed on every invocation. Outputs and intermediates
+    # left in the shared tree came from an earlier attempt and are never reused.
     pushd "$dst_msa"
-    if [[ ! -f "${instance}_ascii_mtx_file" ]]; then
-        local -a cmd=(
-            "${blast_bin}/psiblast"
-            -query "$fasta"
-            -db "$uniref90_db"
-            -out_pssm "${instance}.ckp"
-            -evalue 0.01
-            -out_ascii_pssm "${instance}_ascii_mtx_file"
-            -out "${instance}_output_file"
-            -num_iterations "$num_iterations"
-            -num_threads "$nproc"
-        )
-        echo "${cmd[*]}"
-        "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_pssm_psiblast.log 2>"${pipline_res_dir}"/log/"${instance}"_pssm_psiblast.err
-    fi
+    rm -f "${instance}_ascii_mtx_file" "${instance}.ckp"
+    local -a cmd=(
+        "${blast_bin}/psiblast"
+        -query "$fasta"
+        -db "$uniref90_db"
+        -out_pssm "${instance}.ckp"
+        -evalue 0.01
+        -out_ascii_pssm "${instance}_ascii_mtx_file"
+        -out "${instance}_output_file"
+        -num_iterations "$num_iterations"
+        -num_threads "$nproc"
+    )
+    echo "${cmd[*]}"
+    "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_pssm_psiblast.log 2>"${pipline_res_dir}"/log/"${instance}"_pssm_psiblast.err
     wait
-    
     popd
 
+    if [[ ! -s "${dst_msa}/${instance}_ascii_mtx_file" ]]; then
+        echo "pssm stage did not produce ${dst_msa}/${instance}_ascii_mtx_file" >&2
+        exit 1
+    fi
 }
 
 if [[ -z "${output_dir:-}" ]]; then
@@ -314,13 +385,21 @@ fi
 
 mkdir -p "$pipline_res_dir"/log
 
-pushd "$pipline_res_dir"
+stage_list=()
+case "${stage}" in
+  all) stage_list=(msa fit pssm) ;;
+  *) stage_list=("${stage}") ;;
+esac
 
 echo Processing "$fasta_fp" ...
-RUN_GREMLIN "$fasta_fp"
-popd
-pushd "$pipline_res_dir"
-RUN_PSSM "$fasta_fp"
-popd
+for selected_stage in "${stage_list[@]}"; do
+  pushd "$pipline_res_dir"
+  case "${selected_stage}" in
+    msa) RUN_MSA "$fasta_fp" ;;
+    fit) RUN_FIT "$fasta_fp" ;;
+    pssm) RUN_PSSM "$fasta_fp" ;;
+  esac
+  popd
+done
 
 touch "${pipline_res_dir}/log/task_finished"

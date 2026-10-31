@@ -10,8 +10,10 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+from revocompute.admission import AdmissionEvidence
+
 import yaml
-from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
+from conftest import _admin_client_auth, _load_pssm_module, _pin_runtime_image, _test_client_auth
 from revocompute.task_types import discover_plugins
 
 
@@ -131,12 +133,15 @@ def test_production_admission_blocks_non_ready_before_queue_side_effect(monkeypa
         route = route.__wrapped__
     monkeypatch.setattr(
         "revocompute.admission.resolve_submission_readiness",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            ready=False,
-            status=SimpleNamespace(value="VALIDATION_STALE"),
-            reason_code="RECEIPT_STALE",
-            message="receipt is stale",
-            next_action="live-test",
+        lambda *_args, **_kwargs: AdmissionEvidence(
+            {
+                "runner_family": "demo_runner",
+                "status": "VALIDATION_STALE",
+                "ready": False,
+                "reason_code": "RECEIPT_STALE",
+                "message": "receipt is stale",
+                "next_action": "live-test",
+            }
         ),
     )
     response = _submit_cpu_runner(module.app.test_client(), _test_client_auth(module))
@@ -149,17 +154,21 @@ def test_production_admission_blocks_non_ready_before_queue_side_effect(monkeypa
 def test_production_admission_allows_ready_runner(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    _pin_runtime_image(module, "cpu_runner")
     route = module.app.view_functions["upload_file"]
     while hasattr(route, "__wrapped__"):
         route = route.__wrapped__
     monkeypatch.setattr(
         "revocompute.admission.resolve_submission_readiness",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            ready=True,
-            status=SimpleNamespace(value="READY"),
-            reason_code="READY",
-            message="ready",
-            next_action="none",
+        lambda *_args, **_kwargs: AdmissionEvidence(
+            {
+                "runner_family": "demo_runner",
+                "status": "READY",
+                "ready": True,
+                "reason_code": "READY",
+                "message": "ready",
+                "next_action": "none",
+            }
         ),
     )
     module.app.config["infrastructure_readiness"] = SimpleNamespace(

@@ -20,12 +20,20 @@ task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.
 # shellcheck disable=SC1090
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 
-input_file=$(task_input alignment)
+runner_dir=$(dirname "$(readlink -f "$0")")
+stage_inputs_doc="${TASK_STAGE_INPUTS:-}"
+if [[ -n "$stage_inputs_doc" ]]; then
+  # A composed stage: the Server materialized a producer's verified artifact
+  # under this role and wrote the digest-bound document. A composed Task has no
+  # uploaded alignment, so this path never falls back to task.json.
+  input_file=$("${GREMLIN_LH_PYTHON:-python3}" "$runner_dir/stage_inputs.py" resolve "$stage_inputs_doc" alignment)
+else
+  [[ "${TASK_TYPE:-}" == "gremlin_lh_fit" ]] || { echo "Unknown TASK_TYPE: ${TASK_TYPE:-}" >&2; exit 1; }
+  input_file=$(task_input alignment)
+fi
 [[ -f "$input_file" ]] || { echo "GREMLIN_LH alignment input not found: $input_file" >&2; exit 1; }
 mkdir -p "$output_dir"
 output_dir=$(readlink -f "$output_dir")
-
-[[ "${TASK_TYPE:-}" == "gremlin_lh_fit" ]] || { echo "Unknown TASK_TYPE: ${TASK_TYPE:-}" >&2; exit 1; }
 echo "REVODESIGN_STAGE:gremlin_lh_fit"
 "${GREMLIN_LH_PYTHON:-python3}" "${GREMLIN_LH_FIT_MODEL:-/app/revocompute/fit_model.py}" \
   --input "$input_file" \

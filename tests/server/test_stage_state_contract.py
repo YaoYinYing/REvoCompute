@@ -8,16 +8,24 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+from pathlib import Path
 import sqlite3
+import subprocess
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from revocompute import stage_state
 from revocompute import task_runtime
 from revocompute.db import TaskDatabase
+from revocompute.execution_graph import compile_graph
 from revocompute.resource_policy import ResolvedResources
-from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskType, WorkflowStage
+from revocompute.task_types import RunnerConfig, RuntimeFamily, StagePortSpec, TaskType, WorkflowStage
+
+#: One dummy digest shared by direct store calls: the guarded COMPLETED
+#: transition requires the pin and the observation to agree.
+_IMAGE = "sha256:" + "a" * 64
 
 
 def _policy(requires_gpu: bool) -> ResolvedResources:
@@ -41,8 +49,14 @@ def _policy(requires_gpu: bool) -> ResolvedResources:
 def _task_type() -> TaskType:
     runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
     stages = (
-        WorkflowStage("multistage_runner.features", "Features", False, ("-s", "features"), ("msa",)),
-        WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",)),
+        WorkflowStage(
+            "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
+            outputs=(StagePortSpec("features", "features", path="features.dat"),),
+        ),
+        WorkflowStage(
+            "multistage_runner.model", "Model", True, ("-s", "model"), ("model",),
+            inputs=(StagePortSpec("features", "features", source="multistage_runner.features:features"),),
+        ),
     )
     return TaskType(
         "multistage_runner",
@@ -68,7 +82,78 @@ def _single_stage_type() -> TaskType:
     )
 
 
+def _fork_task_type() -> TaskType:
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    a = WorkflowStage(
+        "fork.a", "A", False, (), ("a",), outputs=(StagePortSpec("out", "x", path="a.dat"),),
+    )
+    b = WorkflowStage(
+        "fork.b", "B", False, (), ("b",),
+        inputs=(StagePortSpec("in", "x", source="fork.a:out"),),
+        outputs=(StagePortSpec("out", "x", path="b.dat"),),
+    )
+    c = WorkflowStage(
+        "fork.c", "C", False, (), ("c",),
+        inputs=(StagePortSpec("in", "x", source="fork.a:out"),),
+        outputs=(StagePortSpec("out", "x", path="c.dat"),),
+    )
+    d = WorkflowStage(
+        "fork.d", "D", False, (), ("d",),
+        inputs=(
+            StagePortSpec("left", "x", source="fork.b:out"),
+            StagePortSpec("right", "x", source="fork.c:out"),
+        ),
+        outputs=(StagePortSpec("out", "x", path="d.dat"),),
+    )
+    return TaskType(
+        "fork", "Fork", runtime, (),
+        stage_markers={"a": "A", "b": "B", "c": "C", "d": "D"},
+        workflow=(a, b, c, d),
+    )
+
+
+def _settle_stage(
+    database: TaskDatabase, task_id: str, index: int, stage: WorkflowStage,
+    result_dir: Path, *, status: str,
+) -> None:
+    attempt = database.begin_stage_attempt(task_id=task_id, stage_index=index, stage_name=stage.name)
+    identity = None
+    if status == stage_state.COMPLETED:
+        for port in stage.outputs:
+            (result_dir / port.path).write_text(stage.name, encoding="utf-8")
+        identity = task_runtime._stage_output_identity(str(result_dir), stage.outputs)
+    assert database.finish_stage_attempt(
+        task_id=task_id,
+        stage_name=stage.name,
+        attempt=attempt["attempt"],
+        status=status,
+        reason_code="completed" if status == stage_state.COMPLETED else "nonzero_exit",
+        output_identity=identity,
+        expected_runtime_image=_IMAGE if status == stage_state.COMPLETED else None,
+        observed_runtime_image=_IMAGE if status == stage_state.COMPLETED else None,
+    )
+
+
+def _freeze(database: TaskDatabase, task_id: str, task_type: TaskType) -> None:
+    graph = compile_graph(task_type)
+    database.update_task(
+        task_id,
+        input_form=json.dumps({
+            "execution_graph": {
+                "ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document,
+            },
+            "runtime_images": {task_type.runtime.name: _IMAGE},
+        }),
+    )
+
+
 def _insert_task(database: TaskDatabase, task_id: str, *, status: str = "queued", **fields) -> None:
+    # A submitted Task always carries its runtime-image pins; a completed row
+    # is current only when its observation equals the owning family's pin.
+    fields.setdefault(
+        "input_form",
+        json.dumps({"runtime_images": {"multistage_runner": _IMAGE, "cpu_runner": _IMAGE}}),
+    )
     database.upsert_task(
         task_id,
         filename="input.fasta",
@@ -102,7 +187,12 @@ def test_attempt_identity_is_exactly_once_and_transitions_are_monotonic(tmp_path
         )
         assert database.record_stage_running(task_id=task_id, stage_name="features", attempt=1)
         assert database.finish_stage_attempt(
-            task_id=task_id, stage_name="features", attempt=1, status=stage_state.COMPLETED,
+            task_id=task_id,
+            stage_name="features",
+            attempt=1,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE,
             reason_code=stage_state.Reason.COMPLETED,
         )
 
@@ -125,6 +215,40 @@ def test_attempt_identity_is_exactly_once_and_transitions_are_monotonic(tmp_path
             reason_code=stage_state.Reason.WORKER_LOST,
         )
         assert [run["attempt"] for run in database.list_stage_runs(task_id)] == [1, 2]
+    finally:
+        database.engine.dispose()
+
+
+def test_workflow_completion_requires_a_recorded_identity(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    try:
+        task_id = "a" * 32
+        _insert_task(database, task_id, status="running")
+        database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="features")
+
+        assert not database.finish_stage_attempt(
+            task_id=task_id,
+            stage_name="features",
+            attempt=1,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE,
+            output_identity=None,
+            require_identity=True,
+        )
+        assert database.list_stage_runs(task_id)[0]["status"] != stage_state.COMPLETED
+
+        assert database.finish_stage_attempt(
+            task_id=task_id,
+            stage_name="features",
+            attempt=1,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE,
+            output_identity='{"output_identity_format": 1, "files": []}',
+            require_identity=True,
+        )
+        assert database.list_stage_runs(task_id)[0]["status"] == stage_state.COMPLETED
     finally:
         database.engine.dispose()
 
@@ -158,8 +282,12 @@ def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, mo
             return "42"
 
         def poll(self):
+            (tmp_path / "results" / "features.dat").write_text("features")
             _snapshot("poll")
             return task_runtime.JobState.COMPLETED
+
+        def runtime_image_observation(self):
+            return SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
 
     def _create_job(_task_id, _tt, _runner, _entities, _output, stage_callback=None, **kwargs):
         del stage_callback
@@ -172,13 +300,14 @@ def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, mo
         )
 
     monkeypatch.setattr(task_runtime, "_create_job", _create_job)
+    _freeze(database, task_id, tt)
+    (tmp_path / "results").mkdir()
 
     result = task_runtime._run_compute_workflow(
         task_id,
         database.get_task(task_id),
         tt,
-        RunnerConfig(),
-        [],
+        [{"type": "workspace", "workspace_root": str(tmp_path / "workspace"), "workspace_key": "owner-key"}],
         str(tmp_path / "results"),
         {
             "multistage_runner.features": _policy(False),
@@ -224,6 +353,78 @@ def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, mo
     assert [step["status"] for step in mirror.values()] == ["completed", "completed"]
 
 
+def test_dependency_distinguishes_completed_ready_and_waiting_branches(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d" * 32
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    tt = _fork_task_type()
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (tt, None))
+    result_dir = tmp_path / "result"
+    result_dir.mkdir()
+    monkeypatch.setattr(task_runtime, "_task_result_dir", lambda task: str(result_dir))
+    _settle_stage(database, task_id, 0, tt.workflow[0], result_dir, status=stage_state.COMPLETED)
+    _settle_stage(database, task_id, 1, tt.workflow[1], result_dir, status=stage_state.COMPLETED)
+
+    def _must_not_hash(*_args, **_kwargs):
+        raise AssertionError("a status projection must not hash artifact contents")
+
+    monkeypatch.setattr(task_runtime, "_stage_output_identity", _must_not_hash)
+    projection = task_runtime.stage_projection(database.get_task(task_id))
+
+    assert {item["name"]: item["dependency"] for item in projection["items"]} == {
+        "fork.a": "completed",
+        "fork.b": "completed",
+        "fork.c": "ready",
+        "fork.d": "waiting",
+    }
+
+
+def test_blocked_join_reports_blocked_while_sibling_stays_completed(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d" * 32
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    tt = _fork_task_type()
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (tt, None))
+    result_dir = tmp_path / "result"
+    result_dir.mkdir()
+    monkeypatch.setattr(task_runtime, "_task_result_dir", lambda task: str(result_dir))
+    _settle_stage(database, task_id, 0, tt.workflow[0], result_dir, status=stage_state.COMPLETED)
+    _settle_stage(database, task_id, 1, tt.workflow[1], result_dir, status=stage_state.FAILED)
+    _settle_stage(database, task_id, 2, tt.workflow[2], result_dir, status=stage_state.COMPLETED)
+    database.record_task_diagnostics(
+        task_id, {"reason_code": "nonzero_exit", "stage_id": "fork.b", "blocked_stages": ["fork.d"]}
+    )
+
+    projection = task_runtime.stage_projection(database.get_task(task_id))
+
+    assert {item["name"]: item["dependency"] for item in projection["items"]} == {
+        "fork.a": "completed",
+        "fork.b": "blocked",
+        "fork.c": "completed",
+        "fork.d": "blocked",
+    }
+    assert database.get_task_diagnostics(task_id)["blocked_stages"] == ["fork.d"]
+
+
+def test_single_stage_task_dependency_is_ready_while_non_terminal(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d" * 32
+    _insert_task(database, task_id, status="running", task_type="cpu_runner")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    tt = _single_stage_type()
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (tt, None))
+    attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=tt.name)
+    database.record_stage_running(task_id=task_id, stage_name=tt.name, attempt=attempt["attempt"])
+
+    projection = task_runtime.stage_projection(database.get_task(task_id))
+
+    assert projection["items"][0]["status"] == stage_state.RUNNING
+    assert projection["items"][0]["dependency"] == "ready"
+    assert "execution_graph" not in projection
+
+
 def test_failed_attempt_uses_the_adapter_reason_and_never_another_attempt_evidence(tmp_path, monkeypatch):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     task_id = "f" * 32
@@ -258,6 +459,8 @@ def test_failed_attempt_uses_the_adapter_reason_and_never_another_attempt_eviden
     assert not database.finish_stage_attempt(
         task_id=task_id, stage_name="multistage_runner.model", attempt=attempt["attempt"],
         status=stage_state.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
     )
 
 
@@ -294,13 +497,14 @@ def test_failed_stage_stops_the_workflow_before_the_next_allocation(tmp_path, mo
         )
 
     monkeypatch.setattr(task_runtime, "_create_job", _create_job)
+    _freeze(database, task_id, tt)
+    (tmp_path / "results").mkdir()
 
     result = task_runtime._run_compute_workflow(
         task_id,
         database.get_task(task_id),
         tt,
-        RunnerConfig(),
-        [],
+        [{"type": "workspace", "workspace_root": str(tmp_path / "workspace"), "workspace_key": "owner-key"}],
         str(tmp_path / "results"),
         {
             "multistage_runner.features": _policy(False),
@@ -350,8 +554,13 @@ def test_worker_loss_interrupts_the_live_attempt_and_resume_uses_a_new_attempt(t
     )
     database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="multistage_runner.features")
     database.finish_stage_attempt(
-        task_id=task_id, stage_name="multistage_runner.features", attempt=1,
-        status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+        task_id=task_id,
+        stage_name="multistage_runner.features",
+        attempt=1,
+        status=stage_state.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
+        reason_code=stage_state.Reason.COMPLETED,
     )
     database.begin_stage_attempt(task_id=task_id, stage_index=1, stage_name="multistage_runner.model")
     database.record_stage_running(
@@ -405,7 +614,12 @@ def test_finish_active_stage_runs_settles_every_live_attempt_and_no_terminal_one
     database.begin_stage_attempt(task_id=task_id, stage_index=1, stage_name="b")
     database.begin_stage_attempt(task_id=task_id, stage_index=2, stage_name="c")
     database.finish_stage_attempt(
-        task_id=task_id, stage_name="c", attempt=1, status=stage_state.COMPLETED,
+        task_id=task_id,
+        stage_name="c",
+        attempt=1,
+        status=stage_state.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
         reason_code=stage_state.Reason.COMPLETED,
     )
 
@@ -426,6 +640,8 @@ def test_an_attempt_whose_start_was_missed_can_still_complete(tmp_path):
     database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="cpu_runner")
     assert database.finish_stage_attempt(
         task_id=task_id, stage_name="cpu_runner", attempt=1, status=stage_state.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
         reason_code=stage_state.Reason.COMPLETED,
     )
     assert database.list_stage_runs(task_id)[0]["status"] == stage_state.COMPLETED
@@ -476,6 +692,29 @@ def test_cancellation_during_submission_settles_the_attempt(tmp_path, monkeypatc
     )
 
 
+def test_single_stage_attempt_failure_blocks_the_allocation(tmp_path, monkeypatch):
+    import sqlite3
+
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "9" * 32
+    _insert_task(database, task_id, status="queued", task_type="cpu_runner")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    def unavailable(**_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(database, "begin_stage_attempt", unavailable)
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: pytest.fail("no allocation"))
+
+    state = task_runtime._run_compute_job(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+        resource_policy=_policy(False),
+    )
+
+    assert state == task_runtime.JobState.FAILED
+    assert database.get_task_diagnostics(task_id)["reason_code"] == "stage_attempt_unavailable"
+
+
 def test_single_stage_job_records_its_lifecycle_through_the_allocation_boundary(tmp_path, monkeypatch):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     task_id = "8" * 32
@@ -496,6 +735,9 @@ def test_single_stage_job_records_its_lifecycle_through_the_allocation_boundary(
 
         def poll(self):
             return task_runtime.JobState.COMPLETED
+
+        def runtime_image_observation(self):
+            return SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
 
     captured: dict = {}
 
@@ -526,6 +768,72 @@ def test_single_stage_job_records_its_lifecycle_through_the_allocation_boundary(
         0, 1, stage_state.COMPLETED, "77",
     )
     assert run["started_at"] is not None and run["ended_at"] is not None
+
+
+def test_single_stage_completion_without_an_observed_image_fails_the_task(tmp_path, monkeypatch):
+    """A finished allocation whose image the wrapper did not observe cannot publish.
+
+    The completion is refused by the guarded transition; the attempt must then
+    become a failure, not stay RUNNING under a Task that reports success.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "6" * 32
+    _insert_task(database, task_id, status="queued", task_type="cpu_runner")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    class _Job:
+        def submit(self):
+            return "77"
+
+        def poll(self):
+            return task_runtime.JobState.COMPLETED
+
+        def runtime_image_observation(self):
+            return None
+
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: _Job())
+
+    state = task_runtime._run_compute_job(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+        resource_policy=_policy(False),
+    )
+
+    assert state == task_runtime.JobState.FAILED
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["status"], run["reason_code"]) == (stage_state.FAILED, "image_identity_missing")
+    assert run["runtime_image_sha256"] is None
+    assert database.get_task_diagnostics(task_id)["reason_code"] == "image_identity_missing"
+
+
+def test_single_stage_completion_whose_settlement_does_not_commit_reports_settlement_failed(
+    tmp_path, monkeypatch
+):
+    """A valid observation with a refused write is a bookkeeping failure, not a missing image."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "5" * 32
+    _insert_task(database, task_id, status="queued", task_type="cpu_runner")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(database, "finish_stage_attempt", lambda **_kwargs: False)
+
+    class _Job:
+        def submit(self):
+            return "77"
+
+        def poll(self):
+            return task_runtime.JobState.COMPLETED
+
+        def runtime_image_observation(self):
+            return SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
+
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: _Job())
+
+    state = task_runtime._run_compute_job(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+        resource_policy=_policy(False),
+    )
+
+    assert state == task_runtime.JobState.FAILED
+    assert database.get_task_diagnostics(task_id)["reason_code"] == "stage_settlement_failed"
 
 
 def test_unaccounted_callbacks_never_settle_an_allocation(tmp_path, monkeypatch):
@@ -592,10 +900,19 @@ def test_an_unaccounted_run_reports_its_stage_running_when_the_scheduler_says_so
         "hash": hashlib.sha256(input_path.read_bytes()).hexdigest(),
         "workspace_key": "owner-key",
     }]
+    from revocompute.serialization import sha256_file
+
+    image = tmp_path / "image.sif"
+    image.write_bytes(b"pinned-image")
+    single = _single_stage_type()
+    task_type = replace(single, runtime=replace(single.runtime, slurm_image=str(image)))
+    (inputs / "task.json").write_text(
+        json.dumps({"runtime_images": {"cpu_runner": sha256_file(image)}}), encoding="utf-8"
+    )
     output_dir = tmp_path / "out"
     job = SlurmJob(
         task_id,
-        _single_stage_type(),
+        task_type,
         RunnerConfig(),
         entities,
         str(output_dir),
@@ -604,6 +921,8 @@ def test_an_unaccounted_run_reports_its_stage_running_when_the_scheduler_says_so
         allocation_started_callback=callbacks[1],
         allocation_finished_callback=callbacks[2],
         allocation_accounting=False,
+        stage_name="cpu_runner",
+        stage_attempt=attempt["attempt"],
     )
     job._prepare_scratch_dir()
 
@@ -675,7 +994,9 @@ def test_projection_keeps_a_legacy_stage_that_predates_the_later_record(tmp_path
     )
     database.finish_stage_attempt(
         task_id=task_id, stage_name="multistage_runner.model", attempt=model["attempt"],
-        status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+        status=stage_state.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
     )
 
     projection = task_runtime.stage_projection(database.get_task(task_id))
@@ -704,7 +1025,12 @@ def test_single_stage_worker_loss_interrupts_its_attempt(tmp_path, monkeypatch):
     database.record_stage_running(task_id=task_id, stage_name="cpu_runner", attempt=attempt["attempt"])
     monkeypatch.setattr(task_runtime, "task_store", database)
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_single_stage_type(), None))
-    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: None)
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+
+    def _run(args, **_kwargs):
+        return subprocess.CompletedProcess(args, 0, stdout="JobId=4154 JobState=COMPLETED\n", stderr="")
+
+    monkeypatch.setattr(task_runtime.subprocess, "run", _run)
     monkeypatch.setattr(task_runtime, "_record_failure", lambda *args, **kwargs: None)
 
     assert task_runtime._recover_orphaned_tasks() == 1
@@ -714,6 +1040,135 @@ def test_single_stage_worker_loss_interrupts_its_attempt(tmp_path, monkeypatch):
         stage_state.INTERRUPTED,
         stage_state.Reason.WORKER_LOST,
     )
+
+
+def test_single_stage_worker_loss_settles_a_job_the_controller_reports_terminal(tmp_path, monkeypatch):
+    """scancel failing on an already-finished job must not wedge the Task."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "0" * 31 + "2"
+    _insert_task(
+        database, task_id, status="running", task_type="cpu_runner", slurm_job_id="4154"
+    )
+    attempt = database.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name="cpu_runner"
+    )
+    database.record_stage_running(task_id=task_id, stage_name="cpu_runner", attempt=attempt["attempt"])
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_single_stage_type(), None))
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        task_runtime,
+        "_record_failure",
+        lambda md5sum, *_args, **_kwargs: database.update_task(md5sum, status="failed"),
+    )
+
+    def _run(args, **_kwargs):
+        if args[0].endswith("scancel"):
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0, stdout="JobId=4154 JobState=COMPLETED\n", stderr="")
+
+    monkeypatch.setattr(task_runtime.subprocess, "run", _run)
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+
+    assert database.get_task(task_id)["status"] == "failed"
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.INTERRUPTED
+
+
+def test_single_stage_worker_loss_keeps_a_task_whose_allocation_is_reported_running(tmp_path, monkeypatch):
+    """A controller-confirmed live allocation is never failed away."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "0" * 31 + "3"
+    _insert_task(
+        database, task_id, status="running", task_type="cpu_runner", slurm_job_id="4155"
+    )
+    attempt = database.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name="cpu_runner"
+    )
+    database.record_stage_running(task_id=task_id, stage_name="cpu_runner", attempt=attempt["attempt"])
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_single_stage_type(), None))
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+
+    def _run(args, **_kwargs):
+        if args[0].endswith("scancel"):
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0, stdout="JobId=4155 JobState=RUNNING\n", stderr="")
+
+    monkeypatch.setattr(task_runtime.subprocess, "run", _run)
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+
+    task = database.get_task(task_id)
+    assert task["status"] == "running"
+    assert "cancellation could not be confirmed" in task["error"]
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.RUNNING
+
+
+@pytest.mark.parametrize(
+    ("scancel_returncode", "state", "expected"),
+    [
+        (0, "inactive", True),
+        (0, "active", False),
+        (0, "unknown", False),
+        (1, "inactive", False),
+    ],
+)
+def test_a_cancellation_request_is_not_termination(monkeypatch, scancel_returncode, state, expected):
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+
+    def _run(args, **_kwargs):
+        if scancel_returncode:
+            raise subprocess.CalledProcessError(scancel_returncode, args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(task_runtime.subprocess, "run", _run)
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: state)
+
+    assert task_runtime._cancel_recorded_allocation("4155", confirm_seconds=0.0) is expected
+
+
+@pytest.mark.parametrize(
+    ("returncode", "output", "expected"),
+    [
+        (0, "JobId=4155 JobState=RUNNING\n", "active"),
+        (0, "JobId=4155 JobState=COMPLETED\n", "inactive"),
+        (1, "slurm_load_jobs error: Invalid job id specified\n", "inactive"),
+        (1, "slurm_load_jobs error: Unable to contact slurm controller\n", "unknown"),
+    ],
+)
+def test_slurm_job_state_distinguishes_unreachable_from_finished(monkeypatch, returncode, output, expected):
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        task_runtime.subprocess,
+        "run",
+        lambda args, **_kwargs: subprocess.CompletedProcess(args, returncode, stdout=output, stderr=""),
+    )
+
+    assert task_runtime._slurm_job_state("4155") == expected
+
+
+def test_single_stage_worker_loss_keeps_a_task_whose_allocation_cannot_be_stopped(tmp_path, monkeypatch):
+    """A failed Task would never be revisited, so it stays running instead."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "0" * 31 + "1"
+    _insert_task(
+        database, task_id, status="running", task_type="cpu_runner", slurm_job_id="4154"
+    )
+    attempt = database.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name="cpu_runner"
+    )
+    database.record_stage_running(task_id=task_id, stage_name="cpu_runner", attempt=attempt["attempt"])
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_single_stage_type(), None))
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: None)
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+
+    task = database.get_task(task_id)
+    assert task["status"] == "running"
+    assert "cancellation could not be confirmed" in task["error"]
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.RUNNING
 
 
 def test_a_terminal_task_cannot_acquire_a_live_attempt(tmp_path):
@@ -902,7 +1357,9 @@ def test_duplicate_allocation_start_is_idempotent_but_a_settled_attempt_is_rejec
         )
         database.finish_stage_attempt(
             task_id=task_id, stage_name="model", attempt=attempt["attempt"],
-            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
         )
         assert not database.record_stage_running(
             task_id=task_id, stage_name="model", attempt=attempt["attempt"]
@@ -990,7 +1447,9 @@ def test_reordered_manifest_resume_reuses_the_live_attempt_by_name(tmp_path):
         )
         assert database.finish_stage_attempt(
             task_id=task_id, stage_name="multistage_runner.model", attempt=1,
-            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
         )
         assert database.list_stage_runs(task_id)[0]["reason_code"] == stage_state.Reason.COMPLETED
 
@@ -1075,7 +1534,9 @@ def test_reordered_never_run_stage_does_not_collide_with_another_stages_attempt(
         )
         database.finish_stage_attempt(
             task_id=task_id, stage_name="multistage_runner.features", attempt=features["attempt"],
-            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
         )
         # The model stage has never run and now occupies index 0, which already
         # holds the features attempt 1.  Identity is per stage name, so this
@@ -1112,7 +1573,9 @@ def test_workflow_state_mirror_prefers_the_newest_attempt_after_a_reorder(tmp_pa
         assert (second["attempt"], second["stage_index"]) == (2, 0)
         database.finish_stage_attempt(
             task_id=task_id, stage_name="multistage_runner.model", attempt=second["attempt"],
-            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
         )
 
         projection = stage_state.workflow_state_projection(database.list_stage_runs(task_id))
@@ -1201,7 +1664,9 @@ def test_projection_keeps_a_removed_stage_out_of_a_current_stages_index(tmp_path
         )
         database.finish_stage_attempt(
             task_id=task_id, stage_name="multistage_runner.features", attempt=features["attempt"],
-            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
         )
         # A stage that left the manifest keeps the index it was recorded under,
         # which is now features' index; it must get a display position of its own.
@@ -1292,7 +1757,9 @@ def test_two_retired_stages_at_one_historical_index_get_distinct_positions(tmp_p
         )
         database.finish_stage_attempt(
             task_id=task_id, stage_name="retired_first", attempt=first["attempt"],
-            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
         )
         second = database.begin_stage_attempt(
             task_id=task_id, stage_index=1, stage_name="retired_second"

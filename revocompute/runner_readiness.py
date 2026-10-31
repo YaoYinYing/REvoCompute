@@ -71,6 +71,10 @@ class RunnerReadiness:
     receipt_test_definition_digest: str | None = None
     required_smoke_cases: tuple[str, ...] = ()
     passed_smoke_cases: tuple[str, ...] = ()
+    #: Tasks whose declared live-test case this deployment's scope could not run.
+    #: Their own submissions are refused; an unrelated Task of the same family
+    #: is not affected.
+    omitted_tasks: tuple[str, ...] = ()
     next_action: str = "none"
 
     @property
@@ -83,6 +87,7 @@ class RunnerReadiness:
         value["doctor_diagnostics"] = [asdict(item) for item in self.doctor_diagnostics]
         value["required_smoke_cases"] = list(self.required_smoke_cases)
         value["passed_smoke_cases"] = list(self.passed_smoke_cases)
+        value["omitted_tasks"] = list(self.omitted_tasks)
         value["ready"] = self.ready
         return value
 
@@ -194,6 +199,10 @@ def _receipt_evidence(
         required = tuple(sorted(case.id for case in identity.plan.select("smoke")))
     except (OSError, KeyError, TypeError, ValueError, StopIteration, LiveTestConfigurationError, RegistryError):
         return _ReceiptEvidence({}, None, "Runner live-test identity cannot be resolved")
+    # A narrowed scope runs fewer cases than the family declares.  The cases it
+    # did run are still evidence for their own Tasks, so this is published
+    # rather than failing the family; the Tasks it could not run are refused.
+    omitted_tasks = tuple(sorted({str(task) for _case, task in identity.plan.omitted}))
     try:
         expected_uid = int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None
         expected_gid = int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None
@@ -253,6 +262,7 @@ def _receipt_evidence(
             "receipt_runtime_bundle_sha256": _string_field(receipt, "runtime_bundle_sha256"),
             "required_smoke_cases": required,
             "passed_smoke_cases": passed,
+            "omitted_tasks": omitted_tasks,
         },
         receipt,
     )

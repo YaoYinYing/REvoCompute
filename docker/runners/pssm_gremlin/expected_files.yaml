@@ -1,7 +1,7 @@
 result:
   files:
     alignment:
-      pattern: gremlin_msa/*.i90c75.a3m
+      pattern: gremlin_msa/*_aln.fas
       cardinality: one
       required: true
       type: alignment
@@ -10,6 +10,11 @@ result:
       cardinality: one
       required: true
       type: table
+    coupling_model:
+      pattern: gremlin_res/*.GREMLIN.mrf.pkl
+      cardinality: one
+      required: true
+      type: model
     coupling_matrix:
       pattern: gremlin_res/*_GREMLIN_mtx.png
       cardinality: one

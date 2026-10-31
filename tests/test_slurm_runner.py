@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from revocompute.job import JobState
+from revocompute.job import STAGE_INPUTS_CONTAINER_DIR, STAGE_INPUTS_DOCUMENT_NAME, JobState
 from revocompute.job.runners.slurm_runner import (
     ALLOCATION_LIVE_PREFIX,
     JOB_ID_PREFIX,
@@ -112,6 +112,19 @@ def _minimal_tool_path(tmp_path: Path, names: tuple[str, ...]) -> Path:
     return tools
 
 
+def _pinned_task_type(tmp_path: Path, inputs: Path):
+    """A task type whose SIF exists, with the matching pin in ``task.json``."""
+    image = tmp_path / "images" / "cpu_runner_v1.sif"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b"pinned-runner-image")
+    (inputs / "task.json").write_text(
+        json.dumps({"runtime_images": {"cpu_runner": "sha256:" + hashlib.sha256(image.read_bytes()).hexdigest()}}),
+        encoding="utf-8",
+    )
+    task_type = _make_task_type()
+    return replace(task_type, runtime=replace(task_type.runtime, slurm_image=str(image)))
+
+
 def _runnable_job(tmp_path: Path, **kwargs) -> SlurmJob:
     """A CPU job whose wrapper can be executed against a synthetic workspace."""
     workspace = tmp_path / "workspace" / "task-1"
@@ -126,7 +139,9 @@ def _runnable_job(tmp_path: Path, **kwargs) -> SlurmJob:
         "snapshot_root": str(inputs),
         "hash": hashlib.sha256(input_path.read_bytes()).hexdigest(),
     }
-    job = SlurmJob("task-1", _make_task_type(), _make_runner(), entities, str(tmp_path / "out"), **kwargs)
+    job = SlurmJob(
+        "task-1", _pinned_task_type(tmp_path, inputs), _make_runner(), entities, str(tmp_path / "out"), **kwargs
+    )
     job._prepare_scratch_dir()
     return job
 
@@ -272,7 +287,7 @@ def test_gpu_wrapper_samples_assigned_device_and_emits_resource_evidence(tmp_pat
     output_dir = tmp_path / "out"
     job = SlurmJob(
         "task-1",
-        _make_task_type(gpus=True),
+        replace(_pinned_task_type(tmp_path, inputs), gpus=True),
         _make_runner(),
         entities,
         str(output_dir),
@@ -341,9 +356,11 @@ def _run_gpu_wrapper(tmp_path, *, env_gpus: dict[str, str]) -> dict:
         "hash": hashlib.sha256(input_path.read_bytes()).hexdigest(),
     }
     output_dir = tmp_path / "out"
+    task_type = _pinned_task_type(tmp_path, inputs)
+    task_type = replace(task_type, gpus=True)
     job = SlurmJob(
         "task-1",
-        _make_task_type(gpus=True),
+        task_type,
         _make_runner(),
         entities,
         str(output_dir),
@@ -471,7 +488,7 @@ def test_resource_markers_start_a_line_after_output_without_a_trailing_newline(t
     }
     job = SlurmJob(
         "task-1",
-        _make_task_type(),
+        _pinned_task_type(tmp_path, inputs),
         _make_runner(),
         entities,
         str(output_dir),
@@ -616,9 +633,32 @@ def test_render_apptainer_binds_and_env(tmp_path):
     assert "export APPTAINERENV_TASK_ID=" in script
     assert "export APPTAINERENV_TASK_TYPE=" in script
     assert "export APPTAINERENV_TASK_MANIFEST=" in script
+    # A stage with no produced inputs is not handed an empty staging contract.
+    assert "TASK_STAGE_INPUTS" not in script
     assert "export APPTAINERENV_CUDA_VISIBLE_DEVICES=" in script
     assert "-i '/workspace/inputs/task.json'" in script
     assert "/opt/images/cpu_runner_v1.sif" in script
+
+
+def test_render_apptainer_binds_staged_stage_inputs_read_only(tmp_path):
+    staged = tmp_path / "stage_inputs" / "cpu_runner.model"
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        stage_inputs_dir=str(staged),
+    )
+    script = job._render_wrapper()
+
+    assert (
+        f"--bind {_sh_quote(str(staged))}:{_sh_quote(STAGE_INPUTS_CONTAINER_DIR)}:ro" in script
+    )
+    assert (
+        f"export APPTAINERENV_TASK_STAGE_INPUTS="
+        f"{_sh_quote(f'{STAGE_INPUTS_CONTAINER_DIR}/{STAGE_INPUTS_DOCUMENT_NAME}')}" in script
+    )
 
 
 def _gated_job(tmp_path, *, accounting: bool) -> SlurmJob:
@@ -2299,7 +2339,7 @@ def _bundle_job(tmp_path, digest: str | None, *, family: str = "cpu_runner"):
     inputs.mkdir(parents=True)
     manifest = {"task_id": "task-1", "params": {}}
     if digest is not None:
-        manifest["runtime_bundle_sha256"] = digest
+        manifest["runtime_bundles"] = {family: digest}
     (inputs / "task.json").write_text(json.dumps(manifest), encoding="utf-8")
     entities = _make_entities()
     entities[0] = {**entities[0], "snapshot_root": str(inputs)}
@@ -2335,6 +2375,45 @@ def test_runtime_bundle_is_bound_read_only_at_the_reserved_mount(tmp_path):
     assert f"--bind '{path}':'/opt/revocompute/runtime':ro" in script
     assert "apptainer" in script
     assert subprocess.run(["bash", "-n"], input=script, text=True, check=False).returncode == 0
+
+
+def test_runtime_bundle_is_selected_for_the_job_family(tmp_path):
+    from revocompute.task_types import RuntimeFamily
+
+    digest, path = _materialized_bundle(tmp_path)
+    inputs = tmp_path / "workspace" / "task-1" / "inputs"
+    inputs.mkdir(parents=True)
+    (inputs / "task.json").write_text(
+        json.dumps(
+            {"runtime_bundles": {"cpu_runner": "sha256:" + "0" * 64, "gpu_runner": digest}}
+        ),
+        encoding="utf-8",
+    )
+    task_type = replace(
+        _make_task_type(),
+        runtime=RuntimeFamily(
+            name="gpu_runner",
+            entrypoint=("bash", "/app/run.sh"),
+            definition="gpu_runner.def",
+            slurm_image="/opt/images/gpu_runner.sif",
+            image_artifact="gpu_runner.sif",
+        ),
+    )
+    entities = _make_entities()
+    entities[0] = {**entities[0], "snapshot_root": str(inputs)}
+    job = SlurmJob(
+        "task-1",
+        task_type,
+        _make_runner(),
+        entities,
+        str(tmp_path / "out"),
+        username="alice",
+        runtime_bundle_root=str(tmp_path / "runtime-bundles"),
+    )
+
+    script = job._render_wrapper()
+
+    assert f"--bind '{path}':'/opt/revocompute/runtime':ro" in script
 
 
 def test_absent_runtime_bundle_declaration_adds_no_runtime_mount(tmp_path):

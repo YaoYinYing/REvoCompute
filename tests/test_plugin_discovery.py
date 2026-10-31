@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from revocompute.task_types import discover_plugins, get, list_policies, list_types
+from revocompute.task_types import discover_plugins, get, get_family, list_policies, list_types
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -345,13 +345,108 @@ def test_workflow_stage_must_declare_both_capability_keys(tmp_path):
 
 
 
-def test_workflow_stage_markers_must_partition_declared_markers(tmp_path):
-    """A composed workflow's stage markers form an exact ordered partition.
+def test_tasks_in_one_family_share_the_family_runner_config(tmp_path):
+    family = tmp_path / "demo"
+    for name in ("first", "second"):
+        task_dir = family / "tasks" / name
+        task_dir.mkdir(parents=True)
+        (task_dir / "task.yaml").write_text(f"id: {name}\ninputs: {{}}\n", encoding="utf-8")
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "tasks: [tasks/first/task.yaml, tasks/second/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (family / "runner.yaml").write_text("max_runtime_seconds: 7200\n", encoding="utf-8")
 
-    The runtime replaces the TaskType with a stage-local one holding only that
-    stage's markers, so an omitted marker is emitted by the Runner and dropped,
-    and a marker two stages both claim would advance the wrong stage.  Discovery
-    fails closed instead of leaving either ambiguity to run time.
+    discover_plugins(str(tmp_path))
+
+    _, runtime = get_family("demo")
+    assert get("first")[1] is runtime
+    assert get("second")[1] is runtime
+    assert runtime.max_runtime_seconds == 7200
+
+
+def test_workflow_stage_family_must_resolve_to_a_registered_runtime_family(tmp_path):
+    family = tmp_path / "demo"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text(
+        _workflow_yaml(
+            "- name: features\n  requires_gpu: false\n  requires_network: false\n"
+            "  runner_args: [-s, features]\n  stage_markers: [first]\n"
+            "- name: model\n  requires_gpu: false\n  requires_network: false\n"
+            "  family: missing_family\n  runner_args: [-s, model]\n  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError, match=r"echo' stage 'echo\.model' references unknown runtime family 'missing_family'"
+    ):
+        discover_plugins(str(tmp_path))
+
+    other = tmp_path / "other_family"
+    other.mkdir()
+    (other / "plugin.yaml").write_text(
+        "id: other_family\nversion: '1'\nruntime: {image_artifact: other.sif, definition: other.def}\n"
+        "tasks: []\n",
+        encoding="utf-8",
+    )
+    (other / "other.def").write_text("Bootstrap: other\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text(
+        _workflow_yaml(
+            "- name: features\n  requires_gpu: false\n  requires_network: false\n"
+            "  runner_args: [-s, features]\n  stage_markers: [first]\n"
+            "- name: model\n  requires_gpu: false\n  requires_network: false\n"
+            "  family: other_family\n  runner_args: [-s, model]\n  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+    discover_plugins(str(tmp_path))
+    task, _ = get("echo")
+    assert [(stage.name, stage.family) for stage in task.workflow] == [
+        ("echo.features", None),
+        ("echo.model", "other_family"),
+    ]
+
+
+def test_workflow_stage_family_must_be_an_identifier(tmp_path):
+    family = tmp_path / "demo"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text(
+        _workflow_yaml(
+            "- name: features\n  requires_gpu: false\n  requires_network: false\n"
+            "  runner_args: [-s, features]\n  stage_markers: [first]\n"
+            "- name: model\n  requires_gpu: false\n  requires_network: false\n  family: ../escape\n"
+            "  runner_args: [-s, model]\n  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="has an invalid runtime family"):
+        discover_plugins(str(tmp_path))
+
+
+def test_workflow_stage_markers_must_partition_declared_markers(tmp_path):
+    """Every task-level marker has exactly one stage owner.
+
+    A marker two stages claim would advance the wrong stage, and an omitted
+    marker would be emitted and dropped. Marker order is not significant:
+    explicit graph edges define execution sequence.
     """
     family = tmp_path / "demo"
     task_dir = family / "tasks" / "echo"
@@ -393,11 +488,9 @@ def test_workflow_stage_markers_must_partition_declared_markers(tmp_path):
     with pytest.raises(ValueError, match="undeclared stage markers: unknown"):
         discover_plugins(str(tmp_path))
 
-    # Declaring second before first keeps every marker but reorders the
-    # user-visible sequence.
+    # Marker ownership is order-free; explicit graph edges define execution order.
     write("second", "first")
-    with pytest.raises(ValueError, match="must partition the declared stage markers in order"):
-        discover_plugins(str(tmp_path))
+    discover_plugins(str(tmp_path))
 
     # A third task-level marker needs an owning stage; omitting "second" fails.
     task_yaml.write_text(
@@ -409,3 +502,77 @@ def test_workflow_stage_markers_must_partition_declared_markers(tmp_path):
     )
     with pytest.raises(ValueError, match="must assign every declared stage marker: second is unassigned"):
         discover_plugins(str(tmp_path))
+
+
+def test_workflow_output_port_requires_a_path(tmp_path):
+    family = tmp_path / "demo"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    keys = "  requires_gpu: false\n  requires_network: false\n"
+    (task_dir / "task.yaml").write_text(
+        _workflow_yaml(
+            f"- name: features\n{keys}  runner_args: [-s, features]\n  stage_markers: [first]\n"
+            "  outputs:\n  - name: data\n    type: text\n"
+            f"- name: model\n{keys}  runner_args: [-s, model]\n  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="output port 'data' requires a path"):
+        discover_plugins(str(tmp_path))
+
+
+def _cross_family_tree(tmp_path, *, foreign: str, deploy_foreign: bool = True) -> Path:
+    """A host family whose second stage runs in ``foreign``."""
+    family_ids = ["demo"] + (["other"] if deploy_foreign else [])
+    for family_id in family_ids:
+        family = tmp_path / family_id
+        (family / "tasks").mkdir(parents=True, exist_ok=True)
+        (family / "plugin.yaml").write_text(
+            f"id: {family_id}\nversion: '1'\nruntime: {{image_artifact: {family_id}.sif, definition: {family_id}.def}}\n"
+            + ("tasks: [tasks/echo/task.yaml]\n" if family_id == "demo" else "tasks: []\n"),
+            encoding="utf-8",
+        )
+        (family / f"{family_id}.def").write_text(f"Bootstrap: {family_id}\n", encoding="utf-8")
+    task_dir = tmp_path / "demo" / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (task_dir / "task.yaml").write_text(
+        "id: echo\n" + INPUTS + STAGE_MARKERS + "workflow:\n"
+        "- {name: local, display_name: Local, requires_gpu: false, requires_network: false, stage_markers: [first]}\n"
+        f"- {{name: remote, display_name: Remote, family: {foreign}, requires_gpu: false,"
+        " requires_network: false, stage_markers: [second]}\n",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_a_task_whose_stage_family_is_not_enabled_is_not_registered(tmp_path):
+    """An enabled list is the deployment universe; a Task outside it does not load."""
+    root = _cross_family_tree(tmp_path, foreign="other")
+
+    discover_plugins(str(root), enabled={"demo"})
+    assert list_types() == []
+
+    discover_plugins(str(root), enabled={"demo", "other"})
+    assert [task_type.name for task_type in list_types()] == ["echo"]
+
+
+def test_a_narrowed_deployment_tree_still_loads_the_families_it_enables(tmp_path):
+    """A deployment tree may not contain the composed Task's other family at all."""
+    root = _cross_family_tree(tmp_path, foreign="other", deploy_foreign=False)
+
+    discover_plugins(str(root), enabled={"demo"})
+    assert list_types() == []
+
+
+def test_a_task_naming_no_real_family_is_still_an_authoring_error(tmp_path):
+    """With every family enabled there is no deployment excuse for an unknown one."""
+    root = _cross_family_tree(tmp_path, foreign="absent_family", deploy_foreign=False)
+
+    with pytest.raises(ValueError, match="unknown runtime family"):
+        discover_plugins(str(root))

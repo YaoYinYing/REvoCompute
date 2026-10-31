@@ -58,12 +58,16 @@ changes SimpleFold and nothing else.
 
 ## Task pinning
 
-The submission path resolves the family's active bundle from the deployment's
-activation index and records the exact digest in the immutable `task.json`:
+The submission path resolves each referenced family's active bundle from the
+deployment's activation index and records the exact digests in the immutable
+`task.json`, keyed by family:
 
 ```json
-{"runtime_bundle_sha256": "sha256:…"}
+{"runtime_bundles": {"gremlin": "sha256:…", "simplefold": "sha256:…"}}
 ```
+
+A single-family Task records one entry. A stage dispatched in a family resolves
+that family's digest from the map.
 
 The digest is the identity; the store directory is derived from it, so a
 relocated bundle store cannot leave a stale path inside a pinned task. The Slurm

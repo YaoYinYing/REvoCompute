@@ -199,6 +199,105 @@ def _materialize_runtime_bundles(runner_root: Path, store_root: Path) -> None:
     runtime_bundle.write_index(store_root, index)
 
 
+def _runtime_image_receipt(module, family, digest: str, **updates) -> dict:
+    """An accepted live-test receipt for exactly these bytes.
+
+    Admission now reads the receipt through the deployment authority, so a test
+    fixture must carry the same acceptance identity production writes: contract
+    version, passed status, required passed cases, build provenance, test
+    definition, configuration, Runtime Bundle and execution identity.
+    """
+    from revocompute.runner_host import build_server_host
+    from revocompute.runner_live_test import load_validation_identity
+    from revocompute.runner_readiness import bundle_digest, load_instance_families
+    from revocompute.runner_registry import _build_provenance
+
+    state = build_server_host(module.CONFIG)
+    # Acceptance identity is recorded against the deployment family view.
+    family = {item.name: item for item in load_instance_families(state)}[family.name]
+    identity = load_validation_identity(family, state=state)
+    receipt = {
+        "receipt_contract_version": 2,
+        "runner_family": family.name,
+        "passed": True,
+        "ended_at": "2026-10-31T00:00:00+00:00",
+        "sif_sha256": digest,
+        "build_provenance_digest": str(_build_provenance(state, family)["build_provenance_digest"]),
+        "test_definition_digest": identity.plan.digest,
+        "configuration_digest": identity.configuration_digest,
+        "runtime_bundle_sha256": bundle_digest(state, family),
+        "cases": [{"case_id": case.id, "passed": True} for case in identity.plan.select("smoke")],
+    }
+    if state.get("RUNNER_UID"):
+        receipt["execution_uid"] = int(state.get("RUNNER_UID"))
+    if state.get("RUNNER_GID"):
+        receipt["execution_gid"] = int(state.get("RUNNER_GID"))
+    receipt.update(updates)
+    return receipt
+
+
+def _pin_runtime_image(module, *families: str) -> None:
+    """Write the SIF bytes and accepted live-test receipt a submission pins.
+
+    Production setup materializes both before a family can accept work.  The
+    family's configured ``slurm_image`` must stay inside the test sandbox: a
+    test that fabricated artifacts in the deployment image root would have the
+    resolver accept them for every later run on that host.
+    """
+    import hashlib
+    import os
+
+    from revocompute.artifact_evidence import write_artifact_evidence
+    from revocompute.runner_host import build_server_host
+    from revocompute.runner_readiness import load_instance_families
+    from revocompute.runner_registry import _build_provenance
+
+    image_root = Path(os.environ.get("REVOCOMPUTE_IMAGE_DIR") or "")
+    image_root.mkdir(parents=True, exist_ok=True)
+    staged = []
+    for name in families:
+        family, _ = module.task_runtime._get_family(name)
+        path = Path(family.slurm_image)
+        if image_root not in path.parents:
+            raise AssertionError(
+                f"refusing to write a fixture SIF outside the test image root: {path}"
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"{name} fixture SIF".encode())
+        staged.append((family, "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()))
+    state = build_server_host(module.CONFIG)
+    deployment = {item.name: item for item in load_instance_families(state)}
+    # Every artifact and its build provenance must exist before a composed
+    # family's acceptance identity, which names its companions, can be computed.
+    for family, digest in staged:
+        write_artifact_evidence(
+            deployment[family.name], digest, "build", _build_provenance(state, deployment[family.name])
+        )
+    for family, digest in staged:
+        write_artifact_evidence(
+            deployment[family.name], digest, "receipt", _runtime_image_receipt(module, family, digest)
+        )
+
+
+def _routes_globals(module) -> dict:
+    """Globals of the route whose submission boundary reads deployment config."""
+    route = module.app.view_functions["upload_file"]
+    while hasattr(route, "__wrapped__"):
+        route = route.__wrapped__
+    return route.__globals__
+
+
+class _DeploymentConfigView:
+    """The app's settings with an explicit executor mode for the route boundary."""
+
+    def __init__(self, config, job_executor: str):
+        self._config = config
+        self.job_executor = job_executor
+
+    def __getattr__(self, name):
+        return getattr(self._config, name)
+
+
 def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None, *, runner_root: Path | None = None):
     """Load a fresh copy of ``revocompute.py`` with test-isolated env vars.
 
@@ -241,6 +340,12 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None, *, r
         "LOG_DIR": str(log_dir),
         "CONFIG_DIR": str(env_root / "config"),
         "RUNTIME_BUNDLE_DIR": str(env_root / "runtime-bundles"),
+        # Image artifacts belong to the test sandbox: a family's default path
+        # falls back to the deployment image root, and a test that pins bytes
+        # must never write there.  It is the live-test authority's image root
+        # (``SERVER_DIR``'s sibling), so the pinned path and the identity the
+        # authority resolves are the same file.
+        "REVOCOMPUTE_IMAGE_DIR": str(tmp_path / "images"),
         "ADMIN_USERS": "admin",
         "ADMIN_BOOTSTRAP_CREDENTIALS": "admin\ttest-admin-password",
     }
@@ -287,6 +392,13 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None, *, r
     sys.modules["revocompute.app"] = module
     try:
         spec.loader.exec_module(module)  # type: ignore[attr-defined]
+        # The isolated app executes nothing through Slurm.  Declare that for
+        # the submission admission gate so an unmanaged test deployment is not
+        # mistaken for a misconfigured Slurm deployment; a test that exercises
+        # that refusal sets the executor back to "slurm" on these globals.
+        _routes_globals(module)["CONFIG"] = _DeploymentConfigView(
+            module.CONFIG, job_executor="demo"
+        )
         module.run_compute_task = module.task_runtime.run_compute_task
         module._ROOT_MOUNT_DIRECTORY = module.task_runtime._ROOT_MOUNT_DIRECTORY
         _LOADED_APP_MODULES.append(module)
@@ -533,7 +645,9 @@ def _inject_task_type(module, task_type, runner):
         raise RuntimeError("task_types has no active plugin manager; run discover first")
     contributions = manager.contributions
     contributions.register("tasks", task_type.name, task_type, plugin_id="test")
-    contributions.register("runner_configs", task_type.name, runner, plugin_id="test")
+    family_id = task_type.runtime.name
+    if contributions.get("runner_configs", family_id) is None:
+        contributions.register("runner_configs", family_id, runner, plugin_id="test")
     return task_type
 
 

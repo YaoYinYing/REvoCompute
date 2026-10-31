@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import signal
+import sqlite3
 from dataclasses import replace
 from io import StringIO
 import sys
@@ -13,13 +14,30 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from revocompute.access_control import AccessPolicy
+from revocompute.execution_graph import compile_graph
 from revocompute.job import JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
 from revocompute.resource_policy import ResolvedResources
-from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskType, WorkflowStage, get
+from revocompute.task_types import (
+    RuntimeFamily,
+    StagePortSpec,
+    TaskType,
+    WorkflowStage,
+    get,
+    get_family,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
+
+#: A submission pin every test double reports as both expected and observed.
+_IMAGE = "sha256:" + "a" * 64
+
+
+class _ObservedImageMixin:
+    """Stand-in for the wrapper receipt a real SlurmJob reads at completion."""
+
+    def runtime_image_observation(self):
+        return SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
 
 # The composer drives the real task_runtime module object. Import it at
 # collection time so every test resolves the same module the discovery fixture
@@ -62,6 +80,24 @@ def _ensure_task_row(task_runtime, task_id: str) -> None:
     )
 
 
+def _workspace(tmp_path) -> list[dict]:
+    """The per-task execution workspace a dispatched stage is bound to."""
+    return [{"type": "workspace", "workspace_root": str(tmp_path / "workspace"), "workspace_key": "owner-key"}]
+
+
+def _frozen(task_type, **fields) -> dict:
+    graph = compile_graph(task_type)
+    fields.setdefault(
+        "input_form",
+        json.dumps({
+            "execution_graph": {
+                "ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document,
+            },
+        }),
+    )
+    return fields
+
+
 def _policy(requires_gpu: bool) -> ResolvedResources:
     return ResolvedResources(
         cpus=8,
@@ -80,104 +116,544 @@ def _policy(requires_gpu: bool) -> ResolvedResources:
     )
 
 
-def test_composer_resumes_after_completed_feature_stage(monkeypatch):
+@pytest.mark.parametrize("output_kind", ["valid", "missing", "escape"])
+def test_graph_scheduler_validates_outputs_and_preserves_attempts(monkeypatch, tmp_path, output_kind):
     task_runtime = _live_task_runtime()
-
     runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
-    stages = (
-        WorkflowStage("multistage_runner.features", "Features", False, ("-s", "features"), ("msa",)),
-        WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",)),
+    features = WorkflowStage(
+        "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
+        outputs=(StagePortSpec("features", "features", path="features.dat"),),
+    )
+    model = WorkflowStage(
+        "multistage_runner.model", "Model", True, ("-s", "model"), ("model",),
+        inputs=(StagePortSpec("features", "features", source="multistage_runner.features:features"),),
     )
     task_type = TaskType(
-        "multistage_runner",
-        "Synthetic staged calculation",
-        runtime,
-        ".fasta",
-        "FASTA",
-        gpus=True,
-        stage_markers={"msa": "MSA", "model": "Model"},
-        workflow=stages,
+        "multistage_runner", "Synthetic staged calculation", runtime, (),
+        stage_markers={"msa": "MSA", "model": "Model"}, workflow=(model, features),
     )
-    updates = []
-    created = []
+    output = tmp_path / "output"
+    output.mkdir()
+    if output_kind == "valid":
+        (output / "features.dat").write_text("features")
+    elif output_kind == "escape":
+        outside = tmp_path / "outside"
+        outside.write_text("features")
+        (output / "features.dat").symlink_to(outside)
 
-    class _Job:
+    class Job(_ObservedImageMixin):
         def submit(self):
             return "42"
 
         def poll(self):
             return JobState.COMPLETED
 
-    def _create(*args, **kwargs):
-        created.append((args[1], kwargs["resource_policy"]))
-        return _Job()
+    started = []
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: started.append(args[1].name) or Job())
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = {"valid": "1", "missing": "2", "escape": "3"}[output_kind] * 32
+    _ensure_task_row(task_runtime, task_id)
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output),
+        {stage.name: _policy(stage.requires_gpu) for stage in task_type.workflow}, lambda _: None,
+    )
+    runs = task_runtime.task_store.list_stage_runs(task_id)
+    if output_kind == "valid":
+        assert result == JobState.COMPLETED
+        assert started == ["multistage_runner-features", "multistage_runner-model"]
+        assert {(run["stage_name"], run["attempt"], run["stage_index"], run["status"]) for run in runs} == {
+            (features.name, 1, 1, "COMPLETED"), (model.name, 1, 0, "COMPLETED")
+        }
+    else:
+        assert result == JobState.FAILED
+        assert started == ["multistage_runner-features"]
+        assert len(runs) == 1
+        assert runs[0]["status"] == "FAILED"
+        assert runs[0]["reason_code"] == "stage_output_missing"
 
-    monkeypatch.setattr(task_runtime, "_create_job", _create)
 
-    def _update(task_id, **fields):
-        del task_id
-        updates.append(fields)
-        return True
+def test_a_stage_completed_by_an_earlier_execution_is_recomputed(monkeypatch, tmp_path):
+    """A COMPLETED row from an earlier execution cannot be tied to this image."""
+    task_runtime = _live_task_runtime()
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    features = WorkflowStage(
+        "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
+        outputs=(StagePortSpec("features", "features", path="features.dat"),),
+    )
+    task_type = TaskType(
+        "multistage_runner", "Synthetic staged calculation", runtime, (),
+        stage_markers={"msa": "MSA"}, workflow=(features,),
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    task_id = "e" * 32
+    _ensure_task_row(task_runtime, task_id)
+    (output / "features.dat").write_text("features")
+    first = task_runtime.task_store.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name=features.name
+    )
+    identity = task_runtime._stage_output_identity(str(output), features.outputs)
+    assert identity is not None
+    assert task_runtime.task_store.finish_stage_attempt(
+        task_id=task_id,
+        stage_name=features.name,
+        attempt=first["attempt"],
+        status="COMPLETED",
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
+        reason_code="completed",
+        output_identity=identity,
+    )
 
-    monkeypatch.setattr(task_runtime.task_store, "update_task", _update)
-    task = {
-        "username": "tester",
-        "workflow_state": json.dumps({"multistage_runner.features": {"status": "completed", "job_id": "41"}}),
-    }
+    started = []
+
+    class Job(_ObservedImageMixin):
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            (output / "features.dat").write_text("recomputed")
+            return JobState.COMPLETED
+
+    monkeypatch.setattr(
+        task_runtime, "_create_job", lambda _id, tt, *a, **kw: started.append(tt.name) or Job()
+    )
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+
+    # Recovery rewrites the mirror from the records, so it also claims this
+    # stage completed; the recorded row, not the mirror, decides that it runs.
+    task = _frozen(
+        task_type,
+        workflow_state=json.dumps({features.name: {"status": "completed", "job_id": "41"}}),
+    )
+    result = task_runtime._run_compute_workflow(
+        task_id, task, task_type, _workspace(tmp_path), str(output),
+        {features.name: _policy(False)}, lambda _: None,
+    )
+
+    assert result == JobState.COMPLETED
+    assert started == ["multistage_runner-features"]
+    runs = sorted(task_runtime.task_store.list_stage_runs(task_id), key=lambda run: run["attempt"])
+    assert [(run["attempt"], run["status"]) for run in runs] == [(1, "COMPLETED"), (2, "COMPLETED")]
+    assert (output / "features.dat").read_text() == "recomputed"
+
+
+def test_composer_refuses_unverified_legacy_completed_stage(monkeypatch):
+    task_runtime = _live_task_runtime()
+
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    stages = (
+        WorkflowStage(
+            "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
+            outputs=(StagePortSpec("features", "features", path="features.dat"),),
+        ),
+        WorkflowStage(
+            "multistage_runner.model", "Model", True, ("-s", "model"), ("model",),
+            inputs=(StagePortSpec("features", "features", source="multistage_runner.features:features"),),
+        ),
+    )
+    task_type = TaskType(
+        "multistage_runner",
+        "Synthetic staged calculation",
+        runtime,
+        (),
+        gpus=True,
+        stage_markers={"msa": "MSA", "model": "Model"},
+        workflow=stages,
+    )
+    created = []
+    monkeypatch.setattr(
+        task_runtime, "_create_job", lambda *args, **kwargs: created.append(args[1].name) or pytest.fail("no dispatch")
+    )
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task = _frozen(
+        task_type,
+        username="tester",
+        workflow_state=json.dumps({"multistage_runner.features": {"status": "completed", "job_id": "41"}}),
+    )
     _ensure_task_row(task_runtime, "a" * 32)
 
     result = task_runtime._run_compute_workflow(
-        "a" * 32,
-        task,
-        task_type,
-        RunnerConfig(),
-        [],
-        "/tmp/results",
+        "a" * 32, task, task_type, [], "/tmp/results",
         {"multistage_runner.features": _policy(False), "multistage_runner.model": _policy(True)},
         lambda stage: None,
     )
 
+    assert result == JobState.FAILED
+    assert created == []
+    evidence = task_runtime.task_store.get_task_diagnostics("a" * 32) or {}
+    assert evidence["reason_code"] == "stage_output_unverified"
+    assert evidence["blocked_stages"] == ["multistage_runner.model"]
+
+
+@pytest.mark.parametrize(
+    ("frozen", "reason"),
+    [(None, "execution_graph_unverified"), ("changed", "execution_graph_changed")],
+)
+def test_dispatch_refuses_graph_that_differs_from_submission(monkeypatch, frozen, reason):
+    task_runtime = _live_task_runtime()
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    features = WorkflowStage(
+        "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
+        outputs=(StagePortSpec("features", "features", path="features.dat"),),
+    )
+    task_type = TaskType(
+        "multistage_runner", "Synthetic staged calculation", runtime, (),
+        stage_markers={"msa": "MSA"}, workflow=(features,),
+    )
+    task = {} if frozen is None else _frozen(task_type)
+    if frozen == "changed":
+        task_type = replace(
+            task_type,
+            workflow=(replace(features, runner_args=("-s", "features-v2")),),
+        )
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: pytest.fail("no dispatch"))
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = ("1" if frozen is None else "2") * 32
+    _ensure_task_row(task_runtime, task_id)
+    result = task_runtime._run_compute_workflow(
+        task_id, task, task_type, [], "/tmp/results",
+        {features.name: _policy(False)}, lambda _: None,
+    )
+    assert result == JobState.FAILED
+    assert (task_runtime.task_store.get_task_diagnostics(task_id) or {})["reason_code"] == reason
+
+
+def _diamond_workflow() -> TaskType:
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    stage_a = WorkflowStage(
+        "dag.a", "A", False, ("-s", "a"), ("a",), outputs=(StagePortSpec("out", "x", path="a.dat"),),
+    )
+    stage_b = WorkflowStage(
+        "dag.b", "B", False, ("-s", "b"), ("b",),
+        inputs=(StagePortSpec("in", "x", source="dag.a:out"),),
+        outputs=(StagePortSpec("out", "x", path="b.dat"),),
+    )
+    stage_c = WorkflowStage(
+        "dag.c", "C", False, ("-s", "c"), ("c",),
+        inputs=(StagePortSpec("in", "x", source="dag.a:out"),),
+        outputs=(StagePortSpec("out", "x", path="c.dat"),),
+    )
+    stage_d = WorkflowStage(
+        "dag.d", "D", False, ("-s", "d"), ("d",),
+        inputs=(
+            StagePortSpec("left", "x", source="dag.b:out"),
+            StagePortSpec("right", "x", source="dag.c:out"),
+        ),
+        outputs=(StagePortSpec("out", "x", path="d.dat"),),
+    )
+    return TaskType(
+        "dag", "Synthetic DAG", runtime, (),
+        stage_markers={"a": "A", "b": "B", "c": "C", "d": "D"},
+        workflow=(stage_a, stage_b, stage_c, stage_d),
+    )
+
+
+def test_foreign_family_node_uses_that_family_runtime_runner_and_policy(monkeypatch, tmp_path):
+    task_runtime = _live_task_runtime()
+    foreign_runtime, foreign_runner = get_family("restricted_runner")
+    base = _diamond_workflow()
+    foreign = replace(base.workflow[1], family="restricted_runner")
+    task_type = replace(base, workflow=(base.workflow[0], foreign, *base.workflow[2:]))
+    output = tmp_path / "output"
+    output.mkdir()
+    created = []
+    callback_arguments = []
+
+    class Job(_ObservedImageMixin):
+        def __init__(self, name):
+            self.name = name
+
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            (output / f"{self.name.rsplit('-', 1)[-1]}.dat").write_text("ok")
+            return JobState.COMPLETED
+
+    def create(_task_id, stage_tt, runner, *_args, **_kwargs):
+        created.append((stage_tt, runner))
+        return Job(stage_tt.name)
+
+    real_callbacks = task_runtime._compute_allocation_callbacks
+
+    def callbacks(**kwargs):
+        callback_arguments.append(kwargs)
+        return real_callbacks(**kwargs)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime, "_compute_allocation_callbacks", callbacks)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "e" * 32
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
     assert result == JobState.COMPLETED
-    assert len(created) == 1
-    assert created[0][0].name == "multistage_runner-model"
-    assert created[0][0].gpus is True
-    assert created[0][1].requires_gpu is True
-    final_state = json.loads(updates[-1]["workflow_state"])
-    assert final_state["multistage_runner.features"]["status"] == "completed"
-    assert final_state["multistage_runner.model"]["status"] == "completed"
+    by_name = {stage_tt.name: (stage_tt, runner) for stage_tt, runner in created}
+    foreign_tt, foreign_job_runner = by_name["dag-b"]
+    assert foreign_tt.runtime is foreign_runtime
+    assert foreign_tt.runtime.slurm_image == foreign_runtime.slurm_image
+    assert foreign_tt.runtime.entrypoint == foreign_runtime.entrypoint
+    assert foreign_job_runner is foreign_runner
+    callback = next(item for item in callback_arguments if item["stage_id"] == "dag.b")
+    assert callback["required_entitlements"] == ("synthetic_noncommercial",)
+    assert callback["runner_family"] == "restricted_runner"
+    own_tt, own_job_runner = by_name["dag-a"]
+    assert own_tt.runtime.name == "multistage_runner"
+    assert own_job_runner is get_family("multistage_runner")[1]
+
+
+def test_unavailable_stage_attempt_blocks_every_allocation(monkeypatch, tmp_path):
+    """No durable attempt means no allocation authority: never submit the Runner."""
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+    created = []
+
+    def unavailable(**_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(task_runtime.task_store, "begin_stage_attempt", unavailable)
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: created.append(args))
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "b2" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert result == JobState.FAILED
+    assert created == []
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id)
+    assert evidence["reason_code"] == "stage_attempt_unavailable"
+    assert evidence["stage_id"] == "dag.a"
+
+
+def test_unsettled_completion_stops_before_consumer_dispatch(monkeypatch, tmp_path):
+    """A COMPLETED allocation whose durable transition fails must not advance the DAG."""
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+    started = []
+
+    class Job(_ObservedImageMixin):
+        def __init__(self, name):
+            self.name = name
+
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            (output / f"{self.name.rsplit('-', 1)[-1]}.dat").write_text("ok")
+            return JobState.COMPLETED
+
+    def create(_task_id, stage_tt, *_args, **_kwargs):
+        started.append(stage_tt.name)
+        return Job(stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    monkeypatch.setattr(task_runtime.task_store, "finish_stage_attempt", lambda **kwargs: False)
+    task_id = "a1" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert result == JobState.FAILED
+    assert started == ["dag-a"]
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id)
+    assert evidence["reason_code"] == "stage_settlement_failed"
+    assert evidence["stage_id"] == "dag.a"
+
+
+def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypatch, tmp_path):
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+    fail_b = {"value": True}
+    started = []
+
+    class Job(_ObservedImageMixin):
+        def __init__(self, task_id, name):
+            self.task_id = task_id
+            self.name = name
+
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            suffix = self.name.rsplit("-", 1)[-1]
+            if suffix == "b" and fail_b["value"]:
+                task_runtime.task_store.record_task_diagnostics(
+                    self.task_id, {"reason_code": "nonzero_exit", "stage_id": "dag.b"}
+                )
+                return JobState.FAILED
+            (output / f"{suffix}.dat").write_text(suffix)
+            return JobState.COMPLETED
+
+    def create(task_id, stage_tt, *_args, **_kwargs):
+        started.append(stage_tt.name)
+        return Job(task_id, stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "7" * 32
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    first = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert first == JobState.FAILED
+    assert started == ["dag-a", "dag-b", "dag-c"]
+    assert (output / "c.dat").read_text() == "c"
+    runs = {run["stage_name"]: run for run in task_runtime.task_store.list_stage_runs(task_id)}
+    assert set(runs) == {"dag.a", "dag.b", "dag.c"}
+    assert runs["dag.c"]["status"] == "COMPLETED"
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id)
+    assert evidence["reason_code"] == "nonzero_exit"
+    assert evidence["blocked_stages"] == ["dag.d"]
+
+    fail_b["value"] = False
+    started.clear()
+    second = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert second == JobState.COMPLETED
+    # A new execution recomputes every stage: no attempt records its image, so
+    # the completed dag.a and dag.c from the first execution are not reused.
+    assert started == ["dag-a", "dag-b", "dag-c", "dag-d"]
+    runs = task_runtime.task_store.list_stage_runs(task_id)
+    assert {(run["stage_name"], run["status"]) for run in runs if run["attempt"] == 1} == {
+        ("dag.a", "COMPLETED"), ("dag.b", "FAILED"), ("dag.c", "COMPLETED"), ("dag.d", "COMPLETED")
+    }
+
+
+def test_fork_and_join_both_complete_in_deterministic_order(monkeypatch, tmp_path):
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+    started = []
+
+    class Job(_ObservedImageMixin):
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            return JobState.COMPLETED
+
+    def create(_task_id, stage_tt, *_args, **_kwargs):
+        suffix = stage_tt.name.rsplit("-", 1)[-1]
+        started.append(stage_tt.name)
+        (output / f"{suffix}.dat").write_text(suffix)
+        return Job()
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "8" * 32
+    _ensure_task_row(task_runtime, task_id)
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output),
+        {stage.name: _policy(False) for stage in task_type.workflow}, lambda _: None,
+    )
+
+    assert result == JobState.COMPLETED
+    assert started == ["dag-a", "dag-b", "dag-c", "dag-d"]
+
+
+def test_latest_failed_attempt_is_not_reused(monkeypatch, tmp_path):
+    task_runtime = _live_task_runtime()
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    features = WorkflowStage(
+        "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
+        outputs=(StagePortSpec("features", "features", path="features.dat"),),
+    )
+    task_type = TaskType(
+        "multistage_runner", "Synthetic staged calculation", runtime, (),
+        stage_markers={"msa": "MSA"}, workflow=(features,),
+    )
+    task_id = "9" * 32
+    _ensure_task_row(task_runtime, task_id)
+    first = task_runtime.task_store.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name=features.name
+    )
+    task_runtime.task_store.finish_stage_attempt(
+        task_id=task_id,
+        stage_name=features.name,
+        attempt=first["attempt"],
+        status="COMPLETED",
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
+        reason_code="completed",
+        output_identity='{"output_identity_format":1,"files":[]}',
+    )
+    second = task_runtime.task_store.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name=features.name
+    )
+    task_runtime.task_store.finish_stage_attempt(
+        task_id=task_id, stage_name=features.name, attempt=second["attempt"],
+        status="FAILED", reason_code="allocation_failed",
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    started = []
+
+    class Job(_ObservedImageMixin):
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            (output / "features.dat").write_text("features")
+            return JobState.COMPLETED
+
+    monkeypatch.setattr(
+        task_runtime, "_create_job", lambda _id, tt, *a, **kw: started.append(tt.name) or Job()
+    )
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, [], str(output),
+        {features.name: _policy(False)}, lambda _: None,
+    )
+
+    assert result == JobState.COMPLETED
+    assert started == ["multistage_runner-features"]
+    runs = task_runtime.task_store.list_stage_runs(task_id)
+    assert max(int(run["attempt"]) for run in runs) == 3
+    assert [run["status"] for run in runs if run["attempt"] == 3] == ["COMPLETED"]
 
 
 def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypatch):
     task_runtime = _live_task_runtime()
 
-    access_policy = AccessPolicy(
-        "synthetic_noncommercial",
-        "Synthetic restricted access",
-        "Restricted runtime",
-        ("synthetic_terms",),
-        True,
-    )
-    runtime = RuntimeFamily(
-        "multistage_runner",
-        ("bash", "run.sh"),
-        "runner.def",
-        "image.sif",
-        access_policy=access_policy,
-    )
-    stage = WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",))
+    runtime, runner = get_family("restricted_runner")
+    stage = WorkflowStage("restricted_runner.model", "Model", True, ("-s", "model"), ("model",))
     task_type = TaskType(
-        "multistage_runner",
+        "restricted_runner",
         "Synthetic staged calculation",
         runtime,
-        ".fasta",
-        "FASTA",
+        (),
         gpus=True,
         stage_markers={"model": "Model"},
         workflow=(stage,),
     )
     callback_requests = []
 
-    class _Job:
+    class _Job(_ObservedImageMixin):
         def submit(self):
             return "42"
 
@@ -195,12 +671,11 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
     _ensure_task_row(task_runtime, "f" * 32)
     result = task_runtime._run_compute_workflow(
         "f" * 32,
-        {"submitted_by_user_id": 17, "username": "tester"},
+        _frozen(task_type, submitted_by_user_id=17, username="tester"),
         task_type,
-        RunnerConfig(),
         [],
         "/tmp/results",
-        {"multistage_runner.model": _policy(True)},
+        {"restricted_runner.model": _policy(True)},
         lambda stage_name: None,
     )
 
@@ -213,10 +688,10 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
     assert request == {
         "task_id": "f" * 32,
         "user_id": 17,
-        "stage_id": "multistage_runner.model",
+        "stage_id": "restricted_runner.model",
         "resource_policy": _policy(True),
-        "required_entitlements": ("synthetic_terms",),
-        "runner_family": "multistage_runner",
+        "required_entitlements": ("synthetic_noncommercial",),
+        "runner_family": "restricted_runner",
     }
 
 
@@ -229,8 +704,7 @@ def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
         "multistage_runner",
         "Synthetic staged calculation",
         runtime,
-        ".fasta",
-        "FASTA",
+        (),
         gpus=True,
         stage_markers={"model": "Model"},
         workflow=(stage,),
@@ -240,9 +714,8 @@ def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
 
     result = task_runtime._run_compute_workflow(
         "b" * 32,
-        {},
+        _frozen(task_type),
         task_type,
-        RunnerConfig(),
         [],
         "/tmp/results",
         {"multistage_runner.model": _policy(True)},
@@ -261,8 +734,7 @@ def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypa
         "multistage_runner",
         "Synthetic staged calculation",
         runtime,
-        ".fasta",
-        "FASTA",
+        (),
         gpus=True,
         stage_markers={"model": "Model"},
         workflow=(stage,),
@@ -270,7 +742,7 @@ def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypa
     updates = iter((True, False))
     cancelled = []
 
-    class _Job:
+    class _Job(_ObservedImageMixin):
         def submit(self):
             return "42"
 
@@ -283,9 +755,8 @@ def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypa
     _ensure_task_row(task_runtime, "c" * 32)
     result = task_runtime._run_compute_workflow(
         "c" * 32,
-        {},
+        _frozen(task_type),
         task_type,
-        RunnerConfig(),
         [],
         "/tmp/results",
         {"multistage_runner.model": _policy(True)},
@@ -329,6 +800,7 @@ def test_workflow_recovery_claims_stops_and_requeues_once(monkeypatch):
         lambda task_id, **fields: updates.append((task_id, fields)) or True,
     )
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_TaskType(), object()))
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: "active")
     monkeypatch.setattr(
         task_runtime,
         "_stop_orphaned_workflow_execution",
@@ -340,6 +812,57 @@ def test_workflow_recovery_claims_stops_and_requeues_once(monkeypatch):
     assert claims == [("d" * 32, "running")]
     assert stops == [("d" * 32, "1234", "")]
     assert updates[-1][1]["celery_task_id"] == "replacement-task"
+
+
+def test_workflow_recovery_cancels_an_allocation_only_its_stage_recorded(monkeypatch):
+    task_runtime = _live_task_runtime()
+
+    task = {
+        "md5sum": "f" * 32,
+        "status": "running",
+        "task_type": "multistage_runner",
+        "slurm_job_id": None,
+        "container_id": None,
+        "workflow_state": json.dumps({"multistage_runner.features": {"status": "running"}}),
+    }
+    stops = []
+
+    class _TaskType:
+        workflow = (object(),)
+
+    class _Queued:
+        id = "replacement-task"
+
+    monkeypatch.setattr(task_runtime.task_store, "list_tasks", lambda: [task])
+    monkeypatch.setattr(task_runtime.task_store, "claim_task_recovery", lambda *args, **kwargs: True)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        task_runtime.task_store,
+        "list_stage_runs",
+        lambda _task_id: [
+            {
+                "stage_name": "multistage_runner.features", "stage_index": 1, "attempt": 1,
+                "status": "running", "slurm_job_id": "4321",
+            },
+            {
+                "stage_name": "multistage_runner.prepare", "stage_index": 0, "attempt": 1,
+                "status": "completed", "slurm_job_id": "1111",
+            },
+        ],
+    )
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda job_id: "active" if job_id == "4321" else "inactive")
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_TaskType(), object()))
+    monkeypatch.setattr(
+        task_runtime,
+        "_stop_orphaned_workflow_execution",
+        lambda *args: stops.append(args) or "",
+    )
+    monkeypatch.setattr(task_runtime.run_compute_task, "apply_async", lambda *args, **kwargs: _Queued())
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+    # The Task row never saw this allocation; cancelling only the row's handle
+    # would leave it running while a replacement attempt was dispatched.
+    assert stops == [("f" * 32, "4321", "")]
 
 
 def test_workflow_recovery_enqueue_failure_stays_discoverable(monkeypatch):
@@ -530,14 +1053,14 @@ def test_composed_af3_workflow_advances_task_run_stage_through_all_markers(monke
     """The composer's stage callbacks expose every task-level marker in order."""
     task_runtime = _live_task_runtime()
 
-    task_type, runner = get("restricted_runner")
+    task_type, _runner = get("restricted_runner")
     task_level = list(task_type.stage_markers)
     assert task_level == ["data_pipeline", "feature_validation", "inference", "output_validation"]
 
     seen: list[str] = []
     run_stages: list[str] = []
 
-    class _Job:
+    class _Job(_ObservedImageMixin):
         def __init__(self, tt):
             self._tt = tt
 
@@ -570,9 +1093,8 @@ def test_composed_af3_workflow_advances_task_run_stage_through_all_markers(monke
     _ensure_task_row(task_runtime, "a" * 32)
     result = task_runtime._run_compute_workflow(
         "a" * 32,
-        {"username": "tester"},
+        _frozen(task_type, username="tester"),
         task_type,
-        runner,
         [],
         "/tmp/results",
         {stage.name: _policy(stage.requires_gpu) for stage in task_type.workflow},

@@ -2552,7 +2552,21 @@
           "detail_url": {"type": "string"},
           "parameters_url": {"type": "string"},
           "max_request_bytes": {"type": "integer"},
-          "input_workspace": {"$ref": "#/components/schemas/InputWorkspace"}
+          "input_workspace": {"$ref": "#/components/schemas/InputWorkspace"},
+          "execution_graph": {
+            "$ref": "#/components/schemas/ExecutionGraph",
+            "description": "The canonical graph a workflow Task freezes at submission; omitted for single-stage Task Types."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ExecutionGraph": {
+        "type": "object",
+        "required": ["ir_version", "digest", "document"],
+        "properties": {
+          "ir_version": {"type": "integer", "minimum": 1},
+          "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Canonical sha256 of document."},
+          "document": {"type": "object", "additionalProperties": true, "description": "Canonical execution graph document: nodes, graph inputs, and execution order."}
         },
         "additionalProperties": false
       },
@@ -2688,7 +2702,7 @@
       },
       "TaskStageItem": {
         "type": "object",
-        "required": ["index", "name", "display_name", "status", "source", "attempt", "started_at", "ended_at", "reason_code", "planned_resources"],
+        "required": ["index", "name", "display_name", "status", "source", "attempt", "started_at", "ended_at", "reason_code", "planned_resources", "dependency"],
         "properties": {
           "index": {"type": "integer", "minimum": 0},
           "name": {"type": "string", "description": "Manifest stage name (or the Task type itself for a single-stage Task)."},
@@ -2704,6 +2718,11 @@
               {"type": "null"},
               {"type": "object", "additionalProperties": true, "description": "Semantic request for this attempt; placement internals are not exposed."}
             ]
+          },
+          "dependency": {
+            "type": "string",
+            "enum": ["completed", "blocked", "ready", "waiting"],
+            "description": "Graph dependency state, independent of scheduler status: completed (latest attempt completed and reuse-verified), blocked (this stage or an ancestor failed), ready (every producer completed), waiting otherwise."
           }
         },
         "additionalProperties": false
