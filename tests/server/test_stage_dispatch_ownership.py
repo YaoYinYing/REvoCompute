@@ -517,6 +517,60 @@ def test_a_bookkeeping_outage_after_submit_cancels_the_allocation(tmp_path, monk
     assert database.list_stage_runs(task_id)[0]["status"] == stage_state.FAILED
 
 
+def test_a_composed_bookkeeping_outage_cancels_the_allocation(tmp_path, monkeypatch):
+    """The composed handle write uses the same fail-closed settlement."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "e5" * 16
+    _insert_task(database, task_id)
+    workflow_type = _workflow_type()
+    _freeze(database, task_id, workflow_type)
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_family", lambda _family: (workflow_type.runtime, RunnerConfig()))
+
+    job = task_runtime.SlurmJob(
+        task_id, workflow_type, RunnerConfig(), [], str(tmp_path / "out")
+    )
+    job._process = object()
+    captured: dict[str, object] = {}
+
+    def _create(*_args, **kwargs):
+        captured["callback"] = kwargs["allocation_dispatched_callback"]
+        return job
+
+    def _submit():
+        captured["callback"]("9007", time.time(), False)
+        return "9007"
+
+    job.submit = _submit
+    monkeypatch.setattr(task_runtime, "_create_job", _create)
+    cancelled: list[str] = []
+    monkeypatch.setattr(
+        task_runtime, "_cancel_recorded_allocation", lambda handle: cancelled.append(handle) or True
+    )
+    real_update = database.update_task
+
+    def _raise_on_handle_write(_task_id, **fields):
+        if "slurm_job_id" in fields:
+            raise RuntimeError("database write failed")
+        return real_update(_task_id, **fields)
+
+    monkeypatch.setattr(database, "update_task", _raise_on_handle_write)
+
+    with pytest.raises(RuntimeError, match="database write failed"):
+        task_runtime._run_compute_workflow(
+            task_id,
+            database.get_task(task_id),
+            workflow_type,
+            [],
+            str(tmp_path / "out"),
+            {STAGE: _policy()},
+            lambda _stage: None,
+        )
+
+    assert cancelled == ["9007"]
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.FAILED
+
+
 def test_a_popen_failure_permits_a_fresh_attempt(tmp_path, monkeypatch):
     """(d) A failure proven to precede srun creation keeps the retry safe."""
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))

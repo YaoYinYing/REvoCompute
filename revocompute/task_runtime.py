@@ -1230,9 +1230,11 @@ def _run_compute_job(
     # after a server restart (Celery/Redis state is ephemeral).  A rejected
     # write means the Task went terminal during submission, so the allocation
     # it just started must be cancelled here rather than left unowned.
-    if jid and isinstance(job, SlurmJob):
+    if jid:
         try:
-            accepted = task_store.update_task(task_id, slurm_job_id=jid)
+            accepted = True
+            if isinstance(job, SlurmJob):
+                accepted = task_store.update_task(task_id, slurm_job_id=jid)
         except Exception:
             # The allocation exists but its handle could not be stored, so it
             # must be cancelled or held like any other unrecorded acceptance.
@@ -1329,7 +1331,11 @@ def _settle_unsubmitted_attempt(
     """
     if attempt is None:
         return
-    launch_started = job is not None and bool(getattr(job, "scheduler_request_started", False))
+    try:
+        launch_started = job is not None and bool(job.scheduler_request_started)
+    except Exception:
+        # A backend that cannot answer may still have started a request.
+        launch_started = True
     handle = ""
     try:
         for run in task_store.list_stage_runs(task_id):
