@@ -2515,12 +2515,18 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                     "The active Runner family contract disagrees with the deployment's family view",
                     "doctor",
                 )
+            # Resolve the binding the Task will pin *before* validation and
+            # validate the receipt against that exact digest.  Reading it after
+            # a boolean answer would let an activation in between rebind the
+            # admission to code no receipt covered.
+            pinned_bundle = bundle_digest(host_state, validated_family)
             if not receipt_valid_for_artifact(
                 host_state,
                 validated_family,
                 image.path,
                 sif_sha256=image.digest,
                 discover=False,
+                expected_runtime_bundle=pinned_bundle,
             ):
                 return _runner_refusal(
                     family.name,
@@ -2529,10 +2535,9 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                     f"for runtime image {image.digest}",
                     "live-test",
                 )
-            # The receipt covers this bundle.  The manifest resolves its own
-            # binding later from the activation index, so remember what was
-            # accepted and refuse if that later read names anything else.
-            accepted_bundles[family.name] = bundle_digest(host_state, validated_family) or ""
+            # The manifest resolves its own binding later from the activation
+            # index; a later read that names anything else refuses.
+            accepted_bundles[family.name] = pinned_bundle or ""
             runtime_images[family.name] = image.digest
     # Reject GPU-ineligible users and invalid scheduler configuration before
     # writing uploads or creating a task record.

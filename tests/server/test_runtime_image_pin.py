@@ -940,3 +940,38 @@ def test_a_family_without_a_runtime_overlay_is_not_refused_by_the_bundle_check(m
 
     assert response.status_code != 503, response.get_data(as_text=True)
     assert response.get_json().get("reason") != "RUNTIME_BUNDLE_CHANGED"
+
+
+def test_the_receipt_is_validated_against_the_bundle_the_task_will_pin(monkeypatch, tmp_path):
+    """One resolution feeds both the receipt check and the manifest comparison.
+
+    A later read must never be what an earlier boolean validated: the digest is
+    pinned first, the receipt is checked against it, and any later index read
+    that disagrees refuses.
+    """
+    module, _family_row = _submission_setup(monkeypatch, tmp_path, image=True, receipt=True)
+    from revocompute import runner_live_test, runner_readiness, runtime_bundle
+
+    reads: list[str | None] = []
+
+    def _bundle(state, family):
+        reads.append(_IMAGE_SHA_B if not reads else _IMAGE_SHA_A)
+        return reads[-1]
+
+    seen: dict[str, str | None] = {}
+
+    def _validate(_state, _family, _path, *, sif_sha256=None, discover=True, expected_runtime_bundle=None):
+        seen["bundle"] = expected_runtime_bundle
+        return True
+
+    monkeypatch.setattr(runner_readiness, "bundle_digest", _bundle)
+    monkeypatch.setattr(runner_live_test, "receipt_valid_for_artifact", _validate)
+    # The manifest resolves a different binding than the one admission pinned.
+    monkeypatch.setattr(runtime_bundle, "resolve_for_submission", lambda *_a, **_k: _IMAGE_SHA_A)
+
+    response = _post(module)
+
+    assert reads == [_IMAGE_SHA_B], "the binding is resolved exactly once, before validation"
+    assert seen["bundle"] == _IMAGE_SHA_B
+    assert response.status_code == 503
+    assert response.get_json()["reason"] == "RUNTIME_BUNDLE_CHANGED"

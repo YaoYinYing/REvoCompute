@@ -1320,6 +1320,7 @@ def receipt_valid_for_artifact(
     *,
     sif_sha256: str | None = None,
     discover: bool = True,
+    expected_runtime_bundle: str | None,
 ) -> bool:
     """Return whether required smoke tests passed for the exact artifact identity.
 
@@ -1327,7 +1328,9 @@ def receipt_valid_for_artifact(
     identity alone: two artifacts built from the same inputs share an identity,
     so an identity-only lookup can return another artifact's receipt.  When
     ``sif_sha256`` is supplied, the artifact must still hash to it; a file that
-    changed after the caller measured it is not validated.
+    changed after the caller measured it is not validated.  ``expected_runtime_bundle``
+    is the binding the caller will pin; the receipt is validated against that
+    digest and never against a later read of the activation index.
 
     ``discover=False`` is for a caller whose process already holds this plugin
     tree; see ``load_validation_identity``.
@@ -1350,11 +1353,9 @@ def receipt_valid_for_artifact(
         identity = worker._load_identity()
         provenance = _build_provenance(state, family)
         required = {case.id for case in identity.plan.select("smoke")}
-        from revocompute.runner_readiness import bundle_digest
-
         expected_identity = {
             "build_provenance_digest": str(provenance["build_provenance_digest"]),
-            "runtime_bundle_sha256": bundle_digest(state, family),
+            "runtime_bundle_sha256": expected_runtime_bundle,
             "test_definition_digest": identity.plan.digest,
             "configuration_digest": identity.configuration_digest,
             "execution_uid": int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None,
@@ -1395,9 +1396,25 @@ def receipt_valid_for_artifact(
 
 def candidate_receipt_valid(state, family: RuntimeFamily, *, sif_sha256: str | None = None) -> bool:
     """Return whether required smoke tests passed for the staged candidate."""
-    return receipt_valid_for_artifact(state, family, f"{family.slurm_image}.next", sif_sha256=sif_sha256)
+    from revocompute.runner_readiness import bundle_digest
+
+    return receipt_valid_for_artifact(
+        state,
+        family,
+        f"{family.slurm_image}.next",
+        sif_sha256=sif_sha256,
+        expected_runtime_bundle=bundle_digest(state, family),
+    )
 
 
 def active_receipt_valid(state, family: RuntimeFamily, *, sif_sha256: str | None = None) -> bool:
     """Return whether required smoke tests passed for the active SIF."""
-    return receipt_valid_for_artifact(state, family, family.slurm_image, sif_sha256=sif_sha256)
+    from revocompute.runner_readiness import bundle_digest
+
+    return receipt_valid_for_artifact(
+        state,
+        family,
+        family.slurm_image,
+        sif_sha256=sif_sha256,
+        expected_runtime_bundle=bundle_digest(state, family),
+    )

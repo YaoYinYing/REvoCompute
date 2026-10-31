@@ -24,6 +24,7 @@ from revocompute.runner_live_test import (
     candidate_receipt_valid,
     run_live_tests,
 )
+from revocompute.runner_readiness import bundle_digest
 from revocompute.live_tests import LiveTestConfigurationError, LiveTestReport, sha256_file
 from revocompute.artifact_evidence import write_artifact_evidence
 from revocompute.runner_registry import RuntimeFamily
@@ -606,7 +607,12 @@ def test_a_promotion_check_resolves_the_companion_the_deployment_runs(tmp_path, 
 
     monkeypatch.setattr(RunnerLiveTestWorker, "__init__", _spy)
 
-    receipt_valid_for_artifact(_State(tmp_path), owner, f"{owner.slurm_image}.next")
+    receipt_valid_for_artifact(
+        _State(tmp_path),
+        owner,
+        f"{owner.slurm_image}.next",
+        expected_runtime_bundle=bundle_digest(_State(tmp_path), owner),
+    )
 
     # The promotion check answers for the deployment, so it must hand the worker
     # every installed family; knowing only its own would report a composed Task
