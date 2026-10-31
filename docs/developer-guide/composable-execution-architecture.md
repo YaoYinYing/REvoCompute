@@ -256,12 +256,11 @@ Rules the code enforces:
   `stage_output_unverified`. No attempt records the runtime image it ran, so a
   Runner keeps the published bytes attributable to its attempt by deleting or
   rewriting every declared output rather than reusing what it finds. The GREMLIN
-  PSSM runner deletes them first, and the GREMLIN-LH fit rewrites each one; the
-  AlphaFold 3 features and model stages still skip on an existing output, so a
-  retry there can settle bytes an earlier image produced. The composed live
-  acceptance runs CPU cases with accounting disabled, so it exercises the
-  artifact handoff and submission admission, not the
-  allocation-time readiness gate, which each family's own acceptance covers.
+  PSSM and AlphaFold 3 runners delete theirs first, and the GREMLIN-LH fit
+  rewrites each one; caching inside an upstream tool's own image is outside this
+  contract. The composed live acceptance runs CPU cases with accounting
+  disabled, so it exercises the artifact handoff and submission admission, not
+  the allocation-time readiness gate, which each family's own acceptance covers.
 - A new execution executes every stage. No attempt records the runtime image it
   ran, so a completion from an earlier execution cannot be attributed to this
   execution's image; reusing it could attribute another image's artifact to this

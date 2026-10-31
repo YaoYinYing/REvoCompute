@@ -144,10 +144,7 @@ the task result tree; prediction outputs remain in a separate modeling tree.
 The production image pins upstream revision
 `c0f97eda2f1f482fd94d3a38bece18c7069b4a5c`. The site's historical
 `/repo/alphafold3` `native-run` branch is only an operator reference for the
-local database layout and is not image source code. Its features and model
-stages skip on an existing output, so a retry re-executes the stage in the
-Server but can settle bytes an earlier image produced; see
-[produced-artifact binding](../developer-guide/composable-execution-architecture.md#produced-artifact-binding-delivered-contract).
+local database layout and is not image source code.
 
 AlphaFold 3 databases and model parameters are operator-managed read-only
 mounts declared in `docker/runners/alphafold3/runner.yaml`; they are never copied into
