@@ -79,9 +79,12 @@ finds the live attempt and starts no second ``srun``. Worker-loss recovery
 never edited. Recovery cancels every allocation the Task row or its attempts
 name. When a claim recorded no handle, or a cancellation cannot be confirmed,
 the Task stays running with the explanation instead of failing over a possibly
-live allocation, and cancelling the Task settles the claim. An allocation known
-only from adopted scheduler evidence — a host log or wrapper receipt — is not
-named by the Task row, so stopping it remains a scheduler-side action. A
+live allocation, and cancelling the Task settles the claim. An adapter that
+stopped its own process before the scheduler returned an identity holds the
+gate the same way, so such a Task also waits for the operator even when no
+allocation may be billable. An allocation known only from adopted scheduler
+evidence — a host log or wrapper receipt — is not named by the Task row, so
+stopping it remains a scheduler-side action. A
 duplicate StageRun open finds and reuses the live attempt because of the partial
 unique index. Attempt identity is the stage *name*, not its
 manifest position, so reordering or inserting a stage keeps the existing
