@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import ntpath
@@ -16,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 import conftest
-from conftest import _load_pssm_module, _test_client_auth
+from conftest import _load_pssm_module, _pin_runtime_image, _test_client_auth
 from revocompute.admission import AdmissionEvidence
 from revocompute.task_types import TaskInputRole
 
@@ -459,17 +458,10 @@ def test_infrastructure_rejection_runs_after_security_and_leaves_no_durable_task
         },
     )
     module.app.config["manage_db"].resource_set("slurm_enabled", "true")
-    # The submission boundary pins a real image and requires the live-test
-    # receipt for exactly its bytes; this test is about ordering after that.
-    image = images / "cpu_runner_v1.sif"
-    image.parent.mkdir(parents=True, exist_ok=True)
-    image.write_bytes(b"pinned-image")
-    digest = "sha256:" + hashlib.sha256(image.read_bytes()).hexdigest()
-    evidence = images / "evidence" / "cpu_runner"
-    evidence.mkdir(parents=True, exist_ok=True)
-    (evidence / f"{digest.removeprefix('sha256:')}.fixture.receipt.json").write_text(
-        json.dumps({"runner_family": "cpu_runner", "sif_sha256": digest}), encoding="utf-8"
-    )
+    # The submission boundary pins a real image and requires the deployment's
+    # accepted live-test receipt for exactly its bytes; this test is about
+    # ordering after that.
+    _pin_runtime_image(module, "cpu_runner")
     route = module.app.view_functions["upload_file"]
     while hasattr(route, "__wrapped__"):
         route = route.__wrapped__

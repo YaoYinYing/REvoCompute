@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import _load_pssm_module, _test_client_auth
+from conftest import _load_pssm_module, _runtime_image_receipt, _test_client_auth
 from revocompute import runtime_image, stage_state, task_types, task_runtime
 from revocompute.db import TaskDatabase
 from revocompute.job import JobState
@@ -59,11 +59,12 @@ def _family(name: str, image: Path) -> SimpleNamespace:
     return SimpleNamespace(name=name, slurm_image=str(image))
 
 
-def _write_receipt(image: Path, digest: str, *, family: str) -> None:
-    evidence = image.parent / "evidence" / family
-    evidence.mkdir(parents=True, exist_ok=True)
-    (evidence / f"{digest.removeprefix('sha256:')}.fixture.receipt.json").write_text(
-        json.dumps({"runner_family": family, "sif_sha256": digest}), encoding="utf-8"
+def _write_receipt(module, family, digest: str):
+    """Persist an accepted live-test receipt under its identity, as setup does."""
+    from revocompute.artifact_evidence import write_artifact_evidence
+
+    return write_artifact_evidence(
+        family, digest, "receipt", _runtime_image_receipt(module, family, digest)
     )
 
 
@@ -202,7 +203,15 @@ class _AvailableInfrastructure:
         return None
 
 
-def _submission_setup(monkeypatch, tmp_path, *, image: bool, receipt: bool, receipt_family: str | None = None):
+def _submission_setup(
+    monkeypatch,
+    tmp_path,
+    *,
+    image: bool,
+    receipt: bool,
+    receipt_family: str | None = None,
+    receipt_updates: dict | None = None,
+):
     images = tmp_path / "images"
     module = _load_pssm_module(
         monkeypatch,
@@ -238,7 +247,27 @@ def _submission_setup(monkeypatch, tmp_path, *, image: bool, receipt: bool, rece
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"submission-image")
     if image and receipt:
-        _write_receipt(path, sha256_file(path), family=receipt_family or family.name)
+        digest = sha256_file(path)
+        if receipt_family:
+            # A fully formed accepted receipt, stored as another family's
+            # evidence: it is not this family's acceptance.
+            receipt_payload = _runtime_image_receipt(module, family, digest)
+            receipt_payload["runner_family"] = receipt_family
+            evidence = path.parent / "evidence" / receipt_family
+            evidence.mkdir(parents=True, exist_ok=True)
+            (evidence / f"{digest.removeprefix('sha256:')}.foreign.receipt.json").write_text(
+                json.dumps(receipt_payload), encoding="utf-8"
+            )
+        else:
+            # Write the accepted identity's receipt path first, then replace
+            # its contents with the corrupted witness: admission must read the
+            # claimed evidence, not merely find a file at the location.
+            path_written = _write_receipt(module, family, digest)
+            if receipt_updates:
+                corrupt = _runtime_image_receipt(module, family, digest, **receipt_updates)
+                corrupt["runner_family"] = family.name
+                corrupt["sif_sha256"] = digest
+                path_written.write_text(json.dumps(corrupt), encoding="utf-8")
     return module, family
 
 
@@ -286,6 +315,85 @@ def test_a_receipt_for_another_family_cannot_pin_this_family(monkeypatch, tmp_pa
     assert response.status_code == 503, response.get_data(as_text=True)
     assert "live-test receipt" in response.get_json()["message"]
     assert module.task_store.list_tasks() == []
+
+
+@pytest.mark.parametrize(
+    "receipt_updates",
+    [
+        # A receipt that exists for these bytes but did not pass.
+        {"passed": False},
+        # The required smoke case is missing.
+        {"cases": []},
+        # A different case passed; the required one did not.
+        {"cases": [{"case_id": "not-the-required-case", "passed": True}]},
+        {"receipt_contract_version": 1},
+        {"test_definition_digest": "sha256:" + "0" * 64},
+        {"configuration_digest": "sha256:" + "1" * 64},
+        {"runtime_bundle_sha256": "sha256:" + "2" * 64},
+    ],
+    ids=[
+        "passed-false",
+        "required-case-missing",
+        "required-case-not-passed",
+        "wrong-contract-version",
+        "wrong-test-definition",
+        "wrong-configuration",
+        "wrong-runtime-bundle",
+    ],
+)
+def test_a_receipt_that_does_not_prove_accepted_bytes_never_admits(
+    monkeypatch, tmp_path, receipt_updates
+):
+    module, _family_row = _submission_setup(
+        monkeypatch, tmp_path, image=True, receipt=True, receipt_updates=receipt_updates
+    )
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_a, **_k: queued.append(True))
+
+    response = _post(module)
+
+    assert response.status_code == 503, response.get_data(as_text=True)
+    assert response.get_json()["reason"] == "RUNTIME_IMAGE_UNPINNED"
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+
+
+def test_an_existence_only_receipt_is_not_acceptance(monkeypatch, tmp_path):
+    """The original P1 witness: family+digest alone must not admit."""
+    module, family = _submission_setup(monkeypatch, tmp_path, image=True, receipt=False)
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_a, **_k: queued.append(True))
+    digest = sha256_file(Path(family.slurm_image))
+    _write_receipt(module, family, digest).write_text(
+        json.dumps({"runner_family": family.name, "sif_sha256": digest}), encoding="utf-8"
+    )
+
+    response = _post(module)
+
+    assert response.status_code == 503, response.get_data(as_text=True)
+    assert response.get_json()["reason"] == "RUNTIME_IMAGE_UNPINNED"
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+
+
+def test_ready_attestation_for_another_sif_cannot_admit_the_active_failed_image(monkeypatch, tmp_path):
+    """Readiness is not bound to a digest; the failed active SIF must still be refused."""
+    module, family = _submission_setup(
+        monkeypatch, tmp_path, image=True, receipt=True, receipt_updates={"passed": False}
+    )
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_a, **_k: queued.append(True))
+    readiness = json.loads(
+        (Path(module.CONFIG.server_dir) / "readiness" / "cpu_runner.json").read_text(encoding="utf-8")
+    )
+    assert readiness["status"] == "READY"
+    assert sha256_file(Path(family.slurm_image)) == runtime_image.runtime_image_for_submission(family).digest
+
+    response = _post(module)
+
+    assert response.status_code == 503, response.get_data(as_text=True)
+    assert module.task_store.list_tasks() == []
+    assert queued == []
 
 
 def test_an_admitted_submission_pins_the_immutable_snapshot_and_the_row(monkeypatch, tmp_path):
@@ -621,28 +729,25 @@ def test_multiple_families_pin_and_observe_independently(tmp_path):
 # -- acceptance gate: resolver boundary -----------------------------------------
 
 
-def test_resolver_binds_the_receipt_to_the_family_and_the_path(tmp_path):
+def test_resolver_reports_the_path_and_digest_without_an_admission_decision(tmp_path):
     image = tmp_path / "images" / "cpu_runner.sif"
     image.parent.mkdir(parents=True)
     image.write_bytes(b"sif")
     family = _family("cpu_runner", image)
     digest = sha256_file(image)
 
-    with pytest.raises(runtime_image.RuntimeImageError):
-        runtime_image.runtime_image_for_submission(family)
-
-    _write_receipt(image, digest, family="cpu_runner")
-    resolved = runtime_image.runtime_image_for_submission(family)
-    assert resolved.path == str(image)
-    assert resolved.digest == digest
+    assert runtime_image.runtime_image_for_submission(family) == runtime_image.RuntimeImage(
+        path=str(image), digest=digest
+    )
 
     # The digest is of the bytes at the path, not a name the caller supplied.
     image.write_bytes(b"replaced")
+    replaced = sha256_file(image)
+    assert runtime_image.runtime_image_for_submission(family).digest == replaced != digest
+
+    image.unlink()
     with pytest.raises(runtime_image.RuntimeImageError):
         runtime_image.runtime_image_for_submission(family)
-    replaced = sha256_file(image)
-    _write_receipt(image, replaced, family="cpu_runner")
-    assert runtime_image.runtime_image_for_submission(family).digest == replaced != digest
 
 
 def test_the_observation_parser_requires_attribution_and_digests():

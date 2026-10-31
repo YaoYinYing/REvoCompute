@@ -169,11 +169,14 @@ Rules the code enforces:
   policy to admit the user, requires each family's submission admission
   evidence to be ready, and pins one Runtime Bundle and one runtime image per
   referenced family. The image digest is resolved once by
-  ``runtime_image_for_submission``; a family without a resolvable digest, or
-  without a live-test receipt for exactly that digest, refuses the submission
-  with ``503``. One refusal rejects the whole submission before any allocation.
-  The pin is recorded in the immutable ``task.json`` and mirrored on the Task
-  row.
+  ``runtime_image_for_submission``, and the deployment's live-test authority
+  (``receipt_valid_for_artifact``) must prove a current, passed acceptance for
+  exactly those bytes. A family without a resolvable digest, without that
+  acceptance, or with a failed/partial/stale/wrong-family receipt refuses the
+  submission with ``503``; READY evidence that describes a different SIF is not
+  acceptance for the pinned one. One refusal rejects the whole submission before
+  any allocation. The pin is recorded in the immutable ``task.json`` and mirrored
+  on the Task row.
 - GPU eligibility is graph-aware: if any stage in any referenced family
   requires an accelerator, the user needs GPU access.
 - Dispatch resolves each node's runtime image pin, entrypoint, mounts,

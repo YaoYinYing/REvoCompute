@@ -288,8 +288,8 @@ def _pinned_runtime_images(task_type_def: Any) -> dict[str, str]:
 
     Every referenced family resolves its selected artifact (the staged
     candidate in this worker).  The live test is the run that produces each
-    candidate's receipt, so it pins the bytes without requiring a receipt for
-    them; a production submission requires one.
+    candidate's receipt, so it pins those bytes; a production submission
+    separately requires the deployment's accepted receipt for them.
     """
     families = {task_type_def.runtime.name: task_type_def.runtime}
     for stage in task_type_def.workflow:
@@ -302,9 +302,7 @@ def _pinned_runtime_images(task_type_def: Any) -> dict[str, str]:
             raise ValueError(f"live-test references unknown runtime family: {family_id}") from exc
     try:
         return {
-            family.name: runtime_image.runtime_image_for_submission(
-                family, require_receipt=False
-            ).digest
+            family.name: runtime_image.runtime_image_for_submission(family).digest
             for family in families.values()
         }
     except runtime_image.RuntimeImageError as exc:

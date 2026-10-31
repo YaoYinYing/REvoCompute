@@ -11,22 +11,25 @@ records what it observed in a schema-2 receipt.  The store writes the observed
 digest only into a guarded COMPLETED transition that also checks it against the
 attempt's pin.
 
+Resolving the pin is not an admission decision: submission separately requires
+the deployment's accepted live-test receipt for exactly these bytes through
+``runner_live_test.receipt_valid_for_artifact``, the same authority that
+publishes Runner readiness.  This module only reports what the path holds now.
+
 The digest is an observation of the bytes at the path this attempt opens, not
 an immutable identity: the path may still be a mutable active SIF until a
 content-addressed store holds the bytes.  A promotion that renames a new SIF
 onto the path between submission and launch therefore fails closed here rather
-than silently running bytes no receipt validated.
+than silently running bytes the validation never covered.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
-from revocompute.artifact_evidence import receipt_digests
 from revocompute.serialization import sha256_file
 
 SHA256_PREFIXED = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -35,7 +38,7 @@ _SCHEMA_VERSION = "2"
 
 
 class RuntimeImageError(ValueError):
-    """No runtime image or no live-test evidence for this family."""
+    """No runtime image at the path this family would open."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,23 +68,7 @@ class RuntimeImageObservation:
     observed: str
 
 
-def _has_live_test_receipt(family: Any, digest: str) -> bool:
-    """Whether a live-test receipt exists for exactly these bytes and family."""
-    for path in receipt_digests(family, digest):
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if (
-            isinstance(value, Mapping)
-            and value.get("runner_family") == family.name
-            and value.get("sif_sha256") == digest
-        ):
-            return True
-    return False
-
-
-def runtime_image_for_submission(family: Any, *, require_receipt: bool = True) -> RuntimeImage:
+def runtime_image_for_submission(family: Any) -> RuntimeImage:
     """Resolve the image path and content digest a new Task must pin.
 
     This is the only resolver boundary.  It returns the path the attempt will
@@ -92,20 +79,14 @@ def runtime_image_for_submission(family: Any, *, require_receipt: bool = True) -
     ``runtime.slurm_image``, so the store must also resolve digest to held path
     at launch (or publish digest-addressed image paths).
 
-    A production submission requires the live-test receipt for exactly those
-    bytes.  The live test itself passes ``require_receipt=False``: it is the
-    run that produces that receipt, and it must pin the candidate bytes it is
-    about to exercise.
+    Acceptance of the bytes is a separate admission decision made by the caller
+    through the deployment's live-test authority; the live test itself resolves
+    its candidate with this same function before its receipt exists.
     """
     path = str(getattr(family, "slurm_image", "") or "")
     if not path or not Path(path).is_file():
         raise RuntimeImageError(f"Runner family {family.name!r} has no runtime image at {path or '<unset>'!r}")
-    digest = sha256_file(path)
-    if require_receipt and not _has_live_test_receipt(family, digest):
-        raise RuntimeImageError(
-            f"Runner family {family.name!r} has no live-test receipt for runtime image {digest}"
-        )
-    return RuntimeImage(path=path, digest=digest)
+    return RuntimeImage(path=path, digest=sha256_file(path))
 
 
 def parse_runtime_image_receipt(text: str) -> RuntimeImageObservation | None:

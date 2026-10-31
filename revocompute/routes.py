@@ -164,6 +164,7 @@ from revocompute.result_storyboard import (
     storyboard_declaration,
 )
 from revocompute import runtime_bundle, runtime_image
+from revocompute.runner_host import build_server_host
 from revocompute.schemas import (
     AccessDecisionRequest,
     AccessRequestCreate,
@@ -2407,26 +2408,67 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # Preflight is advice, not the submission decision: it neither creates the
     # snapshot that carries a pin nor starts an allocation.
     if not preflight_only:
+        from revocompute.runner_live_test import receipt_valid_for_artifact
+        from revocompute.runner_readiness import load_instance_families
+        from revocompute.runner_registry import RegistryError
+
+        host_state = build_server_host(CONFIG)
+        # Acceptance is recorded against the deployment's family view; the
+        # artifact checked is the exact path this submission pins.  A
+        # deployment that applies no admission decision never resolves it.
+        deployment_families: dict[str, Any] | None = None
+
+        def _image_refusal(family_name: str, status: str, message: str, next_action: str):
+            return (
+                jsonify(
+                    {
+                        "error": "Runner is currently unavailable for new submissions",
+                        "runner": family_name,
+                        "status": status,
+                        "reason": "RUNTIME_IMAGE_UNPINNED",
+                        "message": message,
+                        "next_action": next_action,
+                    }
+                ),
+                503,
+            )
+
         for family in referenced_families.values():
             admission = admissions[family.name]
             if admission is None:
                 continue
+            if deployment_families is None:
+                try:
+                    deployment_families = {
+                        item.name: item for item in load_instance_families(host_state)
+                    }
+                except (OSError, ValueError, runtime_bundle.RuntimeBundleError, RegistryError):
+                    return _image_refusal(
+                        family.name,
+                        admission.status.value,
+                        "The deployment's Runner inventory cannot be resolved",
+                        "doctor",
+                    )
             try:
-                runtime_images[family.name] = runtime_image.runtime_image_for_submission(family).digest
+                image = runtime_image.runtime_image_for_submission(family)
             except runtime_image.RuntimeImageError as exc:
-                return (
-                    jsonify(
-                        {
-                            "error": "Runner is currently unavailable for new submissions",
-                            "runner": family.name,
-                            "status": admission.status.value,
-                            "reason": "RUNTIME_IMAGE_UNPINNED",
-                            "message": str(exc),
-                            "next_action": "build-sif",
-                        }
-                    ),
-                    503,
+                return _image_refusal(family.name, admission.status.value, str(exc), "build-sif")
+            # Resolving the pin is not acceptance: only the deployment's
+            # live-test authority can prove these exact bytes carry a current,
+            # passed validation with the identity submission would pin.  A
+            # READY attestation for another SIF is not evidence for this one.
+            validated_family = deployment_families.get(family.name)
+            if validated_family is None or not receipt_valid_for_artifact(
+                host_state, validated_family, image.path, sif_sha256=image.digest
+            ):
+                return _image_refusal(
+                    family.name,
+                    admission.status.value,
+                    f"Runner family {family.name!r} has no current accepted live-test receipt "
+                    f"for runtime image {image.digest}",
+                    "live-test",
                 )
+            runtime_images[family.name] = image.digest
     # Reject GPU-ineligible users and invalid scheduler configuration before
     # writing uploads or creating a task record.
     policy = tt.runtime.access_policy

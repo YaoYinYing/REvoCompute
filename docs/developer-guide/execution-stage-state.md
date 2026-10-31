@@ -111,8 +111,14 @@ in the immutable ``task.json`` and mirrors the map onto the Task row; a
 deployment that applies no Runner admission decision opens no SIF and pins
 nothing. The digest is resolved once by ``runtime_image_for_submission`` and is
 an observation of the bytes at the path this attempt opens, never a claim that
-the path is immutable. Admission refuses the submission when a referenced
-family has no resolvable image or no live-test receipt for exactly that digest.
+the path is immutable. Resolving the pin is not acceptance: admission also
+requires the deployment's live-test authority
+(``receipt_valid_for_artifact``) to prove a current, passed acceptance for
+exactly those bytes: receipt contract version, every required passed case,
+build provenance, test-definition, configuration and Runtime Bundle identity,
+and execution identity. A missing, failed, partial, stale or wrong-family
+receipt, or READY evidence describing a different SIF, refuses the submission
+before Task creation and scheduler side effects.
 
 The Slurm wrapper re-hashes the SIF immediately before it invokes Apptainer,
 writes a schema-2 receipt binding Task, StageAttempt, family, Slurm job ID,
