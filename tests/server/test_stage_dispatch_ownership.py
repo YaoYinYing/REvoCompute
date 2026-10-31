@@ -471,6 +471,52 @@ def test_a_workflow_stage_keeps_the_gate_when_its_process_started(tmp_path, monk
     )
 
 
+def test_a_bookkeeping_outage_after_submit_cancels_the_allocation(tmp_path, monkeypatch):
+    """An accepted handle that cannot be stored is cancelled, never abandoned."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "e4" * 16
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    job = task_runtime.SlurmJob(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out")
+    )
+    job._process = object()
+    captured: dict[str, object] = {}
+
+    def _create(*_args, **kwargs):
+        captured["callback"] = kwargs["allocation_dispatched_callback"]
+        return job
+
+    def _submit():
+        captured["callback"]("9006", time.time(), False)
+        return "9006"
+
+    job.submit = _submit
+    monkeypatch.setattr(task_runtime, "_create_job", _create)
+    cancelled: list[str] = []
+    monkeypatch.setattr(
+        task_runtime, "_cancel_recorded_allocation", lambda handle: cancelled.append(handle) or True
+    )
+    real_update = database.update_task
+
+    def _raise_on_handle_write(_task_id, **fields):
+        if set(fields) == {"slurm_job_id"}:
+            raise RuntimeError("database write failed")
+        return real_update(_task_id, **fields)
+
+    monkeypatch.setattr(database, "update_task", _raise_on_handle_write)
+
+    with pytest.raises(RuntimeError, match="database write failed"):
+        task_runtime._run_compute_job(
+            task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+            resource_policy=_policy(),
+        )
+
+    assert cancelled == ["9006"]
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.FAILED
+
+
 def test_a_popen_failure_permits_a_fresh_attempt(tmp_path, monkeypatch):
     """(d) A failure proven to precede srun creation keeps the retry safe."""
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))

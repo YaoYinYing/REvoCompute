@@ -1230,10 +1230,18 @@ def _run_compute_job(
     # after a server restart (Celery/Redis state is ephemeral).  A rejected
     # write means the Task went terminal during submission, so the allocation
     # it just started must be cancelled here rather than left unowned.
-    if jid and isinstance(job, SlurmJob) and not task_store.update_task(task_id, slurm_job_id=jid):
-        job.cancel()
-        _finish_stage_attempt(task_id, tt.name, attempt, JobState.CANCELLED)
-        return JobState.CANCELLED
+    if jid and isinstance(job, SlurmJob):
+        try:
+            accepted = task_store.update_task(task_id, slurm_job_id=jid)
+        except Exception:
+            # The allocation exists but its handle could not be stored, so it
+            # must be cancelled or held like any other unrecorded acceptance.
+            _settle_unsubmitted_attempt(task_id, tt.name, attempt, job)
+            raise
+        if not accepted:
+            job.cancel()
+            _finish_stage_attempt(task_id, tt.name, attempt, JobState.CANCELLED)
+            return JobState.CANCELLED
     try:
         state = job.poll()
     except GPUCreditUnavailableError:
@@ -1321,7 +1329,7 @@ def _settle_unsubmitted_attempt(
     """
     if attempt is None:
         return
-    launch_started = isinstance(job, SlurmJob) and getattr(job, "_process", None) is not None
+    launch_started = job is not None and bool(getattr(job, "scheduler_request_started", False))
     handle = ""
     try:
         for run in task_store.list_stage_runs(task_id):
@@ -1707,7 +1715,14 @@ def _execute_workflow_node(
         handles["workflow_state"] = mirror
     if isinstance(job, SlurmJob):
         handles["slurm_job_id"] = jid
-    if not task_store.update_task(task_id, **handles):
+    try:
+        accepted = task_store.update_task(task_id, **handles)
+    except Exception:
+        # The allocation exists but its handle could not be stored, so it must
+        # be cancelled or held like any other unrecorded acceptance.
+        _settle_unsubmitted_attempt(task_id, stage.name, attempt, job)
+        raise
+    if not accepted:
         job.cancel()
         _finish_stage_attempt(task_id, stage.name, attempt, JobState.CANCELLED)
         return JobState.CANCELLED

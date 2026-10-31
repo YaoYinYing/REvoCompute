@@ -695,6 +695,11 @@ class SlurmJob(Job):
         """
         return self._wrapper_started
 
+    @property
+    def scheduler_request_started(self) -> bool:
+        """srun is created before its job id can be read from the wrapper."""
+        return self._process is not None
+
     def poll(self) -> JobState:
         if self._process is None:
             raise RuntimeError("poll() called before submit()")

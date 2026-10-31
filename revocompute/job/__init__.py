@@ -175,6 +175,17 @@ class Job(ABC):
     # -- helpers -------------------------------------------------------------
 
     @property
+    def scheduler_request_started(self) -> bool:
+        """Whether ``submit`` may have created a scheduler request.
+
+        Core settles an attempt whose submission failed only when the backend
+        proves no request exists; a backend that reports ``True`` without a
+        recorded job id holds the launch gate instead, because an allocation it
+        accepted may still be running.
+        """
+        return False
+
+    @property
     def job_id(self) -> str | None:
         return self._job_id
 
