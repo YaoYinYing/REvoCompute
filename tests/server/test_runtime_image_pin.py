@@ -719,3 +719,11 @@ def test_a_task_row_that_disagrees_with_the_snapshot_pin_refuses_launch(tmp_path
             job._render_wrapper()
     finally:
         database.engine.dispose()
+
+
+def test_a_non_text_observation_is_treated_as_absent(tmp_path):
+    job = _job(tmp_path, pin=_digest(b"pinned-image"))
+    Path(job.runtime_image_receipt_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(job.runtime_image_receipt_path).write_bytes(b"\xff\xfe\x00schema_version=2\n")
+    job._job_id = "4217"
+    assert job.runtime_image_observation() is None

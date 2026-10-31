@@ -122,11 +122,14 @@ receipt, so ``_notify_dispatched`` adopting and deleting the allocation receipt
 cannot remove the observation. Reads are non-destructive and the file is
 retained across a worker crash, so recovery can still see it.
 
-``finish_stage_attempt`` writes ``stage_runs.runtime_image_sha256`` only inside
-the guarded ``COMPLETED`` update, and only when the observed digest from the
-schema-2 receipt equals the attempt's expected family pin. Missing, malformed,
-mismatched, or legacy ``NULL`` evidence is refused; attempt creation never
-writes the column. This gate proves the wrapper observed the pinned bytes
+The adapter compares the observation's expected and observed digests, the
+attempt's identity and the Slurm job id with the family pin in the immutable
+snapshot, and passes the result to ``finish_stage_attempt``, which writes
+``stage_runs.runtime_image_sha256`` only inside the guarded ``COMPLETED`` update
+and only when expected equals observed. The store itself enforces that equality
+against what its caller validated; it does not re-read the snapshot. Missing,
+malformed, mismatched, or legacy ``NULL`` evidence is refused; attempt creation
+never writes the column. This gate proves the wrapper observed the pinned bytes
 immediately before exec, not that Apptainer executed them: promotion can still
 rename a different SIF onto the path between the hash and the exec
 (``run/revocompute_ctl/promotion.py:91-105``). That rename window is an open
@@ -137,7 +140,9 @@ resolve a pin to its held path at launch, or publish digest-addressed image
 paths. ``task.json``, the column, and the wrapper check stay the same either
 way. A queued Task whose pinned active SIF no longer hashes to its pin fails
 closed and must be resubmitted; it is never silently launched on the promoted
-bytes.
+bytes. Tasks queued before runtime images were pinned carry no
+``runtime_images`` map: their wrapper refuses to start Apptainer and they fail
+closed, so they are resubmitted rather than run unpinned.
 
 ## Task status projection
 

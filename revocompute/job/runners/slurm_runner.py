@@ -1429,7 +1429,8 @@ class SlurmJob(Job):
             return None
         try:
             text = Path(self.runtime_image_receipt_path).read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # Unreadable or non-text evidence is absent, never guessed at.
             return None
         observation = runtime_image.parse_runtime_image_receipt(text)
         if observation is None:

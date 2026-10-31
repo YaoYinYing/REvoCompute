@@ -152,15 +152,7 @@ def test_production_admission_blocks_non_ready_before_queue_side_effect(monkeypa
 
 
 def test_production_admission_allows_ready_runner(monkeypatch, tmp_path):
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        {
-            "RUNNER_UID": "1234",
-            "RUNNER_GID": "5678",
-            "REVOCOMPUTE_IMAGE_DIR": str(tmp_path / "images"),
-        },
-    )
+    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     module.app.config["manage_db"].resource_set("slurm_enabled", "true")
     _pin_runtime_image(module, "cpu_runner")
     route = module.app.view_functions["upload_file"]

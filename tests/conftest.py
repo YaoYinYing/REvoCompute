@@ -202,16 +202,24 @@ def _materialize_runtime_bundles(runner_root: Path, store_root: Path) -> None:
 def _pin_runtime_image(module, *families: str) -> None:
     """Write the SIF bytes and live-test receipt a managed submission pins.
 
-    Production setup materializes both before a family can accept work;
-    ``REVOCOMPUTE_IMAGE_DIR`` is not set for these isolated apps, so the
-    family's configured ``slurm_image`` path is the one to fill.
+    Production setup materializes both before a family can accept work.  The
+    family's configured ``slurm_image`` must stay inside the test sandbox: a
+    test that fabricated artifacts in the deployment image root would have the
+    resolver accept them for every later run on that host.
     """
     import hashlib
     import json
+    import os
 
+    image_root = Path(os.environ.get("REVOCOMPUTE_IMAGE_DIR") or "")
+    image_root.mkdir(parents=True, exist_ok=True)
     for name in families:
         family, _ = module.task_runtime._get_family(name)
         path = Path(family.slurm_image)
+        if image_root not in path.parents:
+            raise AssertionError(
+                f"refusing to write a fixture SIF outside the test image root: {path}"
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(f"{name} fixture SIF".encode())
         digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
@@ -265,6 +273,10 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None, *, r
         "LOG_DIR": str(log_dir),
         "CONFIG_DIR": str(env_root / "config"),
         "RUNTIME_BUNDLE_DIR": str(env_root / "runtime-bundles"),
+        # Image artifacts belong to the test sandbox: a family's default path
+        # falls back to the deployment image root, and a test that pins bytes
+        # must never write there.
+        "REVOCOMPUTE_IMAGE_DIR": str(env_root / "images"),
         "ADMIN_USERS": "admin",
         "ADMIN_BOOTSTRAP_CREDENTIALS": "admin\ttest-admin-password",
     }
