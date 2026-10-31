@@ -1311,7 +1311,7 @@ def _run_compute_job(
             task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
         )
     observation = job.runtime_image_observation() if state == JobState.COMPLETED else None
-    _finish_stage_attempt(
+    settled = _finish_stage_attempt(
         task_id,
         tt.name,
         attempt,
@@ -1320,6 +1320,16 @@ def _run_compute_job(
         expected_runtime_image=observation.expected if observation else None,
         observed_runtime_image=observation.observed if observation else None,
     )
+    if state == JobState.COMPLETED and not settled:
+        # The allocation finished but its completion could not be recorded with
+        # an observed runtime image equal to the pin.  Publishing it would claim
+        # provenance the Server never recorded, so the attempt becomes a failure
+        # rather than a completion and the Task fails with it.
+        _settle_stage_attempt(
+            task_id, tt.name, attempt, status=stage_state.FAILED, reason_code="image_identity_missing"
+        )
+        _record_workflow_refusal(task_id, tt.name, "image_identity_missing")
+        return JobState.FAILED
     return state
 
 

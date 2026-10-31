@@ -770,6 +770,41 @@ def test_single_stage_job_records_its_lifecycle_through_the_allocation_boundary(
     assert run["started_at"] is not None and run["ended_at"] is not None
 
 
+def test_single_stage_completion_without_an_observed_image_fails_the_task(tmp_path, monkeypatch):
+    """A finished allocation whose image the wrapper did not observe cannot publish.
+
+    The completion is refused by the guarded transition; the attempt must then
+    become a failure, not stay RUNNING under a Task that reports success.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "6" * 32
+    _insert_task(database, task_id, status="queued", task_type="cpu_runner")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    class _Job:
+        def submit(self):
+            return "77"
+
+        def poll(self):
+            return task_runtime.JobState.COMPLETED
+
+        def runtime_image_observation(self):
+            return None
+
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: _Job())
+
+    state = task_runtime._run_compute_job(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+        resource_policy=_policy(False),
+    )
+
+    assert state == task_runtime.JobState.FAILED
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["status"], run["reason_code"]) == (stage_state.FAILED, "image_identity_missing")
+    assert run["runtime_image_sha256"] is None
+    assert database.get_task_diagnostics(task_id)["reason_code"] == "image_identity_missing"
+
+
 def test_unaccounted_callbacks_never_settle_an_allocation(tmp_path, monkeypatch):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     monkeypatch.setattr(task_runtime, "task_store", database)

@@ -32,6 +32,10 @@ REASONS = {
     "stage_settlement_failed": (
         "A completed stage could not be recorded durably, so its dependents were not dispatched."
     ),
+    "image_identity_missing": (
+        "A completed allocation left no runtime-image observation equal to the Task's pin, "
+        "so its results were not published."
+    ),
     "stage_input_unavailable": "An upstream artifact this stage consumes was never published durably.",
     "stage_input_invalid": "An upstream artifact this stage consumes could not be verified for it.",
     "submission_failed": "The allocation request could not be submitted.",
