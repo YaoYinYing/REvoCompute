@@ -1321,14 +1321,15 @@ def _run_compute_job(
         observed_runtime_image=observation.observed if observation else None,
     )
     if state == JobState.COMPLETED and not settled:
-        # The allocation finished but its completion could not be recorded with
-        # an observed runtime image equal to the pin.  Publishing it would claim
-        # provenance the Server never recorded, so the attempt becomes a failure
-        # rather than a completion and the Task fails with it.
-        _settle_stage_attempt(
-            task_id, tt.name, attempt, status=stage_state.FAILED, reason_code="image_identity_missing"
-        )
-        _record_workflow_refusal(task_id, tt.name, "image_identity_missing")
+        # The allocation finished but its completion could not be recorded.
+        # Publishing it would claim state the Server never recorded, so the
+        # attempt becomes a failure rather than a completion and the Task fails
+        # with it.  The refusal names what was actually missing: no observation
+        # equal to the pin, or a valid observation whose settlement did not
+        # commit (a bookkeeping failure or a lost terminal race).
+        reason_code = "image_identity_missing" if observation is None else "stage_settlement_failed"
+        _settle_stage_attempt(task_id, tt.name, attempt, status=stage_state.FAILED, reason_code=reason_code)
+        _record_workflow_refusal(task_id, tt.name, reason_code)
         return JobState.FAILED
     return state
 

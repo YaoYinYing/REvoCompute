@@ -87,8 +87,10 @@ def runtime_image_for_submission(family: Any, *, require_receipt: bool = True) -
     This is the only resolver boundary.  It returns the path the attempt will
     open and the content digest at that path now; the wrapper re-hashes the
     same path at launch, so a path replaced in between fails closed.  A later
-    content-addressed store replaces this body without changing callers,
-    ``task.json`` or ``stage_runs``.
+    content-addressed store changes this body, but the pin alone does not carry
+    a store path: launch opens ``execution_plan.image`` from
+    ``runtime.slurm_image``, so the store must also resolve digest to held path
+    at launch (or publish digest-addressed image paths).
 
     A production submission requires the live-test receipt for exactly those
     bytes.  The live test itself passes ``require_receipt=False``: it is the

@@ -805,6 +805,37 @@ def test_single_stage_completion_without_an_observed_image_fails_the_task(tmp_pa
     assert database.get_task_diagnostics(task_id)["reason_code"] == "image_identity_missing"
 
 
+def test_single_stage_completion_whose_settlement_does_not_commit_reports_settlement_failed(
+    tmp_path, monkeypatch
+):
+    """A valid observation with a refused write is a bookkeeping failure, not a missing image."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "5" * 32
+    _insert_task(database, task_id, status="queued", task_type="cpu_runner")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(database, "finish_stage_attempt", lambda **_kwargs: False)
+
+    class _Job:
+        def submit(self):
+            return "77"
+
+        def poll(self):
+            return task_runtime.JobState.COMPLETED
+
+        def runtime_image_observation(self):
+            return SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
+
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: _Job())
+
+    state = task_runtime._run_compute_job(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+        resource_policy=_policy(False),
+    )
+
+    assert state == task_runtime.JobState.FAILED
+    assert database.get_task_diagnostics(task_id)["reason_code"] == "stage_settlement_failed"
+
+
 def test_unaccounted_callbacks_never_settle_an_allocation(tmp_path, monkeypatch):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     monkeypatch.setattr(task_runtime, "task_store", database)

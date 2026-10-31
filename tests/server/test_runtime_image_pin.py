@@ -26,7 +26,7 @@ from types import SimpleNamespace
 import pytest
 
 from conftest import _load_pssm_module, _test_client_auth
-from revocompute import runtime_image, stage_state, task_runtime
+from revocompute import runtime_image, stage_state, task_types, task_runtime
 from revocompute.db import TaskDatabase
 from revocompute.job import JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
@@ -36,6 +36,19 @@ from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskInputRole, T
 
 _IMAGE_SHA_A = "sha256:" + "a" * 64
 _IMAGE_SHA_B = "sha256:" + "b" * 64
+
+
+@pytest.fixture(autouse=True)
+def _restore_task_type_registry():
+    """Undo this module's narrowed discovery for whatever runs next.
+
+    Loading the submission app with ``ENABLED_TASKRUNNERS=cpu_runner`` installs
+    a process-wide registry snapshot that would otherwise survive the test and
+    make later suites fail to resolve their own synthetic families.
+    """
+    previous = task_types._active()
+    yield
+    task_types._install_snapshot(previous)
 
 
 def _digest(data: bytes) -> str:
@@ -90,6 +103,7 @@ def _job(
     stage_name: str | None = None,
     attempt: int = 1,
     task_id: str = "a" * 32,
+    task_store: TaskDatabase | None = None,
 ) -> SlurmJob:
     inputs = tmp_path / "ws" / "inputs"
     inputs.mkdir(parents=True, exist_ok=True)
@@ -122,6 +136,7 @@ def _job(
         username="alice",
         stage_name=stage_name or family,
         stage_attempt=attempt,
+        task_store=task_store,
     )
 
 
@@ -654,3 +669,53 @@ def test_the_observation_parser_requires_attribution_and_digests():
         valid.replace(f"expected_sha256={_IMAGE_SHA_A}", "expected_sha256="),
     ):
         assert runtime_image.parse_runtime_image_receipt(broken) is None
+
+
+# -- acceptance gate: attribution beyond job id and attempt ---------------------
+
+
+def test_an_observation_for_another_stage_is_not_this_attempts_evidence(tmp_path):
+    writer = _job(tmp_path, pin=_digest(b"pinned-image"), stage_name="stage_a")
+    result, _started = _run_wrapper(tmp_path, writer)
+    assert result.returncode == 0, result.stderr
+    reader = _job(tmp_path, pin=_digest(b"pinned-image"), stage_name="stage_b")
+    reader._job_id = "4217"
+    # Same file, so only the attribution comparison can reject it.
+    Path(reader.runtime_image_receipt_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(reader.runtime_image_receipt_path).write_text(
+        Path(writer.runtime_image_receipt_path).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    assert reader.runtime_image_observation() is None
+
+
+def test_an_observation_for_another_family_is_not_this_attempts_evidence(tmp_path):
+    digest = _digest(b"pinned-image")
+    writer = _job(tmp_path, pin=digest, family="cpu_runner", stage_name="stage_a")
+    result, _started = _run_wrapper(tmp_path, writer)
+    assert result.returncode == 0, result.stderr
+    reader = _job(
+        tmp_path,
+        pin=digest,
+        family="other_runner",
+        image_name="other_runner.sif",
+        stage_name="stage_a",
+    )
+    reader._job_id = "4217"
+    Path(reader.runtime_image_receipt_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(reader.runtime_image_receipt_path).write_text(
+        Path(writer.runtime_image_receipt_path).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    assert reader.runtime_image_observation() is None
+
+
+def test_a_task_row_that_disagrees_with_the_snapshot_pin_refuses_launch(tmp_path):
+    database = _db(tmp_path)
+    try:
+        database.update_task("a" * 32, input_form=json.dumps({"runtime_images": {"cpu_runner": _IMAGE_SHA_A}}))
+        job = _job(tmp_path, pin=_digest(b"pinned-image"), task_store=database)
+        with pytest.raises(RuntimeError):
+            job._pinned_runtime_image_digest()
+        with pytest.raises(RuntimeError):
+            job._render_wrapper()
+    finally:
+        database.engine.dispose()

@@ -62,6 +62,7 @@ def _composed_module(
             "RUNNER_UID": "1234",
             "RUNNER_GID": "5678",
             "ENABLED_TASKRUNNERS": f"multistage_runner,{foreign}",
+            "REVOCOMPUTE_IMAGE_DIR": str(tmp_path / "images"),
         },
         runner_root=root,
     )

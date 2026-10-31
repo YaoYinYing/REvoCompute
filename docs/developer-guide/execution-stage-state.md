@@ -106,12 +106,13 @@ no artifact identity, so the stage fails ``stage_output_unverified``.
 
 ### Runtime image observation
 
-Submission records ``runtime_images: {family: "sha256:<hex>"}`` in the immutable
-``task.json`` and mirrors the map onto the Task row. The digest is resolved once
-by ``runtime_image_for_submission`` and is an observation of the bytes at the
-path this attempt opens, never a claim that the path is immutable. Admission
-refuses the submission when a referenced family has no resolvable image or no
-live-test receipt for exactly that digest.
+A managed-Slurm submission records ``runtime_images: {family: "sha256:<hex>"}``
+in the immutable ``task.json`` and mirrors the map onto the Task row; a
+deployment that applies no Runner admission decision opens no SIF and pins
+nothing. The digest is resolved once by ``runtime_image_for_submission`` and is
+an observation of the bytes at the path this attempt opens, never a claim that
+the path is immutable. Admission refuses the submission when a referenced
+family has no resolvable image or no live-test receipt for exactly that digest.
 
 The Slurm wrapper re-hashes the SIF immediately before it invokes Apptainer,
 writes a schema-2 receipt binding Task, StageAttempt, family, Slurm job ID,
@@ -129,11 +130,14 @@ writes the column. This gate proves the wrapper observed the pinned bytes
 immediately before exec, not that Apptainer executed them: promotion can still
 rename a different SIF onto the path between the hash and the exec
 (``run/revocompute_ctl/promotion.py:91-105``). That rename window is an open
-limitation until an execution holds immutable bytes, at which point the
-resolver body can be backed by a content-addressed store without changing
-``task.json``, the column, or callers. A queued Task whose pinned active SIF no
-longer hashes to its pin fails closed and must be resubmitted; it is never
-silently launched on the promoted bytes.
+limitation until an execution holds immutable bytes. Closing it needs more than
+a store-backed resolver: submission discards the resolved path and launch opens
+``execution_plan.image`` from ``runtime.slurm_image``, so a store must also
+resolve a pin to its held path at launch, or publish digest-addressed image
+paths. ``task.json``, the column, and the wrapper check stay the same either
+way. A queued Task whose pinned active SIF no longer hashes to its pin fails
+closed and must be resubmitted; it is never silently launched on the promoted
+bytes.
 
 ## Task status projection
 
