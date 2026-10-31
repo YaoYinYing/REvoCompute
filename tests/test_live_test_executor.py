@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import time
@@ -35,7 +36,8 @@ def test_fileless_live_case_serializes_explicit_task_workspace_identity(tmp_path
     form = json.loads(
         live_test_executor._task_input_form(
             [], snapshot_root, "live-test-fileless_runner", {"resource_policy": None},
-            {"fileless_runner": "sha256:" + "a" * 64}, None,
+            {"fileless_runner": "sha256:" + "a" * 64},
+            {"fileless_runner": "sha256:" + "b" * 64}, None,
         )
     )
     assert form["entities"] == []
@@ -45,6 +47,25 @@ def test_fileless_live_case_serializes_explicit_task_workspace_identity(tmp_path
     assert form["snapshot_root"] == str(snapshot_root)
     assert form["resource_policy"] is None
     assert form["runtime_bundles"] == {"fileless_runner": "sha256:" + "a" * 64}
+    assert form["runtime_images"] == {"fileless_runner": "sha256:" + "b" * 64}
+
+
+def test_live_test_pins_candidate_image_bytes_before_a_receipt_exists(tmp_path):
+    """The live test is the run that produces the receipt, so it pins the bytes."""
+    from revocompute.task_types import RuntimeFamily, TaskType
+
+    image = tmp_path / "candidate.sif"
+    image.write_bytes(b"candidate")
+    runtime = RuntimeFamily("live_family", ("bash", "run.sh"), "runner.def", str(image))
+    task_type = TaskType("live", "Live", runtime, ())
+
+    assert live_test_executor._pinned_runtime_images(task_type) == {
+        "live_family": "sha256:" + hashlib.sha256(b"candidate").hexdigest()
+    }
+
+    image.unlink()
+    with pytest.raises(ValueError, match="runtime image is unavailable"):
+        live_test_executor._pinned_runtime_images(task_type)
 
 
 def test_live_storage_key_survives_a_composed_enabled_scope(tmp_path, monkeypatch):
@@ -81,7 +102,7 @@ def test_workflow_live_task_form_carries_a_dispatchable_frozen_graph(tmp_path):
     )
     graph = execution_graph_payload(task_type)
     form = json.loads(
-        live_test_executor._task_input_form([], tmp_path / "inputs", "live-key", {}, {}, graph)
+        live_test_executor._task_input_form([], tmp_path / "inputs", "live-key", {}, {}, {}, graph)
     )
 
     frozen = task_runtime._frozen_execution_graph({"input_form": json.dumps(form)})

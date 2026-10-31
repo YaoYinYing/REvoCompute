@@ -38,6 +38,7 @@ from werkzeug.utils import secure_filename
 
 SERVER_PACKAGE = Path(__file__).resolve().parents[1] / "revocompute"
 ROOT = SERVER_PACKAGE.parent
+_IMAGE = "sha256:" + "a" * 64
 
 # Flask test-client tests
 # ==================================================================
@@ -865,6 +866,7 @@ def test_task_status_endpoint_reports_per_stage_state(monkeypatch, tmp_path):
         username="tester",
         status="running",
         task_type="multistage_runner",
+        input_form=json.dumps({"runtime_images": {"multistage_runner": _IMAGE}}),
     )
     features = module.task_store.begin_stage_attempt(
         task_id=md5sum, stage_index=0, stage_name="multistage_runner.features",
@@ -874,6 +876,8 @@ def test_task_status_endpoint_reports_per_stage_state(monkeypatch, tmp_path):
         task_id=md5sum, stage_name="multistage_runner.features", attempt=features["attempt"],
         status=module.task_runtime.stage_state.COMPLETED,
         reason_code=module.task_runtime.stage_state.Reason.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
     )
     module.task_store.begin_stage_attempt(
         task_id=md5sum, stage_index=1, stage_name="multistage_runner.model",
@@ -942,6 +946,8 @@ def test_worker_redispatch_with_existing_stage_run_keeps_task_running(monkeypatc
         task_id=md5sum, stage_name="multistage_runner.features", attempt=prior["attempt"],
         status=module.task_runtime.stage_state.COMPLETED,
         reason_code=module.task_runtime.stage_state.Reason.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
     )
     observed: dict[str, str] = {}
     created: list[str] = []
@@ -966,6 +972,11 @@ def test_worker_redispatch_with_existing_stage_run_keeps_task_running(monkeypatc
 
         def poll(self):
             return module.task_runtime.JobState.COMPLETED
+
+        def runtime_image_observation(self):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
 
     def _create_job(_task_id, tt, _runner, _entities, _output, stage_callback=None, **kwargs):
         created.append(tt.name)
@@ -1975,6 +1986,7 @@ def _upsert_task_for_user(
     status: str = "finished",
     run_stage: str | None = None,
     task_type: str = "cpu_runner",
+    input_form: str | None = None,
 ) -> None:
     owner = _task_owner(module, username)
     _relocate_task_artifacts(module, md5sum, result_dir, owner)
@@ -1995,6 +2007,7 @@ def _upsert_task_for_user(
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         run_stage=run_stage,
         storage_key=owner["storage_key"],
+        input_form=input_form,
     )
 
 

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import ntpath
@@ -447,12 +448,28 @@ def test_preflight_classifies_admission_denial(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("endpoint", ["/compute/api/preflight/cpu_runner", "/compute/api/post"])
 def test_infrastructure_rejection_runs_after_security_and_leaves_no_durable_task(monkeypatch, tmp_path, endpoint):
+    images = tmp_path / "images"
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "REVOCOMPUTE_IMAGE_DIR": str(images),
+        },
     )
     module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    # The submission boundary pins a real image and requires the live-test
+    # receipt for exactly its bytes; this test is about ordering after that.
+    image = images / "cpu_runner_v1.sif"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b"pinned-image")
+    digest = "sha256:" + hashlib.sha256(image.read_bytes()).hexdigest()
+    evidence = images / "evidence" / "cpu_runner"
+    evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / f"{digest.removeprefix('sha256:')}.fixture.receipt.json").write_text(
+        json.dumps({"runner_family": "cpu_runner", "sif_sha256": digest}), encoding="utf-8"
+    )
     route = module.app.view_functions["upload_file"]
     while hasattr(route, "__wrapped__"):
         route = route.__wrapped__

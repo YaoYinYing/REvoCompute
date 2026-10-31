@@ -163,7 +163,7 @@ from revocompute.result_storyboard import (
     storyboard_asset_root,
     storyboard_declaration,
 )
-from revocompute import runtime_bundle
+from revocompute import runtime_bundle, runtime_image
 from revocompute.schemas import (
     AccessDecisionRequest,
     AccessRequestCreate,
@@ -2354,9 +2354,23 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # Admission is based on the same immutable build/live-test evidence shown
     # by runner-status.  Evaluate it before validating or saving uploads so a
     # non-ready Runner cannot create task or scheduler side effects.
+    #
+    # The same boundary pins each referenced family's runtime image: the exact
+    # bytes the Slurm wrapper will open, resolved once and recorded in the
+    # immutable snapshot.  A family without a resolvable digest, or without a
+    # live-test receipt for exactly that digest, refuses the submission.
+    runtime_images: dict[str, str] = {}
+    admissions = {
+        family.name: submission_admission(CONFIG.server_dir, family.name, manage_db=managedb)
+        for family in referenced_families.values()
+    }
     for family in referenced_families.values():
-        admission = submission_admission(CONFIG.server_dir, family.name, manage_db=managedb)
-        if admission is not None and not admission.accepts(task_type):
+        admission = admissions[family.name]
+        if admission is None:
+            # A deployment that does not run managed Slurm applies no Runner
+            # admission decision and opens no SIF, so it pins no image.
+            continue
+        if not admission.accepts(task_type):
             if admission.ready:
                 # The family is validated, but its acceptance never ran this
                 # Task's own case (a narrower live-test scope).  Submitting it
@@ -2390,6 +2404,29 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 ),
                 503,
             )
+    # Preflight is advice, not the submission decision: it neither creates the
+    # snapshot that carries a pin nor starts an allocation.
+    if not preflight_only:
+        for family in referenced_families.values():
+            admission = admissions[family.name]
+            if admission is None:
+                continue
+            try:
+                runtime_images[family.name] = runtime_image.runtime_image_for_submission(family).digest
+            except runtime_image.RuntimeImageError as exc:
+                return (
+                    jsonify(
+                        {
+                            "error": "Runner is currently unavailable for new submissions",
+                            "runner": family.name,
+                            "status": admission.status.value,
+                            "reason": "RUNTIME_IMAGE_UNPINNED",
+                            "message": str(exc),
+                            "next_action": "build-sif",
+                        }
+                    ),
+                    503,
+                )
     # Reject GPU-ineligible users and invalid scheduler configuration before
     # writing uploads or creating a task record.
     policy = tt.runtime.access_policy
@@ -2767,6 +2804,10 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # bundle" — retention reads it so a queued Task's runtime code is never
     # pruned before the Task runs.
     input_form["runtime_bundles"] = runtime_bundles
+    # The image pin travels in the immutable snapshot and on the Task row.  The
+    # snapshot is the authority the wrapper re-checks at launch; the mirror is a
+    # query/recovery projection and a disagreement refuses rather than repairs.
+    input_form["runtime_images"] = runtime_images
     task_manifest = {
         "version": 4,
         "task_id": md5sum,
@@ -2780,6 +2821,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             tt.runtime.name, tt.resource_adaptation, store=task_store
         ),
         "runtime_bundles": runtime_bundles,
+        "runtime_images": runtime_images,
     }
     # Claim the Task ID BEFORE destroying or rebuilding any content-derived
     # directory.  The input/output roots are keyed by the ID, so preparation is

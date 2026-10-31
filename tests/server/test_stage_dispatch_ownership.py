@@ -26,6 +26,7 @@ from revocompute.resource_policy import ResolvedResources
 from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskType, WorkflowStage
 
 STAGE = "cpu_runner"
+_IMAGE = "sha256:" + "a" * 64
 
 
 def _policy() -> ResolvedResources:
@@ -106,6 +107,11 @@ class _RecordingJob:
 
     def poll(self):
         return task_runtime.JobState.COMPLETED
+
+    def runtime_image_observation(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
 
 
 def _job_factory(submissions: list[str]):

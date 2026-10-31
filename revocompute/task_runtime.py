@@ -562,6 +562,28 @@ def _stage_outputs_present(output_dir: str, outputs) -> bool:
     return True
 
 
+def _stage_family_name(tt: Any, stage_name: str) -> str:
+    """The family that executes one stage; the composing family is the default."""
+    for stage in getattr(tt, "workflow", ()) or ():
+        if stage.name == stage_name:
+            return stage.family or tt.runtime.name
+    return tt.runtime.name
+
+
+def _runtime_image_pin(task: dict[str, Any], tt: Any, stage_name: str) -> str | None:
+    """The submission pin for the family that owns *stage_name*, if any."""
+    raw = task.get("input_form")
+    try:
+        form = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        return None
+    images = form.get("runtime_images") if isinstance(form, dict) else None
+    if not isinstance(images, dict):
+        return None
+    value = images.get(_stage_family_name(tt, stage_name))
+    return value if isinstance(value, str) else None
+
+
 def _attach_stage_dependencies(
     task: dict[str, Any],
     tt: Any,
@@ -597,6 +619,14 @@ def _attach_stage_dependencies(
     for item in items:
         node = nodes.get(item["name"])
         if item["status"] != stage_state.COMPLETED:
+            continue
+        # A completion is current only when the attempt recorded the runtime
+        # image its wrapper observed, and that observation equals this Task's
+        # pin for the stage's family.  A NULL (legacy or missing observation) or
+        # mismatched row is history, never reusable evidence.
+        recorded_for_image = latest_by_name.get(item["name"]) or {}
+        expected_image = _runtime_image_pin(task, tt, item["name"])
+        if expected_image is None or recorded_for_image.get("runtime_image_sha256") != expected_image:
             continue
         if node is not None and node.outputs:
             # A status read must stay cheap: the recorded identity's shape plus
@@ -739,6 +769,8 @@ def _create_job(
     allocation_finished_callback=None,
     allocation_accounting: bool | None = None,
     stage_inputs_dir: str | None = None,
+    stage_name: str | None = None,
+    stage_attempt: int | None = None,
 ) -> Job:
     """Create the production Slurm/Apptainer job adapter."""
     return SlurmJob(
@@ -762,6 +794,8 @@ def _create_job(
         allocation_finished_callback=allocation_finished_callback,
         allocation_accounting=allocation_accounting,
         stage_inputs_dir=stage_inputs_dir,
+        stage_name=stage_name,
+        stage_attempt=stage_attempt,
     )
 
 
@@ -1229,6 +1263,8 @@ def _run_compute_job(
             allocation_started_callback=started_callback,
             allocation_finished_callback=finished_callback,
             allocation_accounting=accounting,
+            stage_name=tt.name,
+            stage_attempt=attempt,
         )
     except Exception:
         # No job exists, so no scheduler process can have been created.
@@ -1274,8 +1310,15 @@ def _run_compute_job(
         task_store.release_reservation(
             task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
         )
+    observation = job.runtime_image_observation() if state == JobState.COMPLETED else None
     _finish_stage_attempt(
-        task_id, tt.name, attempt, state, failure_reason=getattr(job, "failure_reason", None)
+        task_id,
+        tt.name,
+        attempt,
+        state,
+        failure_reason=getattr(job, "failure_reason", None),
+        expected_runtime_image=observation.expected if observation else None,
+        observed_runtime_image=observation.observed if observation else None,
     )
     return state
 
@@ -1306,6 +1349,7 @@ def _workflow_state_mirror(
 def _settle_stage_attempt(
     task_id: str, stage_name: str, attempt: int | None, *, status: str, reason_code: str,
     output_identity: str | None = None, require_identity: bool = False,
+    expected_runtime_image: str | None = None, observed_runtime_image: str | None = None,
 ) -> bool:
     """Best-effort attempt settlement; returns whether the transition committed."""
     if attempt is None:
@@ -1319,6 +1363,8 @@ def _settle_stage_attempt(
             reason_code=stage_state.bounded_reason(reason_code),
             output_identity=output_identity,
             require_identity=require_identity,
+            expected_runtime_image=expected_runtime_image,
+            observed_runtime_image=observed_runtime_image,
         )
     except Exception:
         logging.exception("Could not settle stage attempt %s/%s for task %s", stage_name, attempt, task_id)
@@ -1427,6 +1473,8 @@ def _finish_stage_attempt(
     failure_reason: str | None = None,
     output_identity: str | None = None,
     require_identity: bool = False,
+    expected_runtime_image: str | None = None,
+    observed_runtime_image: str | None = None,
 ) -> bool:
     """Settle one attempt from the allocation outcome Core observed.
 
@@ -1456,6 +1504,8 @@ def _finish_stage_attempt(
     return _settle_stage_attempt(
         task_id, stage_name, attempt, status=status, reason_code=reason_code,
         output_identity=output_identity, require_identity=require_identity,
+        expected_runtime_image=expected_runtime_image,
+        observed_runtime_image=observed_runtime_image,
     )
 
 
@@ -1718,6 +1768,8 @@ def _execute_workflow_node(
             allocation_finished_callback=callbacks[2],
             allocation_accounting=user_id > 0,
             stage_inputs_dir=stage_inputs_dir,
+            stage_name=stage.name,
+            stage_attempt=attempt,
         )
     except Exception:
         # No job exists, so no scheduler process can have been created.
@@ -1765,9 +1817,12 @@ def _execute_workflow_node(
     if result == JobState.COMPLETED and identity is None:
         result = JobState.FAILED
         failure_reason = "stage_output_missing"
+    observation = job.runtime_image_observation() if result == JobState.COMPLETED else None
     settled_attempt = _finish_stage_attempt(
         task_id, stage.name, attempt, result, failure_reason=failure_reason,
         output_identity=identity, require_identity=result == JobState.COMPLETED,
+        expected_runtime_image=observation.expected if observation else None,
+        observed_runtime_image=observation.observed if observation else None,
     )
     if result == JobState.COMPLETED and not settled_attempt:
         # The allocation succeeded but its completion did not become durable.

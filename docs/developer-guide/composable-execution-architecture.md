@@ -104,12 +104,14 @@ Stage publication is confined, bounded, checked for malicious symlinks/hardlink
 escapes/FIFO/path traversal and safely committed, including crash races.
 
 The GREMLIN fit is recomputed on every attempt. Its outputs sit in a tree that
-survives retries, and this Runner cannot bind the runtime image Apptainer opens:
-the execution contract carries a path, and a promotion can replace the file
-behind it. Reusing a previous fit would therefore publish bytes no attempt can
-attribute to its own image, so the stage removes its declared outputs and fits
-again. A checkpoint becomes admissible only when the attempt carries an
-immutable, content-addressed image identity; that work is tracked separately.
+survives retries. An attempt now records the digest its wrapper observed
+immediately before Apptainer, but the execution contract still carries a path,
+and a promotion can rename a different SIF onto it between that hash and the
+exec. A completion therefore cannot prove which bytes Apptainer opened, so
+reusing a previous fit could publish bytes from another image. The stage
+removes its declared outputs and fits again. Reuse becomes admissible only when
+an execution holds immutable, content-addressed image bytes for the attempt;
+that work is tracked separately.
 
 ## Graph grammar and compilation
 
@@ -165,21 +167,30 @@ Rules the code enforces:
   the runner tree instead, and a stage naming no real family is refused.
 - Submission resolves every referenced family, requires each family's access
   policy to admit the user, requires each family's submission admission
-  evidence to be ready, and pins one Runtime Bundle per referenced family. One
-  refusal rejects the whole submission before any allocation.
+  evidence to be ready, and pins one Runtime Bundle and one runtime image per
+  referenced family. The image digest is resolved once by
+  ``runtime_image_for_submission``; a family without a resolvable digest, or
+  without a live-test receipt for exactly that digest, refuses the submission
+  with ``503``. One refusal rejects the whole submission before any allocation.
+  The pin is recorded in the immutable ``task.json`` and mirrored on the Task
+  row.
 - GPU eligibility is graph-aware: if any stage in any referenced family
   requires an accelerator, the user needs GPU access.
-- Dispatch resolves each node's runtime image, entrypoint, mounts,
+- Dispatch resolves each node's runtime image pin, entrypoint, mounts,
   RunnerConfig, access-policy entitlements and pinned bundle from that node's
   family. The composing Task's runtime is the default only for stages that
-  omit `family`.
+  omit `family`. Immediately before Apptainer, the wrapper re-hashes the image
+  path and refuses a mismatch with that node's pin, so a promotion between
+  submission and launch fails closed instead of running the promoted bytes.
 - Resource policy remains resolved by Task/stage name; placement keeps using
   the composing runner's timeout default.
 - The frozen graph records each node's resolved family id. The family's SIF
-  image and entrypoint are not part of the digest, so re-deploying an image
-  does not change a submitted Task's frozen graph. A promotion between
-  submission and execution therefore runs the new image under that graph; the
-  Runtime Bundle is pinned into the submission, the image is the deployment's.
+  image and entrypoint are not part of the graph digest, so re-deploying an
+  image does not change a submitted Task's frozen graph. The Runtime Bundle and
+  the runtime-image digest are pinned into the submission. A promotion between
+  submission and execution changes the active path, so the wrapper's launch
+  re-hash no longer matches the pin: the Task fails closed and must be
+  resubmitted rather than run the new image under the old graph.
 
 Cross-family references are additive to the existing single-family manifest:
 a task that omits `family` keeps its current meaning.
@@ -253,19 +264,27 @@ Rules the code enforces:
   tree, so a re-attempt settles the files present there. The Server executes
   every declared stage in each execution, except a stage with no StageRun record
   whose legacy `workflow_state` entry claims completion, which is refused as
-  `stage_output_unverified`. No attempt records the runtime image it ran, so a
-  Runner keeps the published bytes attributable to its attempt by deleting or
-  rewriting every declared output rather than reusing what it finds. The GREMLIN
-  PSSM and AlphaFold 3 runners delete theirs first, and the GREMLIN-LH fit
-  rewrites each one; caching inside an upstream tool's own image is outside this
-  contract. The composed live acceptance runs CPU cases with accounting
-  disabled, so it exercises the artifact handoff and submission admission, not
-  the allocation-time readiness gate, which each family's own acceptance covers.
-- A new execution executes every stage. No attempt records the runtime image it
-  ran, so a completion from an earlier execution cannot be attributed to this
-  execution's image; reusing it could attribute another image's artifact to this
-  attempt. A consumer still re-hashes the producer's recorded identity when it
-  stages the artifact, so a changed file never silently feeds it.
+  `stage_output_unverified`. A completed attempt records the image digest its
+  wrapper observed immediately before exec, but that is not proof of the bytes
+  Apptainer opened: a promotion can rename a different SIF onto the path between
+  the hash and the exec (`run/revocompute_ctl/promotion.py:91-105`). That rename
+  window is an open limitation until an execution holds immutable bytes. A
+  Runner therefore keeps the published bytes attributable to its attempt by
+  deleting or rewriting every declared output rather than reusing what it finds.
+  The GREMLIN PSSM and AlphaFold 3 runners delete theirs first, and the
+  GREMLIN-LH fit rewrites each one; caching inside an upstream tool's own image
+  is outside this contract. The composed live acceptance runs CPU cases with
+  accounting disabled, so it exercises the artifact handoff and submission
+  admission, not the allocation-time readiness gate, which each family's own
+  acceptance covers.
+- A new execution executes every stage. A completion from an earlier execution
+  is current only when its recorded wrapper observation equals this Task's pin
+  for the stage's family; a ``NULL``, malformed, or different digest is not
+  reusable evidence. Reusing an earlier completion could still attribute bytes
+  from an image Apptainer opened after a post-hash rename to this attempt, so
+  the composer reruns every stage and stages a consumer from a fresh attempt. A
+  consumer still re-hashes the producer's recorded identity when it stages the
+  artifact, so a changed file never silently feeds it.
 
 ## Scheduling and state
 

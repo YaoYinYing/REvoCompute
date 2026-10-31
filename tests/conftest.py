@@ -199,6 +199,30 @@ def _materialize_runtime_bundles(runner_root: Path, store_root: Path) -> None:
     runtime_bundle.write_index(store_root, index)
 
 
+def _pin_runtime_image(module, *families: str) -> None:
+    """Write the SIF bytes and live-test receipt a managed submission pins.
+
+    Production setup materializes both before a family can accept work;
+    ``REVOCOMPUTE_IMAGE_DIR`` is not set for these isolated apps, so the
+    family's configured ``slurm_image`` path is the one to fill.
+    """
+    import hashlib
+    import json
+
+    for name in families:
+        family, _ = module.task_runtime._get_family(name)
+        path = Path(family.slurm_image)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"{name} fixture SIF".encode())
+        digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        evidence = path.parent / "evidence" / family.name
+        evidence.mkdir(parents=True, exist_ok=True)
+        (evidence / f"{digest.removeprefix('sha256:')}.fixture.receipt.json").write_text(
+            json.dumps({"runner_family": family.name, "sif_sha256": digest}),
+            encoding="utf-8",
+        )
+
+
 def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None, *, runner_root: Path | None = None):
     """Load a fresh copy of ``revocompute.py`` with test-isolated env vars.
 

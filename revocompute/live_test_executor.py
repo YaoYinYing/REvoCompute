@@ -19,7 +19,7 @@ from typing import Any
 
 from revocompute import task_runtime
 from revocompute import resource_ledger as rloan
-from revocompute import runtime_bundle
+from revocompute import runtime_bundle, runtime_image
 from revocompute.execution_graph import execution_graph_payload
 from revocompute.live_tests import atomic_write_json, sha256_file
 from revocompute.resource_observations import observations_for_guidance
@@ -45,6 +45,7 @@ def _task_input_form(
     storage_key: str,
     resources: dict,
     runtime_bundles: dict[str, str | None],
+    runtime_images: dict[str, str],
     execution_graph: dict[str, Any] | None,
 ) -> str:
     """Serialize the live-test task row's ``input_form``.
@@ -55,7 +56,8 @@ def _task_input_form(
     identity, so it must be present at the top level or the job cannot resolve
     its workspace.  ``runtime_bundles`` is recorded here because the task
     row is the only durable index of "a launchable Task references this bundle",
-    and ``execution_graph`` is the same frozen graph a production workflow
+    ``runtime_images`` carries the same candidate pins the snapshot does, and
+    ``execution_graph`` is the same frozen graph a production workflow
     submission writes.
     """
     form = {
@@ -63,6 +65,7 @@ def _task_input_form(
         "snapshot_root": str(snapshot_root),
         "workspace_key": storage_key,
         "runtime_bundles": runtime_bundles,
+        "runtime_images": runtime_images,
         **resources,
     }
     if execution_graph is not None:
@@ -77,6 +80,7 @@ def _live_task_manifest(
     parameters: dict[str, Any],
     manifest_inputs: dict[str, list[dict[str, Any]]],
     runtime_bundles: dict[str, str | None],
+    runtime_images: dict[str, str],
 ) -> dict[str, Any]:
     """Build the runner manifest exactly as the submission handler does.
 
@@ -99,6 +103,7 @@ def _live_task_manifest(
             task_type_def.runtime.name, task_type_def.resource_adaptation, store=task_runtime.task_store
         ),
         "runtime_bundles": runtime_bundles,
+        "runtime_images": runtime_images,
     }
 
 
@@ -276,6 +281,34 @@ def _live_storage_key() -> str:
     """
     names = [part.strip() for part in os.environ.get("ENABLED_TASKRUNNERS", "runner").split(",") if part.strip()]
     return "live-test-" + "-".join(names or ["runner"])
+
+
+def _pinned_runtime_images(task_type_def: Any) -> dict[str, str]:
+    """Pin the exact SIF bytes this live-test graph is about to execute.
+
+    Every referenced family resolves its selected artifact (the staged
+    candidate in this worker).  The live test is the run that produces each
+    candidate's receipt, so it pins the bytes without requiring a receipt for
+    them; a production submission requires one.
+    """
+    families = {task_type_def.runtime.name: task_type_def.runtime}
+    for stage in task_type_def.workflow:
+        family_id = stage.family or task_type_def.runtime.name
+        if family_id in families:
+            continue
+        try:
+            families[family_id] = get_family(family_id)[0]
+        except KeyError as exc:
+            raise ValueError(f"live-test references unknown runtime family: {family_id}") from exc
+    try:
+        return {
+            family.name: runtime_image.runtime_image_for_submission(
+                family, require_receipt=False
+            ).digest
+            for family in families.values()
+        }
+    except runtime_image.RuntimeImageError as exc:
+        raise ValueError(f"live-test runtime image is unavailable: {exc}") from exc
 
 
 def _pinned_runtime_bundles(task_type_def: Any, candidate_digest: str | None) -> dict[str, str | None]:
@@ -536,17 +569,21 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     # The candidate digest travels in the request; every other referenced family
     # resolves its published pin, exactly as a production submission does.
     runtime_bundles = _pinned_runtime_bundles(task_type_def, request.get("runtime_bundle_sha256") or None)
+    runtime_images = _pinned_runtime_images(task_type_def)
     input_form = _task_input_form(
         entities,
         snapshot_root,
         storage_key,
         request["resources"],
         runtime_bundles,
+        runtime_images,
         execution_graph_payload(task_type_def),
     )
     atomic.write_text(
         json.dumps(
-            _live_task_manifest(task_id, task_type, task_type_def, parameters, manifest_inputs, runtime_bundles),
+            _live_task_manifest(
+                task_id, task_type, task_type_def, parameters, manifest_inputs, runtime_bundles, runtime_images
+            ),
             sort_keys=True,
         )
         + "\n",

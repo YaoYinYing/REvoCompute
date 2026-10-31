@@ -11,7 +11,7 @@ import shutil
 from pathlib import Path
 
 import yaml
-from conftest import _load_pssm_module, _test_client_auth
+from conftest import _load_pssm_module, _pin_runtime_image, _test_client_auth
 
 from revocompute import runtime_bundle
 
@@ -172,6 +172,7 @@ def test_graph_gpu_stage_refuses_when_credit_is_exhausted(monkeypatch, tmp_path)
 def test_graph_gpu_stage_refuses_when_gpu_infrastructure_is_unavailable(monkeypatch, tmp_path):
     module = _composed_module(monkeypatch, tmp_path, foreign_gpu=True, task_gpus=False)
     module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    _pin_runtime_image(module, "multistage_runner", "cpu_runner")
     readiness = Path(module.CONFIG.server_dir) / "readiness"
     readiness.mkdir(parents=True, exist_ok=True)
     for family in ("multistage_runner", "cpu_runner"):

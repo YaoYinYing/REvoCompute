@@ -185,6 +185,16 @@ class Job(ABC):
         """
         return False
 
+    def runtime_image_observation(self) -> Any:
+        """The wrapper-observed runtime image digest for this attempt, if any.
+
+        A backend that cannot observe the image Apptainer opens returns
+        ``None``.  The store refuses a COMPLETED transition without an
+        attributable observation, so this absence fails closed rather than
+        completing on evidence the backend never produced.
+        """
+        return None
+
     @property
     def job_id(self) -> str | None:
         return self._job_id

@@ -112,6 +112,19 @@ def _minimal_tool_path(tmp_path: Path, names: tuple[str, ...]) -> Path:
     return tools
 
 
+def _pinned_task_type(tmp_path: Path, inputs: Path):
+    """A task type whose SIF exists, with the matching pin in ``task.json``."""
+    image = tmp_path / "images" / "cpu_runner_v1.sif"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b"pinned-runner-image")
+    (inputs / "task.json").write_text(
+        json.dumps({"runtime_images": {"cpu_runner": "sha256:" + hashlib.sha256(image.read_bytes()).hexdigest()}}),
+        encoding="utf-8",
+    )
+    task_type = _make_task_type()
+    return replace(task_type, runtime=replace(task_type.runtime, slurm_image=str(image)))
+
+
 def _runnable_job(tmp_path: Path, **kwargs) -> SlurmJob:
     """A CPU job whose wrapper can be executed against a synthetic workspace."""
     workspace = tmp_path / "workspace" / "task-1"
@@ -126,7 +139,9 @@ def _runnable_job(tmp_path: Path, **kwargs) -> SlurmJob:
         "snapshot_root": str(inputs),
         "hash": hashlib.sha256(input_path.read_bytes()).hexdigest(),
     }
-    job = SlurmJob("task-1", _make_task_type(), _make_runner(), entities, str(tmp_path / "out"), **kwargs)
+    job = SlurmJob(
+        "task-1", _pinned_task_type(tmp_path, inputs), _make_runner(), entities, str(tmp_path / "out"), **kwargs
+    )
     job._prepare_scratch_dir()
     return job
 
@@ -272,7 +287,7 @@ def test_gpu_wrapper_samples_assigned_device_and_emits_resource_evidence(tmp_pat
     output_dir = tmp_path / "out"
     job = SlurmJob(
         "task-1",
-        _make_task_type(gpus=True),
+        replace(_pinned_task_type(tmp_path, inputs), gpus=True),
         _make_runner(),
         entities,
         str(output_dir),
@@ -341,9 +356,11 @@ def _run_gpu_wrapper(tmp_path, *, env_gpus: dict[str, str]) -> dict:
         "hash": hashlib.sha256(input_path.read_bytes()).hexdigest(),
     }
     output_dir = tmp_path / "out"
+    task_type = _pinned_task_type(tmp_path, inputs)
+    task_type = replace(task_type, gpus=True)
     job = SlurmJob(
         "task-1",
-        _make_task_type(gpus=True),
+        task_type,
         _make_runner(),
         entities,
         str(output_dir),
@@ -471,7 +488,7 @@ def test_resource_markers_start_a_line_after_output_without_a_trailing_newline(t
     }
     job = SlurmJob(
         "task-1",
-        _make_task_type(),
+        _pinned_task_type(tmp_path, inputs),
         _make_runner(),
         entities,
         str(output_dir),

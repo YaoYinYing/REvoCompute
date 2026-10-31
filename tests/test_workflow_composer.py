@@ -29,6 +29,16 @@ from revocompute.task_types import (
 
 ROOT = Path(__file__).resolve().parents[1]
 
+#: A submission pin every test double reports as both expected and observed.
+_IMAGE = "sha256:" + "a" * 64
+
+
+class _ObservedImageMixin:
+    """Stand-in for the wrapper receipt a real SlurmJob reads at completion."""
+
+    def runtime_image_observation(self):
+        return SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
+
 # The composer drives the real task_runtime module object. Import it at
 # collection time so every test resolves the same module the discovery fixture
 # installs its snapshot into, and so a test that only reads the registry never
@@ -131,7 +141,7 @@ def test_graph_scheduler_validates_outputs_and_preserves_attempts(monkeypatch, t
         outside.write_text("features")
         (output / "features.dat").symlink_to(outside)
 
-    class Job:
+    class Job(_ObservedImageMixin):
         def submit(self):
             return "42"
 
@@ -185,13 +195,19 @@ def test_a_stage_completed_by_an_earlier_execution_is_recomputed(monkeypatch, tm
     identity = task_runtime._stage_output_identity(str(output), features.outputs)
     assert identity is not None
     assert task_runtime.task_store.finish_stage_attempt(
-        task_id=task_id, stage_name=features.name, attempt=first["attempt"],
-        status="COMPLETED", reason_code="completed", output_identity=identity,
+        task_id=task_id,
+        stage_name=features.name,
+        attempt=first["attempt"],
+        status="COMPLETED",
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
+        reason_code="completed",
+        output_identity=identity,
     )
 
     started = []
 
-    class Job:
+    class Job(_ObservedImageMixin):
         def submit(self):
             return "42"
 
@@ -344,7 +360,7 @@ def test_foreign_family_node_uses_that_family_runtime_runner_and_policy(monkeypa
     created = []
     callback_arguments = []
 
-    class Job:
+    class Job(_ObservedImageMixin):
         def __init__(self, name):
             self.name = name
 
@@ -428,7 +444,7 @@ def test_unsettled_completion_stops_before_consumer_dispatch(monkeypatch, tmp_pa
     output.mkdir()
     started = []
 
-    class Job:
+    class Job(_ObservedImageMixin):
         def __init__(self, name):
             self.name = name
 
@@ -469,7 +485,7 @@ def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypa
     fail_b = {"value": True}
     started = []
 
-    class Job:
+    class Job(_ObservedImageMixin):
         def __init__(self, task_id, name):
             self.task_id = task_id
             self.name = name
@@ -534,7 +550,7 @@ def test_fork_and_join_both_complete_in_deterministic_order(monkeypatch, tmp_pat
     output.mkdir()
     started = []
 
-    class Job:
+    class Job(_ObservedImageMixin):
         def submit(self):
             return "42"
 
@@ -577,8 +593,14 @@ def test_latest_failed_attempt_is_not_reused(monkeypatch, tmp_path):
         task_id=task_id, stage_index=0, stage_name=features.name
     )
     task_runtime.task_store.finish_stage_attempt(
-        task_id=task_id, stage_name=features.name, attempt=first["attempt"],
-        status="COMPLETED", reason_code="completed", output_identity='{"output_identity_format":1,"files":[]}',
+        task_id=task_id,
+        stage_name=features.name,
+        attempt=first["attempt"],
+        status="COMPLETED",
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
+        reason_code="completed",
+        output_identity='{"output_identity_format":1,"files":[]}',
     )
     second = task_runtime.task_store.begin_stage_attempt(
         task_id=task_id, stage_index=0, stage_name=features.name
@@ -591,7 +613,7 @@ def test_latest_failed_attempt_is_not_reused(monkeypatch, tmp_path):
     output.mkdir()
     started = []
 
-    class Job:
+    class Job(_ObservedImageMixin):
         def submit(self):
             return "42"
 
@@ -631,7 +653,7 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
     )
     callback_requests = []
 
-    class _Job:
+    class _Job(_ObservedImageMixin):
         def submit(self):
             return "42"
 
@@ -720,7 +742,7 @@ def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypa
     updates = iter((True, False))
     cancelled = []
 
-    class _Job:
+    class _Job(_ObservedImageMixin):
         def submit(self):
             return "42"
 
@@ -1038,7 +1060,7 @@ def test_composed_af3_workflow_advances_task_run_stage_through_all_markers(monke
     seen: list[str] = []
     run_stages: list[str] = []
 
-    class _Job:
+    class _Job(_ObservedImageMixin):
         def __init__(self, tt):
             self._tt = tt
 

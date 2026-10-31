@@ -12,6 +12,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,10 @@ from revocompute.db import TaskDatabase
 from revocompute.execution_graph import compile_graph
 from revocompute.resource_policy import ResolvedResources
 from revocompute.task_types import RunnerConfig, RuntimeFamily, StagePortSpec, TaskType, WorkflowStage
+
+#: One dummy digest shared by direct store calls: the guarded COMPLETED
+#: transition requires the pin and the observation to agree.
+_IMAGE = "sha256:" + "a" * 64
 
 
 def _policy(requires_gpu: bool) -> ResolvedResources:
@@ -124,6 +129,8 @@ def _settle_stage(
         status=status,
         reason_code="completed" if status == stage_state.COMPLETED else "nonzero_exit",
         output_identity=identity,
+        expected_runtime_image=_IMAGE if status == stage_state.COMPLETED else None,
+        observed_runtime_image=_IMAGE if status == stage_state.COMPLETED else None,
     )
 
 
@@ -135,11 +142,18 @@ def _freeze(database: TaskDatabase, task_id: str, task_type: TaskType) -> None:
             "execution_graph": {
                 "ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document,
             },
+            "runtime_images": {task_type.runtime.name: _IMAGE},
         }),
     )
 
 
 def _insert_task(database: TaskDatabase, task_id: str, *, status: str = "queued", **fields) -> None:
+    # A submitted Task always carries its runtime-image pins; a completed row
+    # is current only when its observation equals the owning family's pin.
+    fields.setdefault(
+        "input_form",
+        json.dumps({"runtime_images": {"multistage_runner": _IMAGE, "cpu_runner": _IMAGE}}),
+    )
     database.upsert_task(
         task_id,
         filename="input.fasta",
@@ -173,7 +187,12 @@ def test_attempt_identity_is_exactly_once_and_transitions_are_monotonic(tmp_path
         )
         assert database.record_stage_running(task_id=task_id, stage_name="features", attempt=1)
         assert database.finish_stage_attempt(
-            task_id=task_id, stage_name="features", attempt=1, status=stage_state.COMPLETED,
+            task_id=task_id,
+            stage_name="features",
+            attempt=1,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE,
             reason_code=stage_state.Reason.COMPLETED,
         )
 
@@ -212,6 +231,8 @@ def test_workflow_completion_requires_a_recorded_identity(tmp_path):
             stage_name="features",
             attempt=1,
             status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE,
             output_identity=None,
             require_identity=True,
         )
@@ -222,6 +243,8 @@ def test_workflow_completion_requires_a_recorded_identity(tmp_path):
             stage_name="features",
             attempt=1,
             status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE,
             output_identity='{"output_identity_format": 1, "files": []}',
             require_identity=True,
         )
@@ -262,6 +285,9 @@ def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, mo
             (tmp_path / "results" / "features.dat").write_text("features")
             _snapshot("poll")
             return task_runtime.JobState.COMPLETED
+
+        def runtime_image_observation(self):
+            return SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
 
     def _create_job(_task_id, _tt, _runner, _entities, _output, stage_callback=None, **kwargs):
         del stage_callback
@@ -433,6 +459,8 @@ def test_failed_attempt_uses_the_adapter_reason_and_never_another_attempt_eviden
     assert not database.finish_stage_attempt(
         task_id=task_id, stage_name="multistage_runner.model", attempt=attempt["attempt"],
         status=stage_state.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
     )
 
 
@@ -526,8 +554,13 @@ def test_worker_loss_interrupts_the_live_attempt_and_resume_uses_a_new_attempt(t
     )
     database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="multistage_runner.features")
     database.finish_stage_attempt(
-        task_id=task_id, stage_name="multistage_runner.features", attempt=1,
-        status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+        task_id=task_id,
+        stage_name="multistage_runner.features",
+        attempt=1,
+        status=stage_state.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
+        reason_code=stage_state.Reason.COMPLETED,
     )
     database.begin_stage_attempt(task_id=task_id, stage_index=1, stage_name="multistage_runner.model")
     database.record_stage_running(
@@ -581,7 +614,12 @@ def test_finish_active_stage_runs_settles_every_live_attempt_and_no_terminal_one
     database.begin_stage_attempt(task_id=task_id, stage_index=1, stage_name="b")
     database.begin_stage_attempt(task_id=task_id, stage_index=2, stage_name="c")
     database.finish_stage_attempt(
-        task_id=task_id, stage_name="c", attempt=1, status=stage_state.COMPLETED,
+        task_id=task_id,
+        stage_name="c",
+        attempt=1,
+        status=stage_state.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
         reason_code=stage_state.Reason.COMPLETED,
     )
 
@@ -602,6 +640,8 @@ def test_an_attempt_whose_start_was_missed_can_still_complete(tmp_path):
     database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="cpu_runner")
     assert database.finish_stage_attempt(
         task_id=task_id, stage_name="cpu_runner", attempt=1, status=stage_state.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
         reason_code=stage_state.Reason.COMPLETED,
     )
     assert database.list_stage_runs(task_id)[0]["status"] == stage_state.COMPLETED
@@ -695,6 +735,9 @@ def test_single_stage_job_records_its_lifecycle_through_the_allocation_boundary(
 
         def poll(self):
             return task_runtime.JobState.COMPLETED
+
+        def runtime_image_observation(self):
+            return SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
 
     captured: dict = {}
 
@@ -791,10 +834,19 @@ def test_an_unaccounted_run_reports_its_stage_running_when_the_scheduler_says_so
         "hash": hashlib.sha256(input_path.read_bytes()).hexdigest(),
         "workspace_key": "owner-key",
     }]
+    from revocompute.serialization import sha256_file
+
+    image = tmp_path / "image.sif"
+    image.write_bytes(b"pinned-image")
+    single = _single_stage_type()
+    task_type = replace(single, runtime=replace(single.runtime, slurm_image=str(image)))
+    (inputs / "task.json").write_text(
+        json.dumps({"runtime_images": {"cpu_runner": sha256_file(image)}}), encoding="utf-8"
+    )
     output_dir = tmp_path / "out"
     job = SlurmJob(
         task_id,
-        _single_stage_type(),
+        task_type,
         RunnerConfig(),
         entities,
         str(output_dir),
@@ -803,6 +855,8 @@ def test_an_unaccounted_run_reports_its_stage_running_when_the_scheduler_says_so
         allocation_started_callback=callbacks[1],
         allocation_finished_callback=callbacks[2],
         allocation_accounting=False,
+        stage_name="cpu_runner",
+        stage_attempt=attempt["attempt"],
     )
     job._prepare_scratch_dir()
 
@@ -874,7 +928,9 @@ def test_projection_keeps_a_legacy_stage_that_predates_the_later_record(tmp_path
     )
     database.finish_stage_attempt(
         task_id=task_id, stage_name="multistage_runner.model", attempt=model["attempt"],
-        status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+        status=stage_state.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
     )
 
     projection = task_runtime.stage_projection(database.get_task(task_id))
@@ -1235,7 +1291,9 @@ def test_duplicate_allocation_start_is_idempotent_but_a_settled_attempt_is_rejec
         )
         database.finish_stage_attempt(
             task_id=task_id, stage_name="model", attempt=attempt["attempt"],
-            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
         )
         assert not database.record_stage_running(
             task_id=task_id, stage_name="model", attempt=attempt["attempt"]
@@ -1323,7 +1381,9 @@ def test_reordered_manifest_resume_reuses_the_live_attempt_by_name(tmp_path):
         )
         assert database.finish_stage_attempt(
             task_id=task_id, stage_name="multistage_runner.model", attempt=1,
-            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
         )
         assert database.list_stage_runs(task_id)[0]["reason_code"] == stage_state.Reason.COMPLETED
 
@@ -1408,7 +1468,9 @@ def test_reordered_never_run_stage_does_not_collide_with_another_stages_attempt(
         )
         database.finish_stage_attempt(
             task_id=task_id, stage_name="multistage_runner.features", attempt=features["attempt"],
-            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
         )
         # The model stage has never run and now occupies index 0, which already
         # holds the features attempt 1.  Identity is per stage name, so this
@@ -1445,7 +1507,9 @@ def test_workflow_state_mirror_prefers_the_newest_attempt_after_a_reorder(tmp_pa
         assert (second["attempt"], second["stage_index"]) == (2, 0)
         database.finish_stage_attempt(
             task_id=task_id, stage_name="multistage_runner.model", attempt=second["attempt"],
-            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
         )
 
         projection = stage_state.workflow_state_projection(database.list_stage_runs(task_id))
@@ -1534,7 +1598,9 @@ def test_projection_keeps_a_removed_stage_out_of_a_current_stages_index(tmp_path
         )
         database.finish_stage_attempt(
             task_id=task_id, stage_name="multistage_runner.features", attempt=features["attempt"],
-            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
         )
         # A stage that left the manifest keeps the index it was recorded under,
         # which is now features' index; it must get a display position of its own.
@@ -1625,7 +1691,9 @@ def test_two_retired_stages_at_one_historical_index_get_distinct_positions(tmp_p
         )
         database.finish_stage_attempt(
             task_id=task_id, stage_name="retired_first", attempt=first["attempt"],
-            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+            status=stage_state.COMPLETED,
+            expected_runtime_image=_IMAGE,
+            observed_runtime_image=_IMAGE, reason_code=stage_state.Reason.COMPLETED,
         )
         second = database.begin_stage_attempt(
             task_id=task_id, stage_index=1, stage_name="retired_second"

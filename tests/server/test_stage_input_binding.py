@@ -19,6 +19,8 @@ from revocompute.job import STAGE_INPUTS_CONTAINER_DIR, STAGE_INPUTS_DOCUMENT_NA
 from revocompute.resource_policy import ResolvedResources
 from revocompute.task_types import RuntimeFamily, StagePortSpec, TaskType, WorkflowStage
 
+_IMAGE = "sha256:" + "a" * 64
+
 
 def _policy() -> ResolvedResources:
     return ResolvedResources(
@@ -122,6 +124,11 @@ class _Job:
             (self.output / "features" / "2KL8.dat").write_text("features", encoding="utf-8")
         return task_runtime.JobState.COMPLETED
 
+    def runtime_image_observation(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
+
 
 def test_the_consumer_reads_a_verified_copy_named_by_a_server_document(tmp_path, monkeypatch):
     database, task_id, task_type, output = _prepare(tmp_path, monkeypatch)
@@ -181,6 +188,8 @@ def test_the_consumer_stages_from_the_attempt_completed_in_this_execution(tmp_pa
         status=stage_state.COMPLETED,
         reason_code="completed",
         output_identity=identity,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
     )
 
     staged: dict[str, str | None] = {}

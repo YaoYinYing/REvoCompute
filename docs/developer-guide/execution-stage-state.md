@@ -93,14 +93,47 @@ run can take an index another stage already used without colliding. Duplicate
 *execution* of a Task is prevented by the existing ``claim_task_execution``
 mutex, not by StageRun uniqueness alone.
 
-A new execution never reuses a stage completed by an earlier execution. An
-attempt records no runtime-image identity, so a ``COMPLETED`` row cannot be
-attributed to the image the new execution runs — a promotion may have replaced
-the SIF at the same path. Every declared stage therefore executes again and the
-composer reuses only attempts it completed itself; a consumer stages from that
-fresh attempt. The sole reuse refusal that remains is a stage with no record at
-all whose legacy ``workflow_state`` entry claims completion: that completion has
+A new execution never reuses a stage completed by an earlier execution. A
+``COMPLETED`` row is current only when it carries a ``runtime_image_sha256``
+that equals the Task's submission pin for that stage's family. An attempt
+records that digest only through the guarded completion update below, so a
+legacy row with ``NULL``, a malformed value, or a different observation is
+history rather than evidence. Every declared stage therefore executes again and
+the composer reuses only attempts it completed itself; a consumer stages from
+that fresh attempt. The reuse refusal for a stage with no record at all whose
+legacy ``workflow_state`` entry claims completion remains: that completion has
 no artifact identity, so the stage fails ``stage_output_unverified``.
+
+### Runtime image observation
+
+Submission records ``runtime_images: {family: "sha256:<hex>"}`` in the immutable
+``task.json`` and mirrors the map onto the Task row. The digest is resolved once
+by ``runtime_image_for_submission`` and is an observation of the bytes at the
+path this attempt opens, never a claim that the path is immutable. Admission
+refuses the submission when a referenced family has no resolvable image or no
+live-test receipt for exactly that digest.
+
+The Slurm wrapper re-hashes the SIF immediately before it invokes Apptainer,
+writes a schema-2 receipt binding Task, StageAttempt, family, Slurm job ID,
+expected digest and observed digest, and refuses a mismatch without executing
+the container. That receipt is a separate file from the schema-1 allocation
+receipt, so ``_notify_dispatched`` adopting and deleting the allocation receipt
+cannot remove the observation. Reads are non-destructive and the file is
+retained across a worker crash, so recovery can still see it.
+
+``finish_stage_attempt`` writes ``stage_runs.runtime_image_sha256`` only inside
+the guarded ``COMPLETED`` update, and only when the observed digest from the
+schema-2 receipt equals the attempt's expected family pin. Missing, malformed,
+mismatched, or legacy ``NULL`` evidence is refused; attempt creation never
+writes the column. This gate proves the wrapper observed the pinned bytes
+immediately before exec, not that Apptainer executed them: promotion can still
+rename a different SIF onto the path between the hash and the exec
+(``run/revocompute_ctl/promotion.py:91-105``). That rename window is an open
+limitation until an execution holds immutable bytes, at which point the
+resolver body can be backed by a content-addressed store without changing
+``task.json``, the column, or callers. A queued Task whose pinned active SIF no
+longer hashes to its pin fails closed and must be resubmitted; it is never
+silently launched on the promoted bytes.
 
 ## Task status projection
 
@@ -123,7 +156,8 @@ boundary that admits the allocation — never from stdout.
 | attempt ``QUEUED`` | workflow/job composer immediately before ``job.submit()`` |
 | scheduler handle | allocation ``dispatched`` callback |
 | ``RUNNING`` + Task ``running`` | allocation ``started`` callback |
-| ``COMPLETED`` / ``FAILED`` | Core after ``job.poll()`` |
+| ``COMPLETED`` / ``FAILED`` | Core after ``job.poll()``; ``COMPLETED`` also writes the wrapper-observed image digest |
+| ``runtime_image_sha256`` | the guarded ``COMPLETED`` update, from the schema-2 wrapper receipt |
 | ``INTERRUPTED`` | Core recovery when the owning worker vanished |
 | ``CANCELLED`` | Core cancellation claim and the worker observing it |
 
