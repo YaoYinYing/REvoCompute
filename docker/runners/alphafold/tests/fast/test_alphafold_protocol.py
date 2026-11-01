@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from functools import partial
+from pathlib import Path
 
 from runner_protocol import ROOT, run_with_manifest
 
@@ -120,3 +122,168 @@ def test_alphafold_feature_stage_stops_before_modeling(tmp_path):
     assert "--pdb70_database_path=" not in args
     assert (output_dir / ".alphafold-features-complete").is_file()
     assert not (output_dir / "task_finished").exists()
+
+
+def _write_reuse_fake_alphafold(path):
+    path.write_text(
+        "#!/bin/bash\n"
+        "set -e\n"
+        'for arg in "$@"; do case "$arg" in --output_dir=*) output_dir=${arg#*=} ;; '
+        '--fasta_paths=*) fasta=${arg#*=} ;; --run_stage=*) stage=${arg#*=} ;; esac; done\n'
+        'job=$(basename "$fasta"); job=${job%.*}\n'
+        'job_dir="$output_dir/$job"\n'
+        'mkdir -p "$job_dir"\n'
+        'printf "%s\\n" "$stage" >> "$FAKE_CALL_LOG"\n'
+        'if [[ -n "${FAKE_FAIL_STAGE:-}" && "$FAKE_FAIL_STAGE" == "$stage" ]]; then exit 9; fi\n'
+        'if [[ "$stage" != model ]]; then\n'
+        '  if [[ -e "$job_dir/features.pkl" ]]; then printf "REUSED\\n" > "$job_dir/features.pkl"; '
+        'else printf "FRESH\\n" > "$job_dir/features.pkl"; fi\n'
+        '  mkdir -p "$job_dir/msas"\n'
+        '  printf "MSA\\n" > "$job_dir/msas/query.a3m"\n'
+        '  [[ "$stage" == features ]] && exit 0\n'
+        "fi\n"
+        '[[ -s "$job_dir/features.pkl" ]] || { echo "missing features" >&2; exit 7; }\n'
+        'if [[ -e "$job_dir/ranked_0.pdb" ]]; then printf "REUSED\\n" > "$job_dir/ranked_0.pdb"; '
+        'else printf "FRESH\\n" > "$job_dir/ranked_0.pdb"; fi\n'
+        'printf "{}\\n" > "$job_dir/ranking_debug.json"\n',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
+def _retry_env(tmp_path):
+    input_file = tmp_path / "sequence.fasta"
+    input_file.write_text(">test\nAAAA\n", encoding="utf-8")
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    fake_context = tmp_path / "task_context.sh"
+    fake_context.write_text(
+        '_parse_param() { :; }\n'
+        'task_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "ALPHAFOLD_PATH": str(tmp_path),
+            "ALPHAFOLD_PYTHON": str(_write_reuse_fake_alphafold(tmp_path / "fake-af2")),
+            "FAKE_CALL_LOG": str(tmp_path / "calls"),
+            "FAKE_PRIMARY_INPUT": str(input_file),
+            "TASK_CONTEXT_SRC": str(fake_context),
+            "ALPHAFOLD_STAGE_TRANSLATOR": str(
+                SERVER_ROOT / "docker" / "runners" / "common" / "runtime" / "stage_translate.py"
+            ),
+            "ALPHAFOLD_STAGE_PATTERNS": str(
+                SERVER_ROOT / "docker" / "runners" / "alphafold" / "alphafold.stages"
+            ),
+            "TMPDIR": str(tmp_path),
+        }
+    )
+    return env, input_file, output_dir
+
+
+def _run_af2_stage(env, input_file, output_dir, stage):
+    return _run_with_manifest(ALPHAFOLD_RUNNER_SCRIPT, input_file, output_dir, env, extra_args=("-s", stage))
+
+
+def _calls(env):
+    path = Path(env["FAKE_CALL_LOG"])
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def test_alphafold_features_recomputes_and_clears_a_previous_tree(tmp_path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    stale = output_dir / "sequence"
+    stale.mkdir()
+    (stale / "features.pkl").write_text("STALE\n", encoding="utf-8")
+    (stale / "ranked_0.pdb").write_text("STALE\n", encoding="utf-8")
+    (output_dir / "task_finished").write_text("", encoding="utf-8")
+
+    first = _run_af2_stage(env, input_file, output_dir, "features")
+
+    assert first.returncode == 0, first.stderr
+    features = stale / "features.pkl"
+    assert features.read_text(encoding="utf-8") == "FRESH\n"
+    assert not (stale / "ranked_0.pdb").exists()
+    assert not (output_dir / "task_finished").exists()
+    marker = output_dir / ".alphafold-features-complete"
+    assert marker.read_text(encoding="utf-8").strip() == hashlib.sha256(features.read_bytes()).hexdigest()
+
+    rerun = _run_af2_stage(env, input_file, output_dir, "features")
+
+    assert rerun.returncode == 0, rerun.stderr
+    assert features.read_text(encoding="utf-8") == "FRESH\n"
+    assert _calls(env) == ["features", "features"]
+
+
+def test_alphafold_model_stage_requires_the_features_marker(tmp_path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    stale = output_dir / "sequence"
+    stale.mkdir()
+    (stale / "features.pkl").write_text("STALE\n", encoding="utf-8")
+    (stale / "ranked_0.pdb").write_text("STALE\n", encoding="utf-8")
+    (output_dir / "task_finished").write_text("", encoding="utf-8")
+
+    model = _run_af2_stage(env, input_file, output_dir, "model")
+
+    assert model.returncode != 0
+    assert "features are missing" in model.stderr
+    assert not (stale / "ranked_0.pdb").exists()
+    assert not (output_dir / "task_finished").exists()
+    assert _calls(env) == []
+
+
+def test_alphafold_model_stage_rejects_changed_features(tmp_path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    assert _run_af2_stage(env, input_file, output_dir, "features").returncode == 0
+    (output_dir / "sequence" / "features.pkl").write_text("CHANGED\n", encoding="utf-8")
+
+    model = _run_af2_stage(env, input_file, output_dir, "model")
+
+    assert model.returncode != 0
+    assert "changed after feature validation" in model.stderr
+    assert not (output_dir / "sequence" / "ranked_0.pdb").exists()
+    assert not (output_dir / "task_finished").exists()
+    assert _calls(env) == ["features"]
+
+
+def test_alphafold_model_stage_recomputes_instead_of_reusing_model_outputs(tmp_path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    assert _run_af2_stage(env, input_file, output_dir, "features").returncode == 0
+    assert _run_af2_stage(env, input_file, output_dir, "model").returncode == 0
+    ranked = output_dir / "sequence" / "ranked_0.pdb"
+    assert ranked.read_text(encoding="utf-8") == "FRESH\n"
+    ranked.write_text("STALE\n", encoding="utf-8")
+
+    rerun = _run_af2_stage(env, input_file, output_dir, "model")
+
+    assert rerun.returncode == 0, rerun.stderr
+    assert ranked.read_text(encoding="utf-8") == "FRESH\n"
+    assert _calls(env) == ["features", "model", "model"]
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_alphafold_failed_attempt_publishes_no_stale_output(tmp_path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    assert _run_af2_stage(env, input_file, output_dir, "features").returncode == 0
+    assert _run_af2_stage(env, input_file, output_dir, "model").returncode == 0
+
+    env["FAKE_FAIL_STAGE"] = "features"
+    failed = _run_af2_stage(env, input_file, output_dir, "features")
+    assert failed.returncode == 9
+    assert not (output_dir / "sequence" / "features.pkl").exists()
+    assert not (output_dir / ".alphafold-features-complete").exists()
+    assert not (output_dir / "sequence" / "ranked_0.pdb").exists()
+    assert not (output_dir / "task_finished").exists()
+
+    env.pop("FAKE_FAIL_STAGE")
+    assert _run_af2_stage(env, input_file, output_dir, "features").returncode == 0
+    assert _run_af2_stage(env, input_file, output_dir, "model").returncode == 0
+
+    env["FAKE_FAIL_STAGE"] = "model"
+    failed_model = _run_af2_stage(env, input_file, output_dir, "model")
+    assert failed_model.returncode == 9
+    assert not (output_dir / "sequence" / "ranked_0.pdb").exists()
+    assert not (output_dir / "task_finished").exists()
+    assert (output_dir / "sequence" / "features.pkl").is_file()

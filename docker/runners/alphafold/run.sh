@@ -23,12 +23,32 @@ BENCHMARK=$(_parse_param benchmark)
 fasta_path=$(task_input sequence)
 fasta_name=$(basename "$fasta_path")
 fasta_name=${fasta_name%.*}
-features_path="${output_dir}/${fasta_name}/features.pkl"
+features_dir="${output_dir}/${fasta_name}"
+features_path="${features_dir}/features.pkl"
 features_marker="${output_dir}/.alphafold-features-complete"
 use_gpu_relax=true
 [[ "$run_stage" == features ]] && use_gpu_relax=false
+
+# Each attempt clears the outputs of the stages it runs before any preflight
+# check, because this Runner cannot bind the runtime image: a failed attempt
+# must not leave an earlier attempt's tree publishable under this one.
+case "$run_stage" in
+  features|all)
+    rm -rf -- "$features_dir" "$features_marker" "$output_dir/task_finished" ;;
+  model)
+    if [[ -d "$features_dir" ]]; then
+      find "$features_dir" -mindepth 1 -maxdepth 1 ! -name features.pkl ! -name msas \
+        -exec rm -rf -- {} +
+    fi
+    rm -f -- "$output_dir/task_finished" ;;
+esac
+
 if [[ "$run_stage" == model ]]; then
-  [[ -s "$features_path" && -f "$features_marker" ]] || { echo "Validated AlphaFold features are missing" >&2; exit 1; }
+  [[ -s "$features_path" && -s "$features_marker" ]] || { echo "Validated AlphaFold features are missing" >&2; exit 1; }
+  expected_features_sha=$(<"$features_marker")
+  actual_features_sha=$(sha256sum "$features_path" | cut -d ' ' -f 1)
+  [[ "$expected_features_sha" =~ ^[0-9a-f]{64}$ && "$actual_features_sha" == "$expected_features_sha" ]] || {
+    echo "AlphaFold features changed after feature validation" >&2; exit 1; }
 fi
 
 # A100 memory behaviour: let JAX overcommit via unified memory.
@@ -105,7 +125,7 @@ fi
 
 if [[ "$run_stage" == features ]]; then
   [[ -s "$features_path" ]] || { echo "AlphaFold produced no features.pkl" >&2; exit 1; }
-  touch "$features_marker"
+  sha256sum "$features_path" | cut -d ' ' -f 1 > "$features_marker"
   echo "AlphaFold feature construction complete."
   exit 0
 fi
