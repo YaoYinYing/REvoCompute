@@ -516,6 +516,36 @@ def test_colabfold_rejects_headers_that_sanitize_to_one_job(tmp_path, fasta, job
     assert _calls(env) == []
 
 
+EMPTY_HEADERS = (
+    (">\nAAAA\n", "record 1"),
+    (">   \nAAAA\n", "record 1"),
+    (">query\nAAAA\n>\nBBBB\n", "record 2"),
+)
+
+
+@pytest.mark.parametrize(("fasta", "record"), EMPTY_HEADERS)
+def test_colabfold_rejects_empty_fasta_headers(tmp_path, fasta, record):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    input_file.write_text(fasta, encoding="utf-8")
+    result = _result_dir(output_dir)
+    result.mkdir()
+    stale_a3m = result / "query.a3m"
+    stale_pickle = result / "query.pickle"
+    stale_a3m.write_text("STALE\n", encoding="utf-8")
+    stale_pickle.write_text("STALE\n", encoding="utf-8")
+
+    completed = _run_stage(env, input_file, output_dir, "features")
+
+    assert completed.returncode != 0
+    assert "requires non-empty FASTA headers" in completed.stderr
+    assert f"{record} has an empty header" in completed.stderr
+    assert stale_a3m.read_text(encoding="utf-8") == "STALE\n"
+    assert stale_pickle.read_text(encoding="utf-8") == "STALE\n"
+    assert not (result / ".colabfold-msa-complete").exists()
+    assert not (output_dir / "task_finished").exists()
+    assert _calls(env) == []
+
+
 def test_colabfold_multirecord_result_contract_accepts_one_alignment_per_job(tmp_path):
     from revocompute.result_storyboard import expected_file_tree, resolve_expected_files
     from revocompute.task_runtime import _port_matches, _resolve_result_views

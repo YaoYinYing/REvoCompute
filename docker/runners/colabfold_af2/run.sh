@@ -31,21 +31,31 @@ colabfold_batch=${COLABFOLD_BATCH:-colabfold_batch}
 normalizer=${COLABFOLD_NORMALIZER:-/app/revocompute/normalize_interface_scores.py}
 
 # Upstream creates one job per FASTA record and names its files after
-# safe_filename(header) (batch.py:1458; input.py:302-309). Distinct records
-# must stay distinct, so reject headers that sanitize to the same job before
-# any output mutation or upstream invocation: otherwise one record's MSA
-# overwrites the other and the Task settles with fewer predictions than
-# records. Scope clearing and the handoff digest to these jobs so another
-# producer's files in the same output tree survive a re-attempt.
+# safe_filename(header) (batch.py:1458; input.py:302-309). Every record needs a
+# distinct, non-empty job, so reject both an empty header and two headers that
+# sanitize alike before any output mutation or upstream invocation: otherwise
+# a record's outputs are hidden under an empty name or one record's MSA
+# overwrites the other, and the Task settles with fewer predictions than
+# records. The Server validator guarantees at least one header line. Scope
+# clearing and the handoff digest to these jobs so another producer's files in
+# the same output tree survive a re-attempt.
 job_list=$(python3 - "$fasta_path" <<'PY'
 import sys
 
 names = {}
+record = 0
 for line in open(sys.argv[1], encoding="utf-8"):
     line = line.strip()
     if not line.startswith(">"):
         continue
+    record += 1
     header = line[1:]
+    if not header.strip():
+        print(
+            f"ColabFold requires non-empty FASTA headers: record {record} has an empty header",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     name = "".join(c if c.isalnum() or c in "_.-" else "_" for c in header)
     if name in names:
         print(
@@ -55,16 +65,14 @@ for line in open(sys.argv[1], encoding="utf-8"):
         )
         sys.exit(1)
     names[name] = header
+if not record:
+    print("FASTA file must contain a '>' header line", file=sys.stderr)
+    sys.exit(1)
 for name in sorted(names):
     print(name)
 PY
 ) || exit 1
-if [[ -n "$job_list" ]]; then
-  mapfile -t job_names <<< "$job_list"
-else
-  job_name=$(basename "$fasta_path")
-  job_names=("${job_name%.*}")
-fi
+mapfile -t job_names <<< "$job_list"
 
 # A ranked structure or score file carries its job as a greedy prefix followed
 # by a complete role suffix. Role-anchored suffixes alone are not enough: the
