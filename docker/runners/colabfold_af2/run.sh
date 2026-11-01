@@ -31,24 +31,37 @@ colabfold_batch=${COLABFOLD_BATCH:-colabfold_batch}
 normalizer=${COLABFOLD_NORMALIZER:-/app/revocompute/normalize_interface_scores.py}
 
 # Upstream creates one job per FASTA record and names its files after
-# safe_filename(header) (batch.py:1458; input.py:302-309). Scope clearing and
-# the handoff digest to these jobs so another producer's files in the same
-# output tree survive a re-attempt.
-mapfile -t job_names < <(python3 - "$fasta_path" <<'PY'
+# safe_filename(header) (batch.py:1458; input.py:302-309). Distinct records
+# must stay distinct, so reject headers that sanitize to the same job before
+# any output mutation or upstream invocation: otherwise one record's MSA
+# overwrites the other and the Task settles with fewer predictions than
+# records. Scope clearing and the handoff digest to these jobs so another
+# producer's files in the same output tree survive a re-attempt.
+job_list=$(python3 - "$fasta_path" <<'PY'
 import sys
 
-names = []
+names = {}
 for line in open(sys.argv[1], encoding="utf-8"):
     line = line.strip()
-    if line.startswith(">"):
-        name = "".join(c if c.isalnum() or c in "_.-" else "_" for c in line[1:])
-        if name not in names:
-            names.append(name)
+    if not line.startswith(">"):
+        continue
+    header = line[1:]
+    name = "".join(c if c.isalnum() or c in "_.-" else "_" for c in header)
+    if name in names:
+        print(
+            f"ColabFold cannot distinguish FASTA records: headers "
+            f"{names[name]!r} and {header!r} both map to job {name!r}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    names[name] = header
 for name in sorted(names):
     print(name)
 PY
-)
-if (( ${#job_names[@]} == 0 )); then
+) || exit 1
+if [[ -n "$job_list" ]]; then
+  mapfile -t job_names <<< "$job_list"
+else
   job_name=$(basename "$fasta_path")
   job_names=("${job_name%.*}")
 fi

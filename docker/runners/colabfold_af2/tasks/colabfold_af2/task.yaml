@@ -19,8 +19,9 @@ summary: ColabFold AlphaFold2 prediction with online MMseqs2 MSA search and loca
 use_when: Use this for AlphaFold2 prediction with public MMseqs2 MSA search and local
   model inference.
 input_summary: One FASTA file; each record is predicted as an independent job, so multiple
-  records produce independent predictions. Chain complexes are not accepted by this
-  Task's input contract.
+  records produce independent predictions. Headers must sanitize to unique job names;
+  colliding headers are rejected. Chain complexes are not accepted by this Task's input
+  contract.
 output_summary: The searched alignment, ranked predicted structures, scores, and optional
   relaxed models.
 considerations:

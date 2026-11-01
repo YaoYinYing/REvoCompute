@@ -485,20 +485,35 @@ def test_colabfold_multirecord_missing_second_job_output_fails(tmp_path):
     assert (output_dir / "sibling.txt").read_text(encoding="utf-8") == "SIBLING\n"
 
 
-def test_colabfold_duplicate_headers_clear_one_prefix_once(tmp_path):
+COLLIDING_HEADERS = (
+    (">alpha beta\nAAAA\n>alpha_beta\nBBBB\n", "alpha_beta", "'alpha beta'", "'alpha_beta'"),
+    (">same\nAAAA\n>same\nCCCC\n", "same", "'same'", "'same'"),
+)
+
+
+@pytest.mark.parametrize(("fasta", "job", "first", "second"), COLLIDING_HEADERS)
+def test_colabfold_rejects_headers_that_sanitize_to_one_job(tmp_path, fasta, job, first, second):
     env, input_file, output_dir = _retry_env(tmp_path)
-    input_file.write_text(">same\nAAAA\n>same\nCCCC\n", encoding="utf-8")
+    input_file.write_text(fasta, encoding="utf-8")
     result = _result_dir(output_dir)
     result.mkdir()
-    (result / "same.a3m").write_text("STALE\n", encoding="utf-8")
-    (result / "same.pickle").write_text("STALE\n", encoding="utf-8")
+    stale_a3m = result / f"{job}.a3m"
+    stale_pickle = result / f"{job}.pickle"
+    stale_a3m.write_text("STALE\n", encoding="utf-8")
+    stale_pickle.write_text("STALE\n", encoding="utf-8")
 
     completed = _run_stage(env, input_file, output_dir, "features")
 
-    assert completed.returncode == 0, completed.stderr
-    assert (result / "same.pickle").read_text(encoding="utf-8") != "STALE\n"
-    marker = result / ".colabfold-msa-complete"
-    assert marker.read_text(encoding="utf-8").strip() == _msa_digest(output_dir, ("same",))
+    assert completed.returncode != 0
+    assert "cannot distinguish FASTA records" in completed.stderr
+    assert job in completed.stderr
+    assert first in completed.stderr
+    assert second in completed.stderr
+    assert stale_a3m.read_text(encoding="utf-8") == "STALE\n"
+    assert stale_pickle.read_text(encoding="utf-8") == "STALE\n"
+    assert not (result / ".colabfold-msa-complete").exists()
+    assert not (output_dir / "task_finished").exists()
+    assert _calls(env) == []
 
 
 def test_colabfold_multirecord_result_contract_accepts_one_alignment_per_job(tmp_path):
