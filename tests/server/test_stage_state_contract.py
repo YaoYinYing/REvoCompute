@@ -18,7 +18,7 @@ import pytest
 
 from revocompute import stage_state
 from revocompute import task_runtime
-from revocompute.db import TaskDatabase
+from revocompute.db import StageDispatchOutcome, TaskDatabase
 from revocompute.execution_graph import compile_graph
 from revocompute.resource_policy import ResolvedResources
 from revocompute.task_types import RunnerConfig, RuntimeFamily, StagePortSpec, TaskType, WorkflowStage
@@ -599,9 +599,9 @@ def test_duplicate_dispatch_cannot_rewrite_the_attempt_handle(tmp_path):
     assert database.record_stage_dispatched(
         task_id=task_id, stage_name="cpu_runner", attempt=1, slurm_job_id="4100"
     )
-    assert not database.record_stage_dispatched(
+    assert database.record_stage_dispatched(
         task_id=task_id, stage_name="cpu_runner", attempt=1, slurm_job_id="4200"
-    )
+    ) is StageDispatchOutcome.FOREIGN_HANDLE_OR_MISSING
     assert database.list_stage_runs(task_id)[0]["slurm_job_id"] == "4100"
 
 

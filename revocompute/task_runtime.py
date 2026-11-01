@@ -36,7 +36,12 @@ from typing import Any
 from celery import Celery
 from revocompute.admission import resolve_submission_readiness
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_int, env_path
-from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
+from revocompute.db import (
+    GPUAuthorizationUnavailableError,
+    GPUCreditUnavailableError,
+    StageDispatchOutcome,
+    TaskDatabase,
+)
 from revocompute.execution_graph import GraphValidationError, _static_prefix, canonical_digest, compile_graph
 from revocompute.infrastructure import (
     InfrastructureComponent,
@@ -841,17 +846,19 @@ def _compute_allocation_callbacks(
         if not stage_target:
             return
         try:
-            recorded = task_store.record_stage_dispatched(
+            outcome = task_store.record_stage_dispatched(
                 task_id=task_id,
                 stage_name=stage_id,
                 attempt=attempt,
                 slurm_job_id=str(slurm_job_id),
                 at=dispatched_at,
             )
-            if not recorded:
-                # The attempt is no longer QUEUED or already owns another
-                # handle, so this allocation is not its identity.  Cancelling it
-                # is the only way to keep it out of accounting and recovery.
+            if outcome is StageDispatchOutcome.FOREIGN_HANDLE_OR_MISSING:
+                # The attempt names another handle or no longer exists, so this
+                # allocation is not its identity.  Cancelling it is the only way
+                # to keep it out of accounting and recovery.  A duplicate
+                # notification of the attempt's own handle is not foreign: the
+                # attempt may already be RUNNING.
                 logging.error(
                     "Stage attempt %s/#%s of task %s refused allocation %s; cancelling it",
                     stage_id, attempt, task_id, slurm_job_id,

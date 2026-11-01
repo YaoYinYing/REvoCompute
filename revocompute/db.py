@@ -17,6 +17,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import StrEnum
 from typing import Any, Iterable
 
 from sqlalchemy import (
@@ -53,6 +54,23 @@ from revocompute.sqlite_startup import enter_wal_mode
 
 
 DEFAULT_MONTHLY_GPU_SECONDS = 60_000
+
+
+class StageDispatchOutcome(StrEnum):
+    """What ``record_stage_dispatched`` learned about the attempt's handle.
+
+    ``RECORDED`` means this call wrote the attempt's first scheduler handle.
+    ``OWN_HANDLE_ADVANCED`` means the attempt already names this same handle,
+    whether it is still QUEUED, running, or terminal, so the notification is a
+    duplicate rather than a second allocation.  ``FOREIGN_HANDLE_OR_MISSING``
+    means the attempt names a different handle or no matching attempt exists;
+    only that outcome makes the observed allocation foreign to the attempt.
+    """
+
+    RECORDED = "recorded"
+    OWN_HANDLE_ADVANCED = "own_handle_advanced"
+    FOREIGN_HANDLE_OR_MISSING = "foreign_handle_or_missing"
+
 
 _MANIFEST_SHA256 = re.compile("[0-9a-f]{64}\\Z")
 
@@ -2993,8 +3011,16 @@ class TaskDatabase:
         attempt: int,
         slurm_job_id: str,
         at: float | None = None,
-    ) -> bool:
-        """Attach the scheduler's identity to the attempt that requested it."""
+    ) -> StageDispatchOutcome:
+        """Attach the scheduler's identity to the attempt that requested it.
+
+        ``RECORDED`` writes the attempt's first handle.  ``OWN_HANDLE_ADVANCED``
+        reports that the attempt already names this same handle, whoever observed
+        it and whatever state the attempt has since reached, so a duplicate
+        notification never re-identifies or cancels a live allocation.
+        ``FOREIGN_HANDLE_OR_MISSING`` reports another non-null handle, or no
+        matching attempt; only this outcome marks the allocation as foreign.
+        """
         timestamp = time.time() if at is None else at
         stmt = (
             update(self.stage_runs_table)
@@ -3004,17 +3030,25 @@ class TaskDatabase:
                 self.stage_runs_table.c.attempt == attempt,
                 self.stage_runs_table.c.status == stage_state.QUEUED,
                 # The first observed handle is the attempt's identity; a later
-                # duplicate dispatch may refresh its timestamp but never rewrite
+                # duplicate dispatch changes nothing, so it can never rewrite
                 # which allocation this attempt owns.
-                or_(
-                    self.stage_runs_table.c.slurm_job_id.is_(None),
-                    self.stage_runs_table.c.slurm_job_id == str(slurm_job_id),
-                ),
+                self.stage_runs_table.c.slurm_job_id.is_(None),
             )
             .values(slurm_job_id=str(slurm_job_id), updated_at=timestamp)
         )
         with self.engine.begin() as conn:
-            return conn.execute(stmt).rowcount == 1
+            if conn.execute(stmt).rowcount == 1:
+                return StageDispatchOutcome.RECORDED
+            existing = conn.execute(
+                select(self.stage_runs_table.c.slurm_job_id).where(
+                    self.stage_runs_table.c.task_id == task_id,
+                    self.stage_runs_table.c.stage_name == stage_name,
+                    self.stage_runs_table.c.attempt == attempt,
+                )
+            ).first()
+            if existing is not None and existing.slurm_job_id == str(slurm_job_id):
+                return StageDispatchOutcome.OWN_HANDLE_ADVANCED
+            return StageDispatchOutcome.FOREIGN_HANDLE_OR_MISSING
 
     def claim_stage_dispatch(
         self,

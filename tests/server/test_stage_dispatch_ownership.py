@@ -20,7 +20,7 @@ from dataclasses import replace
 import pytest
 
 from revocompute import stage_state, task_runtime
-from revocompute.db import TaskDatabase
+from revocompute.db import StageDispatchOutcome, TaskDatabase
 from revocompute.execution_graph import compile_graph
 from revocompute.resource_policy import ResolvedResources
 from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskType, WorkflowStage
@@ -670,7 +670,7 @@ def test_a_cancellation_between_claim_and_submit_starts_no_allocation(tmp_path, 
 
 
 def test_a_refused_handle_cancels_the_allocation_it_could_not_record(tmp_path, monkeypatch):
-    """(P2) ``record_stage_dispatched=False`` tears the allocation down."""
+    """(P2) A foreign handle tears the allocation it could not record down."""
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     task_id = "c6" * 16
     _insert_task(database, task_id, status="running")
@@ -697,6 +697,99 @@ def test_a_refused_handle_cancels_the_allocation_it_could_not_record(tmp_path, m
 
     assert cancelled == ["9999"]
     assert database.list_stage_runs(task_id)[0]["slurm_job_id"] == "4100"
+
+
+def _dispatch(database, task_id: str, monkeypatch):
+    """Drive the real broadcast callback and return the cancellation log."""
+    cancelled: list[str] = []
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(
+        task_runtime, "_cancel_recorded_allocation", lambda handle: cancelled.append(handle) or True
+    )
+    dispatched, _started, _finished = task_runtime._compute_allocation_callbacks(
+        task_id=task_id,
+        user_id=0,
+        stage_id=STAGE,
+        resource_policy=_policy(),
+        required_entitlements=(),
+        runner_family=STAGE,
+        attempt=1,
+    )
+    return cancelled, dispatched
+
+
+def test_duplicate_same_handle_after_running_does_not_cancel(tmp_path, monkeypatch):
+    """(a) The stdout reader may repeat a handle after the attempt advanced."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d1" * 16
+    _insert_task(database, task_id, status="running")
+    database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
+    assert database.record_stage_dispatched(
+        task_id=task_id, stage_name=STAGE, attempt=1, slurm_job_id="4100"
+    ) is StageDispatchOutcome.RECORDED
+    assert database.record_stage_running(task_id=task_id, stage_name=STAGE, attempt=1)
+    cancelled, dispatched = _dispatch(database, task_id, monkeypatch)
+
+    dispatched("4100", time.time(), False)
+
+    assert cancelled == []
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["slurm_job_id"], run["status"]) == ("4100", stage_state.RUNNING)
+
+
+def test_a_different_handle_for_the_live_attempt_is_cancelled(tmp_path, monkeypatch):
+    """(b) A second allocation is never allowed to displace the attempt's own."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d2" * 16
+    _insert_task(database, task_id, status="running")
+    database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
+    database.record_stage_dispatched(
+        task_id=task_id, stage_name=STAGE, attempt=1, slurm_job_id="4100"
+    )
+    database.record_stage_running(task_id=task_id, stage_name=STAGE, attempt=1)
+    cancelled, dispatched = _dispatch(database, task_id, monkeypatch)
+
+    dispatched("9999", time.time(), False)
+
+    assert cancelled == ["9999"]
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["slurm_job_id"], run["status"]) == ("4100", stage_state.RUNNING)
+
+
+def test_first_dispatch_while_queued_is_recorded(tmp_path, monkeypatch):
+    """(c) The attempt's first handle is its identity, with no cancellation."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d3" * 16
+    _insert_task(database, task_id)
+    database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
+    cancelled, dispatched = _dispatch(database, task_id, monkeypatch)
+
+    dispatched("4100", time.time(), False)
+
+    assert cancelled == []
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["slurm_job_id"], run["status"]) == ("4100", stage_state.QUEUED)
+
+
+def test_duplicate_same_handle_while_queued_is_not_cancelled(tmp_path, monkeypatch):
+    """(d) A repeated notification while QUEUED refreshes nothing foreign."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d4" * 16
+    _insert_task(database, task_id)
+    database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
+    assert database.record_stage_dispatched(
+        task_id=task_id, stage_name=STAGE, attempt=1, slurm_job_id="4100"
+    ) is StageDispatchOutcome.RECORDED
+    cancelled, dispatched = _dispatch(database, task_id, monkeypatch)
+
+    dispatched("4100", time.time(), False)
+
+    assert cancelled == []
+    assert database.record_stage_dispatched(
+        task_id=task_id, stage_name=STAGE, attempt=1, slurm_job_id="4100"
+    ) is StageDispatchOutcome.OWN_HANDLE_ADVANCED
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["slurm_job_id"], run["status"]) == ("4100", stage_state.QUEUED)
 
 
 def test_recovery_cancels_known_handles_before_refusing_an_unknown_one(monkeypatch):
