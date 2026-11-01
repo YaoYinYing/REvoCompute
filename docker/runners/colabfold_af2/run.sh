@@ -26,6 +26,25 @@ msa_marker="${output_dir}/.colabfold-msa-complete"
 colabfold_batch=${COLABFOLD_BATCH:-colabfold_batch}
 normalizer=${COLABFOLD_NORMALIZER:-/app/revocompute/normalize_interface_scores.py}
 
+# Upstream names every result after safe_filename(FASTA header) for fasta
+# input (batch.py:1458; input.py:302-309). Scope clearing and the handoff
+# digest to this job so another producer's files in the same output tree
+# survive a re-attempt.
+job_name=$(python3 - "$fasta_path" <<'PY'
+import sys
+
+for line in open(sys.argv[1], encoding="utf-8"):
+    line = line.strip()
+    if line.startswith(">"):
+        print("".join(c if c.isalnum() or c in "_.-" else "_" for c in line[1:]))
+        break
+PY
+)
+if [[ -z "$job_name" ]]; then
+  job_name=$(basename "$fasta_path")
+  job_name=${job_name%.*}
+fi
+
 # Each attempt clears the outputs of the stages it runs before any preflight
 # check, because this Runner cannot bind the runtime image: a failed attempt
 # must not leave an earlier attempt's tree publishable under this one. Upstream
@@ -33,18 +52,25 @@ normalizer=${COLABFOLD_NORMALIZER:-/app/revocompute/normalize_interface_scores.p
 # clears the MSA cache and the model stage keeps only this attempt's features.
 case "$run_stage" in
   features|all)
-    find "$output_dir" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + ;;
+    rm -f -- "$output_dir/${job_name}.a3m" "$output_dir/${job_name}.pickle" \
+      "$output_dir/${job_name}.done.txt" "$output_dir/config.json" "$output_dir/log.txt" \
+      "$output_dir/interface_scores.json" "$msa_marker" "$output_dir/task_finished"
+    rm -rf -- "$output_dir/${job_name}"_* ;;
   model)
-    find "$output_dir" -mindepth 1 -maxdepth 1 \
-      ! -name '*.a3m' ! -name '*.pickle' ! -name '.colabfold-msa-complete' \
-      -exec rm -rf -- {} + ;;
+    rm -f -- "$output_dir/${job_name}.done.txt" "$output_dir/interface_scores.json" \
+      "$output_dir/task_finished"
+    rm -rf -- "$output_dir/${job_name}"_* ;;
 esac
 
 # The marker carries a digest of this attempt's MSA cache so the model stage
 # consumes exactly the features the features stage published.
 msa_digest() {
-  find "$output_dir" -type f \( -name '*.a3m' -o -name '*.pickle' \) -print0 \
-    | LC_ALL=C sort -z | xargs -0 -r sha256sum | sha256sum | cut -d ' ' -f 1
+  local file
+  for file in "$output_dir/${job_name}.a3m" "$output_dir/${job_name}.pickle"; do
+    if [[ -f "$file" ]]; then
+      printf '%s  %s\n' "$(sha256sum "$file" | cut -d ' ' -f 1)" "$(basename "$file")"
+    fi
+  done | sha256sum | cut -d ' ' -f 1
 }
 
 common_args=(
@@ -61,12 +87,8 @@ common_args=(
 run_msa() {
   echo "REVODESIGN_STAGE:msa_searching"
   "$colabfold_batch" "${common_args[@]}" --msa-only "$fasta_path" "$output_dir"
-  find "$output_dir" -type f -name '*.a3m' -size +0c -print -quit | grep -q . || {
-    echo "ColabFold produced no MSA" >&2; exit 1;
-  }
-  find "$output_dir" -type f -name '*.pickle' -size +0c -print -quit | grep -q . || {
-    echo "ColabFold produced no MSA cache" >&2; exit 1;
-  }
+  [[ -s "$output_dir/${job_name}.a3m" ]] || { echo "ColabFold produced no MSA" >&2; exit 1; }
+  [[ -s "$output_dir/${job_name}.pickle" ]] || { echo "ColabFold produced no MSA cache" >&2; exit 1; }
   msa_digest > "$msa_marker"
   echo "ColabFold MSA complete."
 }
@@ -93,7 +115,7 @@ if (( num_relax > 0 )); then
   model_args+=(--amber --use-gpu-relax --num-relax "$num_relax")
 fi
 "$colabfold_batch" "${model_args[@]}" "$fasta_path" "$output_dir"
-find "$output_dir" -type f -name '*.pdb' -size +0c -print -quit | grep -q . || {
+find "$output_dir" -maxdepth 1 -type f -name "${job_name}_*.pdb" -size +0c -print -quit | grep -q . || {
   echo "ColabFold produced no structure" >&2; exit 1;
 }
 # Interface confidence is optional upstream: it is emitted only for complexes.

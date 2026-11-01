@@ -34,11 +34,13 @@ def test_alphafold_runner_drains_final_stage_before_exit(tmp_path):
     fake_python.write_text(
         "#!/bin/bash\n"
         "set -e\n"
-        'for arg in "$@"; do case "$arg" in --output_dir=*) output_dir=${arg#*=} ;; esac; done\n'
+        'for arg in "$@"; do case "$arg" in --output_dir=*) output_dir=${arg#*=} ;; '
+        '--fasta_paths=*) fasta=${arg#*=} ;; esac; done\n'
+        'job=$(basename "$fasta"); job=${job%.*}\n'
         'printf "Running model model_1\\n" >&2\n'
-        'mkdir -p "$output_dir/model"\n'
-        'printf "MODEL\\n" > "$output_dir/model/ranked_0.pdb"\n'
-        "printf '%s\\n' '[{\"predicted_aligned_error\":[[1,2],[2,1]]}]' > \"$output_dir/model/pae_model_1.json\"\n",
+        'mkdir -p "$output_dir/$job"\n'
+        'printf "MODEL\\n" > "$output_dir/$job/ranked_0.pdb"\n'
+        "printf '%s\\n' '[{\"predicted_aligned_error\":[[1,2],[2,1]]}]' > \"$output_dir/$job/pae_model_1.json\"\n",
         encoding="utf-8",
     )
     fake_python.chmod(0o755)
@@ -143,8 +145,10 @@ def _write_reuse_fake_alphafold(path):
         '  [[ "$stage" == features ]] && exit 0\n'
         "fi\n"
         '[[ -s "$job_dir/features.pkl" ]] || { echo "missing features" >&2; exit 7; }\n'
-        'if [[ -e "$job_dir/ranked_0.pdb" ]]; then printf "REUSED\\n" > "$job_dir/ranked_0.pdb"; '
+        'if [[ "${FAKE_NO_STRUCTURE:-}" != "1" ]]; then\n'
+        '  if [[ -e "$job_dir/ranked_0.pdb" ]]; then printf "REUSED\\n" > "$job_dir/ranked_0.pdb"; '
         'else printf "FRESH\\n" > "$job_dir/ranked_0.pdb"; fi\n'
+        "fi\n"
         'printf "{}\\n" > "$job_dir/ranking_debug.json"\n',
         encoding="utf-8",
     )
@@ -262,6 +266,22 @@ def test_alphafold_model_stage_recomputes_instead_of_reusing_model_outputs(tmp_p
     assert ranked.read_text(encoding="utf-8") == "FRESH\n"
     assert _calls(env) == ["features", "model", "model"]
     assert (output_dir / "task_finished").is_file()
+
+
+def test_alphafold_missing_structure_is_not_masked_by_a_sibling_tree(tmp_path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    sibling = output_dir / "other_family"
+    sibling.mkdir()
+    (sibling / "ranked_0.pdb").write_text("SIBLING\n", encoding="utf-8")
+    assert _run_af2_stage(env, input_file, output_dir, "features").returncode == 0
+
+    env["FAKE_NO_STRUCTURE"] = "1"
+    model = _run_af2_stage(env, input_file, output_dir, "model")
+
+    assert model.returncode != 0
+    assert "produced no ranked_0.pdb" in model.stderr
+    assert not (output_dir / "task_finished").exists()
+    assert (sibling / "ranked_0.pdb").read_text(encoding="utf-8") == "SIBLING\n"
 
 
 def test_alphafold_failed_attempt_publishes_no_stale_output(tmp_path):

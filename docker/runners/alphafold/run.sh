@@ -130,7 +130,7 @@ if [[ "$run_stage" == features ]]; then
   exit 0
 fi
 
-[[ -n "$(ls "${output_dir}"/*/ranked_0.pdb 2>/dev/null || true)" ]] || {
+[[ -s "${features_dir}/ranked_0.pdb" ]] || {
   echo "AlphaFold produced no ranked_0.pdb" >&2; exit 1; }
 touch "${output_dir}/task_finished"
 echo "AlphaFold complete."
