@@ -50,9 +50,10 @@ function identity(artifact) {
   return null;
 }
 function modelKey(parsed) { return parsed.job + "\u0000" + parsed.rank; }
-// One job+rank publishes one score file per model (`num_models` defaults to 5).
-// Names sort so model_1 comes first, which is upstream's best model for the rank.
-function bestScores(artifacts) {
+// Pinned ColabFold assigns a distinct rank to every prediction, so one score
+// file exists per job+rank. A duplicate name is unreachable upstream; the first
+// by filename is a deterministic defensive tie-break rather than list order.
+function scoreFiles(artifacts) {
   const scores = new Map();
   artifacts.forEach((artifact) => {
     const parsed = identity(artifact); if (!parsed || parsed.rank == null) return;
@@ -121,7 +122,7 @@ export default {
     const structures = preferredStructures(list(context.files.get("structures")));
     const alignments = uniqueAlignments(list(context.files.get("alignment")));
     const interfaceArtifact = list(context.files.get("interface_scores"))[0];
-    const scoresByModel = bestScores(list(context.files.get("scores")));
+    const scoresByModel = scoreFiles(list(context.files.get("scores")));
     const abort = new AbortController(); let generation = 0; let stageGeneration = 0; let localSeries = null; let matrix = null;
 
     const root = element("div", "colabfold-result");

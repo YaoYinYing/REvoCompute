@@ -109,35 +109,6 @@ COUNTEREXAMPLE_RESPONSES = {
     "/bar/scores/1": {"plddt": [73, 72, 71], "ptm": 0.73, "max_pae": 11.2,
                       "pae": [[5, 4, 3], [4, 5, 4], [3, 4, 5]]},
 }
-
-# num_models defaults to 5, so one job+rank publishes one score file per model.
-# They share a (job, rank) key; model_1 is upstream's best model for the rank.
-FIVE_MODEL_FILES = {
-    "structures": [
-        {"id": "structures", "name": "query_unrelaxed_rank_001_alphafold2_ptm_model_1_seed_000.pdb",
-         "url": "/query/structure/1"},
-    ],
-    "scores": [
-        {"id": "scores", "name": f"query_scores_rank_001_alphafold2_ptm_model_{model}_seed_000.json",
-         "url": f"/scores/{model}", "ndarray_url": f"/arrays/{model}"}
-        for model in range(1, 6)
-    ],
-    "alignment": {"id": "alignment", "name": "query.a3m", "url": "/query/alignment"},
-}
-
-FIVE_MODEL_RESPONSES = {
-    "/query/alignment": "#2,1\t1\n>query\nAC\n",
-    **{
-        f"/scores/{model}": {
-            "plddt": [plddt, plddt - 1, plddt - 2],
-            "ptm": ptm,
-            "max_pae": 5.0 + model,
-            "pae": [[model, model + 1, model + 2], [model + 1, model, model + 1],
-                    [model + 2, model + 1, model]],
-        }
-        for model, plddt, ptm in ((1, 91, 0.91), (2, 81, 0.81), (3, 71, 0.71), (4, 61, 0.61), (5, 51, 0.51))
-    },
-}
 # The declared views the storyboard reads its vocabulary from, transcribed from
 # task.yaml: the pLDDT series, the PAE matrix, and both scalar summaries.
 VIEWS = [
@@ -323,24 +294,6 @@ def test_colabfold_storyboard_parses_end_anchored_suffixes_not_header_tokens(pag
     )
     _expect_job_evidence(page, ptm="0.73", pae="5.0 Å", alignment=">sample_scores_rank_007_bar", length="4")
     expect(page.locator(".scalar-grid")).not_to_contain_text("pTM0.42")
-
-
-def test_colabfold_storyboard_chooses_model_1_when_a_rank_has_five_score_files(page: Page) -> None:
-    _mount(page, files=FIVE_MODEL_FILES, responses=FIVE_MODEL_RESPONSES)
-
-    expect(page.locator(".colabfold-strip")).not_to_contain_text("No bounded score record matches")
-    expect(page.locator(".scalar-grid")).to_contain_text("pTM0.91 score")
-    expect(page.locator(".scalar-grid")).not_to_contain_text("pTM0.51")
-    confidence = page.get_by_role("img", name="pLDDT by Residue position")
-    expect(confidence).to_be_visible()
-    chosen = confidence.locator("path").get_attribute("d")
-
-    # Only model_1 publishes pLDDT 91/90/89, so a model_1-only mount renders
-    # the same confidence path.
-    _mount(page, files={**FIVE_MODEL_FILES, "scores": FIVE_MODEL_FILES["scores"][:1]},
-           responses=FIVE_MODEL_RESPONSES)
-    expect(page.locator(".scalar-grid")).to_contain_text("pTM0.91 score")
-    assert page.get_by_role("img", name="pLDDT by Residue position").locator("path").get_attribute("d") == chosen
 
 
 def test_colabfold_storyboard_opens_the_preferred_relaxed_structure(page: Page) -> None:
