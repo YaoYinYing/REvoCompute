@@ -12,7 +12,8 @@ result:
       type: json
     alignment:
       pattern: '*.a3m'
-      cardinality: one
+      # ColabFold creates one job per FASTA record and writes one A3M per job.
+      cardinality: many
       required: true
       type: alignment
     interface_scores:

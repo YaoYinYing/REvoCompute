@@ -2385,15 +2385,8 @@ def _validate_scientific_view(
 ) -> list[str]:
     """Check resolved files against the declared protocol, without task-name branches."""
     problems: list[str] = []
-    singular = {
-        "alignment": ("alignment",),
-    }.get(definition.plugin, ())
-    for source in singular:
-        if len(sources.get(source, [])) != 1:
-            problems.append(f"{definition.title}: {source} source must resolve to exactly one artifact")
-    if problems:
-        return problems
-
+    # An alignment view may source several artifacts: ColabFold publishes one
+    # A3M per FASTA record, and the storyboard reads the first.
     if definition.plugin == "entity-table":
         tables = sources.get("table", [])
         structures = sources.get("structure", [])

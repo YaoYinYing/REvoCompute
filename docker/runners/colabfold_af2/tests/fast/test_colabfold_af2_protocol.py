@@ -11,6 +11,7 @@ from functools import partial
 from pathlib import Path
 
 import pytest
+from revocompute.task_types import get, isolated_discovery
 from runner_protocol import ROOT, run_with_manifest
 
 COLABFOLD_RUNNER_SCRIPT = ROOT / "docker/runners/colabfold_af2/run.sh"
@@ -40,57 +41,74 @@ def _write_fake_context(tmp_path: Path, **parameters) -> Path:
     )
     return script
 
-def _msa_digest(output_dir: Path, job: str = "query") -> str:
-    """Mirror run.sh's digest of this job's a3m and pickle cache."""
+def _msa_digest(output_dir: Path, jobs: tuple[str, ...] = ("query",)) -> str:
+    """Mirror run.sh's digest of every job's a3m and pickle cache, sorted by job."""
     lines = []
-    for suffix in (".a3m", ".pickle"):
-        path = output_dir / f"{job}{suffix}"
-        if path.is_file():
-            lines.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n")
+    for job in sorted(jobs):
+        for suffix in (".a3m", ".pickle"):
+            path = output_dir / f"{job}{suffix}"
+            if path.is_file():
+                lines.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n")
     return hashlib.sha256("".join(lines).encode()).hexdigest()
 
 
-def _seed_features(output_dir: Path, job: str = "query") -> None:
+def _seed_features(output_dir: Path, jobs: tuple[str, ...] = ("query",)) -> None:
     """Write the features output and digest marker a features stage publishes."""
-    (output_dir / f"{job}.a3m").write_text(f">query\nAAAA\n>hit\nAAAA\n", encoding="utf-8")
-    (output_dir / f"{job}.pickle").write_text("MSA\n", encoding="utf-8")
-    (output_dir / ".colabfold-msa-complete").write_text(_msa_digest(output_dir, job), encoding="utf-8")
+    for job in jobs:
+        (output_dir / f"{job}.a3m").write_text(f">{job}\nAAAA\n>hit\nAAAA\n", encoding="utf-8")
+        (output_dir / f"{job}.pickle").write_text("MSA\n", encoding="utf-8")
+    (output_dir / ".colabfold-msa-complete").write_text(_msa_digest(output_dir, jobs), encoding="utf-8")
 
 
 def _write_fake_colabfold(tmp_path: Path) -> Path:
     executable = tmp_path / "colabfold_batch"
     executable.write_text(
-        "#!/bin/bash\n"
-        "set -e\n"
-        'printf "%s\\n" "$@" > "$FAKE_ARGS_FILE"\n'
-        'if [[ " $* " == *" --msa-only "* ]]; then printf "features\\n" >> "$FAKE_CALL_LOG"; '
-        'else printf "model\\n" >> "$FAKE_CALL_LOG"; fi\n'
-        "output_dir=${@: -1}\n"
-        "fasta=${@: -2:1}\n"
-        'job=$(sed -n "1s/^>//p" "$fasta" | sed "s/[^[:alnum:]_.-]/_/g")\n'
-        'if [[ -n "${FAKE_FAIL_STAGE:-}" ]]; then\n'
-        '  [[ "$FAKE_FAIL_STAGE" == features && " $* " == *" --msa-only "* ]] && exit 9\n'
-        '  [[ "$FAKE_FAIL_STAGE" == model && " $* " != *" --msa-only "* ]] && exit 9\n'
-        "fi\n"
-        'if [[ "${FAKE_NO_OUTPUT:-}" == "1" ]]; then exit 0; fi\n'
-        'if [[ -f "$output_dir/${job}.done.txt" ]]; then\n'
-        '  echo "Skipping ${job} (already done)" >&2\n'
-        "  exit 0\n"
-        "fi\n"
-        'if [[ " $* " == *" --msa-only "* ]]; then\n'
-        '  if [[ -f "$output_dir/${job}.pickle" ]]; then src=REUSED; else src=FRESH; fi\n'
-        '  printf ">query\\nAAAA\\n%s\\n" "$src" > "$output_dir/${job}.a3m"\n'
-        '  printf "%s\\n" "$src" > "$output_dir/${job}.pickle"\n'
-        "else\n"
-        '  [[ -s "$output_dir/${job}.pickle" ]] || { echo "missing MSA cache" >&2; exit 7; }\n'
-        '  if [[ -f "$output_dir/${job}_unrelaxed_rank_001_model_1.pdb" ]]; then src=REUSED; else src=FRESH; fi\n'
-        '  printf "%s\\n" "$src" > "$output_dir/${job}_unrelaxed_rank_001_model_1.pdb"\n'
-        '  if [[ "${FAKE_INTERFACE_SCORES:-no}" == "yes" ]]; then\n'
-        '    printf \'{"ptm":0.8,"ipsae":{"A-B":0.61,"A-C":0.74},"pdockq2":{"A-B":0.71,"A-C":0.42}}\\n\''
-        ' > "$output_dir/${job}_scores_rank_001_model_1.json"\n'
-        "  fi\n"
-        '  printf "done\\n" > "$output_dir/${job}.done.txt"\n'
-        "fi\n",
+        r"""#!/bin/bash
+set -e
+printf "%s\n" "$@" > "$FAKE_ARGS_FILE"
+if [[ " $* " == *" --msa-only "* ]]; then
+  printf "features\n" >> "$FAKE_CALL_LOG"
+else
+  printf "model\n" >> "$FAKE_CALL_LOG"
+fi
+output_dir="${@: -1}"
+fasta="${@: -2:1}"
+mapfile -t jobs < <(python3 - "$fasta" <<'PY'
+import sys
+
+for line in open(sys.argv[1], encoding="utf-8"):
+    line = line.strip()
+    if line.startswith(">"):
+        print("".join(c if c.isalnum() or c in "_.-" else "_" for c in line[1:]))
+PY
+)
+if [[ -n "${FAKE_FAIL_STAGE:-}" ]]; then
+  [[ "$FAKE_FAIL_STAGE" == features && " $* " == *" --msa-only "* ]] && exit 9
+  [[ "$FAKE_FAIL_STAGE" == model && " $* " != *" --msa-only "* ]] && exit 9
+fi
+if [[ "${FAKE_NO_OUTPUT:-}" == "1" ]]; then exit 0; fi
+for job in "${jobs[@]}"; do
+  if [[ -n "${FAKE_NO_JOB:-}" && "$FAKE_NO_JOB" == "$job" ]]; then continue; fi
+  if [[ -f "$output_dir/${job}.done.txt" ]]; then
+    echo "Skipping ${job} (already done)" >&2
+    continue
+  fi
+  if [[ " $* " == *" --msa-only "* ]]; then
+    if [[ -f "$output_dir/${job}.pickle" ]]; then src=REUSED; else src=FRESH; fi
+    printf ">%s\nAAAA\n%s\n" "$job" "$src" > "$output_dir/${job}.a3m"
+    printf "%s\n" "$src" > "$output_dir/${job}.pickle"
+  else
+    [[ -s "$output_dir/${job}.pickle" ]] || { echo "missing MSA cache for $job" >&2; exit 7; }
+    if [[ -f "$output_dir/${job}_unrelaxed_rank_001_model_1.pdb" ]]; then src=REUSED; else src=FRESH; fi
+    printf "%s\n" "$src" > "$output_dir/${job}_unrelaxed_rank_001_model_1.pdb"
+    if [[ "${FAKE_INTERFACE_SCORES:-no}" == "yes" ]]; then
+      printf '{"ptm":0.8,"ipsae":{"A-B":0.61,"A-C":0.74},"pdockq2":{"A-B":0.71,"A-C":0.42}}\n' \
+        > "$output_dir/${job}_scores_rank_001_model_1.json"
+    fi
+    printf "done\n" > "$output_dir/${job}.done.txt"
+  fi
+done
+""",
         encoding="utf-8",
     )
     executable.chmod(0o755)
@@ -370,6 +388,125 @@ def test_colabfold_missing_output_is_not_masked_by_a_sibling_producer(tmp_path):
     assert "produced no structure" in model.stderr
     assert not (output_dir / "task_finished").exists()
     assert (output_dir / "sibling_unrelaxed_rank_001_model_1.pdb").is_file()
+
+
+MULTIRECORD_FASTA = (
+    ">multirecord_1\nGSHMASMTGGQQMGRDLYDD\n"
+    ">multirecord_2\nMKTAYIAKQRQISFVKSHFS\n"
+)
+
+
+def _multirecord_env(tmp_path: Path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    input_file.write_text(MULTIRECORD_FASTA, encoding="utf-8")
+    return env, input_file, output_dir, ("multirecord_1", "multirecord_2")
+
+
+def test_colabfold_multirecord_recomputes_every_job(tmp_path):
+    env, input_file, output_dir, jobs = _multirecord_env(tmp_path)
+    for job in jobs:
+        (output_dir / f"{job}.a3m").write_text("STALE\n", encoding="utf-8")
+        (output_dir / f"{job}.pickle").write_text("STALE\n", encoding="utf-8")
+        (output_dir / f"{job}.done.txt").write_text("", encoding="utf-8")
+        (output_dir / f"{job}_unrelaxed_rank_001_model_1.pdb").write_text("STALE\n", encoding="utf-8")
+    (output_dir / "task_finished").write_text("", encoding="utf-8")
+
+    features = _run_stage(env, input_file, output_dir, "features")
+
+    assert features.returncode == 0, features.stderr
+    for job in jobs:
+        assert "FRESH" in (output_dir / f"{job}.a3m").read_text(encoding="utf-8")
+        assert "FRESH" in (output_dir / f"{job}.pickle").read_text(encoding="utf-8")
+        assert not (output_dir / f"{job}.done.txt").exists()
+        assert not (output_dir / f"{job}_unrelaxed_rank_001_model_1.pdb").exists()
+    marker = output_dir / ".colabfold-msa-complete"
+    assert marker.read_text(encoding="utf-8").strip() == _msa_digest(output_dir, jobs)
+
+    model = _run_stage(env, input_file, output_dir, "model")
+
+    assert model.returncode == 0, model.stderr
+    for job in jobs:
+        assert (output_dir / f"{job}_unrelaxed_rank_001_model_1.pdb").read_text(encoding="utf-8") == "FRESH\n"
+        assert (output_dir / f"{job}.done.txt").is_file()
+    assert (output_dir / "task_finished").is_file()
+    assert _calls(env) == ["features", "model"]
+
+    for job in jobs:
+        (output_dir / f"{job}_unrelaxed_rank_001_model_1.pdb").write_text("STALE\n", encoding="utf-8")
+    rerun = _run_stage(env, input_file, output_dir, "model")
+
+    assert rerun.returncode == 0, rerun.stderr
+    for job in jobs:
+        assert (output_dir / f"{job}_unrelaxed_rank_001_model_1.pdb").read_text(encoding="utf-8") == "FRESH\n"
+    assert _calls(env) == ["features", "model", "model"]
+
+
+def test_colabfold_multirecord_missing_second_job_output_fails(tmp_path):
+    env, input_file, output_dir, jobs = _multirecord_env(tmp_path)
+    env["FAKE_NO_JOB"] = jobs[1]
+
+    features = _run_stage(env, input_file, output_dir, "features")
+
+    assert features.returncode != 0
+    assert "produced no MSA for multirecord_2" in features.stderr
+    assert not (output_dir / ".colabfold-msa-complete").exists()
+
+    env.pop("FAKE_NO_JOB")
+    assert _run_stage(env, input_file, output_dir, "features").returncode == 0
+    (output_dir / "sibling.txt").write_text("SIBLING\n", encoding="utf-8")
+    env["FAKE_NO_JOB"] = jobs[1]
+
+    model = _run_stage(env, input_file, output_dir, "model")
+
+    assert model.returncode != 0
+    assert "produced no structure for multirecord_2" in model.stderr
+    assert (output_dir / "multirecord_1_unrelaxed_rank_001_model_1.pdb").is_file()
+    assert not (output_dir / "task_finished").exists()
+    assert (output_dir / "sibling.txt").read_text(encoding="utf-8") == "SIBLING\n"
+
+
+def test_colabfold_duplicate_headers_clear_one_prefix_once(tmp_path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    input_file.write_text(">same\nAAAA\n>same\nCCCC\n", encoding="utf-8")
+    (output_dir / "same.a3m").write_text("STALE\n", encoding="utf-8")
+    (output_dir / "same.pickle").write_text("STALE\n", encoding="utf-8")
+
+    completed = _run_stage(env, input_file, output_dir, "features")
+
+    assert completed.returncode == 0, completed.stderr
+    assert (output_dir / "same.pickle").read_text(encoding="utf-8") != "STALE\n"
+    marker = output_dir / ".colabfold-msa-complete"
+    assert marker.read_text(encoding="utf-8").strip() == _msa_digest(output_dir, ("same",))
+
+
+def test_colabfold_multirecord_result_contract_accepts_one_alignment_per_job(tmp_path):
+    from revocompute.result_storyboard import expected_file_tree, resolve_expected_files
+    from revocompute.task_runtime import _resolve_result_views
+
+    files = {
+        "multirecord_1.a3m": ">multirecord_1\nAAAA\n",
+        "multirecord_2.a3m": ">multirecord_2\nBBBB\n",
+        "multirecord_1_unrelaxed_rank_001_model_1.pdb": "MODEL\n",
+        "multirecord_2_unrelaxed_rank_001_model_1.pdb": "MODEL\n",
+        "multirecord_1_scores_rank_001_model_1.json": '{"plddt":[80.0],"pae":[[1.0]],"ptm":0.8,"max_pae":1.0}\n',
+        "multirecord_2_scores_rank_001_model_1.json": '{"plddt":[80.0],"pae":[[1.0]],"ptm":0.8,"max_pae":1.0}\n',
+    }
+    artifacts = []
+    for relative_path, content in files.items():
+        path = tmp_path / relative_path
+        path.write_text(content, encoding="utf-8")
+        artifacts.append({"path": relative_path, "size": path.stat().st_size, "role": "artifact"})
+
+    with isolated_discovery(str(ROOT / "docker/runners"), {"colabfold_af2"}):
+        task, _ = get("colabfold_af2")
+        views, _, problems = _resolve_result_views(task, artifacts, str(tmp_path))
+        logical, _, tree_problems = resolve_expected_files(expected_file_tree(task, str(ROOT)), artifacts)
+
+    assert problems == []
+    assert tree_problems == []
+    alignment_view = next(view for view in views if view["id"] == "model_alignment")
+    assert alignment_view["sources"]["alignment"] == ["multirecord_1.a3m", "multirecord_2.a3m"]
+    assert len(logical["alignment"]) == 2
 
 
 def test_colabfold_stages_leave_a_sibling_producers_files_untouched(tmp_path):

@@ -13,6 +13,8 @@ the mock databases from the raw FASTA alignment assets that live in this folder.
 
 - `2KL8.fasta` – single-sequence FASTA used as the query for every validation
   command.
+- `colabfold_multirecord.fasta` – two-record FASTA for the ColabFold smoke case
+  that exercises one output job per record.
 - `2KL8_blast.fasta` – subset of UniRef90 sequences for the PSI‑BLAST database.
 - `2KL8.i90c75_aln.a3m` – HHblits alignment that mimics UniRef30 coverage.
 - `miniuc/` – will contain the rebuilt HH-suite (`uc30`) and PSI‑BLAST (`uc90`)
