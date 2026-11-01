@@ -184,7 +184,7 @@ def test_attempt_identity_is_exactly_once_and_transitions_are_monotonic(tmp_path
 
         assert database.record_stage_dispatched(
             task_id=task_id, stage_name="features", attempt=1, slurm_job_id="4100"
-        )
+        ) is StageDispatchOutcome.RECORDED
         assert database.record_stage_running(task_id=task_id, stage_name="features", attempt=1)
         assert database.finish_stage_attempt(
             task_id=task_id,
@@ -598,7 +598,7 @@ def test_duplicate_dispatch_cannot_rewrite_the_attempt_handle(tmp_path):
     database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="cpu_runner")
     assert database.record_stage_dispatched(
         task_id=task_id, stage_name="cpu_runner", attempt=1, slurm_job_id="4100"
-    )
+    ) is StageDispatchOutcome.RECORDED
     assert database.record_stage_dispatched(
         task_id=task_id, stage_name="cpu_runner", attempt=1, slurm_job_id="4200"
     ) is StageDispatchOutcome.FOREIGN_HANDLE_OR_MISSING
@@ -1441,7 +1441,7 @@ def test_reordered_manifest_resume_reuses_the_live_attempt_by_name(tmp_path):
         # keeps even though its manifest index moved.
         assert database.record_stage_dispatched(
             task_id=task_id, stage_name="multistage_runner.model", attempt=1, slurm_job_id="77"
-        )
+        ) is StageDispatchOutcome.RECORDED
         assert database.record_stage_running(
             task_id=task_id, stage_name="multistage_runner.model", attempt=1
         )

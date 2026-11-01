@@ -199,7 +199,7 @@ def test_reentry_with_a_recorded_handle_never_submits_again(tmp_path, monkeypatc
     database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
     assert database.record_stage_dispatched(
         task_id=task_id, stage_name=STAGE, attempt=1, slurm_job_id="4100"
-    )
+    ) is StageDispatchOutcome.RECORDED
     monkeypatch.setattr(task_runtime, "task_store", database)
     monkeypatch.setattr(
         task_runtime, "_create_job", lambda *_args, **_kwargs: pytest.fail("must not submit")
@@ -677,7 +677,7 @@ def test_a_refused_handle_cancels_the_allocation_it_could_not_record(tmp_path, m
     database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
     assert database.record_stage_dispatched(
         task_id=task_id, stage_name=STAGE, attempt=1, slurm_job_id="4100"
-    )
+    ) is StageDispatchOutcome.RECORDED
     monkeypatch.setattr(task_runtime, "task_store", database)
     cancelled: list[str] = []
     monkeypatch.setattr(
@@ -954,7 +954,7 @@ def test_single_stage_recovery_cancels_a_stage_named_allocation(tmp_path, monkey
     attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
     assert database.record_stage_dispatched(
         task_id=task_id, stage_name=STAGE, attempt=attempt["attempt"], slurm_job_id="9005"
-    )
+    ) is StageDispatchOutcome.RECORDED
     monkeypatch.setattr(task_runtime, "task_store", database)
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda _name: (_single_stage_type(), None))
     monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: "active")
@@ -980,7 +980,7 @@ def test_single_stage_recovery_holds_a_stage_named_allocation_it_cannot_stop(tmp
     attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
     assert database.record_stage_dispatched(
         task_id=task_id, stage_name=STAGE, attempt=attempt["attempt"], slurm_job_id="9006"
-    )
+    ) is StageDispatchOutcome.RECORDED
     monkeypatch.setattr(task_runtime, "task_store", database)
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda _name: (_single_stage_type(), None))
     monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: "active")
@@ -1058,7 +1058,7 @@ def test_single_stage_recovery_cancels_an_attempt_handle_beside_a_task_handle(tm
     attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
     assert database.record_stage_dispatched(
         task_id=task_id, stage_name=STAGE, attempt=attempt["attempt"], slurm_job_id="8010"
-    )
+    ) is StageDispatchOutcome.RECORDED
     database.record_stage_running(task_id=task_id, stage_name=STAGE, attempt=attempt["attempt"])
     monkeypatch.setattr(task_runtime, "task_store", database)
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda _name: (_single_stage_type(), None))
