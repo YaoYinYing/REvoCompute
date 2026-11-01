@@ -26,6 +26,27 @@ msa_marker="${output_dir}/.colabfold-msa-complete"
 colabfold_batch=${COLABFOLD_BATCH:-colabfold_batch}
 normalizer=${COLABFOLD_NORMALIZER:-/app/revocompute/normalize_interface_scores.py}
 
+# Each attempt clears the outputs of the stages it runs before any preflight
+# check, because this Runner cannot bind the runtime image: a failed attempt
+# must not leave an earlier attempt's tree publishable under this one. Upstream
+# reuses an existing <job>.done.txt or <job>.pickle, so the features stage also
+# clears the MSA cache and the model stage keeps only this attempt's features.
+case "$run_stage" in
+  features|all)
+    find "$output_dir" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + ;;
+  model)
+    find "$output_dir" -mindepth 1 -maxdepth 1 \
+      ! -name '*.a3m' ! -name '*.pickle' ! -name '.colabfold-msa-complete' \
+      -exec rm -rf -- {} + ;;
+esac
+
+# The marker carries a digest of this attempt's MSA cache so the model stage
+# consumes exactly the features the features stage published.
+msa_digest() {
+  find "$output_dir" -type f \( -name '*.a3m' -o -name '*.pickle' \) -print0 \
+    | LC_ALL=C sort -z | xargs -0 -r sha256sum | sha256sum | cut -d ' ' -f 1
+}
+
 common_args=(
   "--data" "/mnt/colabfold"
   "--model-type" "$model_type"
@@ -43,7 +64,10 @@ run_msa() {
   find "$output_dir" -type f -name '*.a3m' -size +0c -print -quit | grep -q . || {
     echo "ColabFold produced no MSA" >&2; exit 1;
   }
-  touch "$msa_marker"
+  find "$output_dir" -type f -name '*.pickle' -size +0c -print -quit | grep -q . || {
+    echo "ColabFold produced no MSA cache" >&2; exit 1;
+  }
+  msa_digest > "$msa_marker"
   echo "ColabFold MSA complete."
 }
 
@@ -52,7 +76,11 @@ if [[ "$run_stage" =~ ^(all|features)$ ]]; then
   [[ "$run_stage" == features ]] && exit 0
 fi
 
-[[ -f "$msa_marker" ]] || { echo "Validated ColabFold MSA is missing" >&2; exit 1; }
+[[ -s "$msa_marker" ]] || { echo "Validated ColabFold MSA is missing" >&2; exit 1; }
+expected_msa_sha=$(<"$msa_marker")
+actual_msa_sha=$(msa_digest)
+[[ "$expected_msa_sha" =~ ^[0-9a-f]{64}$ && "$actual_msa_sha" == "$expected_msa_sha" ]] || {
+  echo "ColabFold MSA changed after feature validation" >&2; exit 1; }
 echo "REVODESIGN_STAGE:modeling"
 model_args=("${common_args[@]}")
 # BooleanOptionalAction: the flag is a switch, so pass it only when requested.
