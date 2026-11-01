@@ -658,11 +658,13 @@ def test_each_effective_resource_field_changes_validation_identity(tmp_path, sta
     assert changed.configuration_digest != baseline.configuration_digest
 
 
-def _copied_family(tmp_path, family="restricted_runner"):
+def _copied_family(tmp_path, family="restricted_runner", extra_families=()):
     repo = tmp_path / "repo"
     runners = repo / "docker" / "runners"
     shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / family, runners / family)
     shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "common", runners / "common")
+    for extra in extra_families:
+        shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / extra, runners / extra)
     plan = yaml.safe_load((runners / family / "test.yaml").read_text(encoding="utf-8"))
     for collection in plan["collections"].values():
         for case in collection["cases"]:
@@ -732,6 +734,88 @@ def test_workflow_marker_ownership_changes_validation_identity(tmp_path):
     task.write_text(reassigned, encoding="utf-8")
     reassigned_identity = load_validation_identity(family, resource_provider=providers, repo_root=repo)
     assert reassigned_identity.configuration_digest != baseline.configuration_digest
+
+
+def _workflow_ports(text: str) -> str:
+    """Declare a typed edge between the fixture's two workflow stages."""
+    features = (
+        "  stage_markers:\n  - data_pipeline\n  - feature_validation\n"
+        "  family: restricted_runner\n"
+        "  inputs:\n"
+        "  - {name: sequence, type: protein_sequence, from: \"graph:sequence\"}\n"
+        "  outputs:\n"
+        "  - {name: prepared, type: protein_structure, path: work/prepared.fasta}\n"
+        "  - {name: prepared_copy, type: protein_structure, path: work/prepared_copy.fasta}\n"
+    )
+    model = (
+        "  stage_markers:\n  - inference\n  - output_validation\n"
+        "  inputs:\n"
+        "  - {name: prepared, type: protein_structure, "
+        "from: \"restricted_runner.features:prepared\"}\n"
+        "  outputs:\n"
+        "  - {name: score, type: protein_structure, path: score.json}\n"
+    )
+    return text.replace(
+        "  stage_markers:\n  - data_pipeline\n  - feature_validation\n", features, 1
+    ).replace(
+        "  stage_markers:\n  - inference\n  - output_validation\n", model, 1
+    )
+
+
+def _workflow_family(tmp_path, **kwargs):
+    repo, runners, _family = _copied_family(tmp_path, **kwargs)
+    family = next(item for item in load_plugin_families(runners) if item.name == "restricted_runner")
+    return repo, replace(family, root=runners / "restricted_runner")
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        (
+            'from: "restricted_runner.features:prepared"',
+            'from: "restricted_runner.features:prepared_copy"',
+        ),
+        ("path: work/prepared.fasta", "path: work/prepared_v2.fasta"),
+        ("family: restricted_runner", "family: cpu_runner"),
+        (
+            "{name: prepared, type: protein_structure, path: work/prepared.fasta}",
+            "{name: prepared, type: protein_sequence, path: work/prepared.fasta}",
+        ),
+    ],
+    ids=["input-binding", "output-path", "stage-family", "output-type"],
+)
+def test_workflow_stage_contract_changes_validation_identity(tmp_path, before, after):
+    repo, family = _workflow_family(tmp_path, extra_families=("cpu_runner",))
+    task = family.root / "tasks" / "predict" / "task.yaml"
+    declared = _workflow_ports(task.read_text(encoding="utf-8"))
+    task.write_text(declared, encoding="utf-8")
+    providers = ResourcePolicyValues({}, {})
+
+    baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+    mutated = declared.replace(before, after, 1)
+    assert mutated != declared
+    task.write_text(mutated, encoding="utf-8")
+
+    changed = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+    assert changed.configuration_digest != baseline.configuration_digest
+
+
+def test_workflow_stage_display_name_does_not_change_validation_identity(tmp_path):
+    repo, family = _workflow_family(tmp_path)
+    task = family.root / "tasks" / "predict" / "task.yaml"
+    declared = _workflow_ports(task.read_text(encoding="utf-8"))
+    task.write_text(declared, encoding="utf-8")
+    providers = ResourcePolicyValues({}, {})
+
+    baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+    relabelled = declared.replace("display_name: Preparation", "display_name: Input preparation", 1)
+    assert relabelled != declared
+    task.write_text(relabelled, encoding="utf-8")
+
+    assert (
+        load_validation_identity(family, resource_provider=providers, repo_root=repo).configuration_digest
+        == baseline.configuration_digest
+    )
 
 
 def test_access_policy_and_workspace_assets_change_validation_identity(tmp_path):

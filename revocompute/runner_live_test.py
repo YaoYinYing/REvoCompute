@@ -301,6 +301,14 @@ def load_validation_identity(
             "mapping": projected(view.mapping),
         }
 
+    def stage_contract(stage) -> dict[str, Any]:
+        # Serialize the whole declared stage contract, not an allowlist, so a
+        # new acceptance-affecting field is revalidated by default.  The display
+        # label is presentation, not execution.
+        contract = asdict(stage)
+        contract.pop("display_name", None)
+        return contract
+
     def capability(step) -> dict[str, Any]:
         return {
             "id": step.id,
@@ -333,16 +341,7 @@ def load_validation_identity(
                 "requires_network": task_type.requires_network,
                 "stage_markers": tuple(task_type.stage_markers),
                 "input_workspace": [capability(step) for step in task_type.input_workspace],
-                "workflow": [
-                    {
-                        "name": stage.name,
-                        "requires_gpu": stage.requires_gpu,
-                        "runner_args": stage.runner_args,
-                        "stage_markers": stage.stage_markers,
-                        "requires_network": stage.requires_network,
-                    }
-                    for stage in task_type.workflow
-                ],
+                "workflow": [stage_contract(stage) for stage in task_type.workflow],
                 "results": [result_contract(view) for view in task_type.result_workspace],
             }
         )
