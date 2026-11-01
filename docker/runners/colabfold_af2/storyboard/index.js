@@ -50,17 +50,19 @@ function identity(artifact) {
   return null;
 }
 function modelKey(parsed) { return parsed.job + "\u0000" + parsed.rank; }
-// A duplicate key means the filenames cannot identify one producer record, so
-// the evidence is dropped rather than silently overwriting another artifact.
-function uniqueModels(artifacts) {
-  const models = new Map(); const ambiguous = new Set();
+// One job+rank publishes one score file per model (`num_models` defaults to 5).
+// Names sort so model_1 comes first, which is upstream's best model for the rank.
+function bestScores(artifacts) {
+  const scores = new Map();
   artifacts.forEach((artifact) => {
     const parsed = identity(artifact); if (!parsed || parsed.rank == null) return;
-    const key = modelKey(parsed); if (models.has(key)) ambiguous.add(key); else models.set(key, artifact);
+    const key = modelKey(parsed); const current = scores.get(key);
+    if (!current || name(artifact) < name(current)) scores.set(key, artifact);
   });
-  ambiguous.forEach((key) => models.delete(key));
-  return models;
+  return scores;
 }
+// A duplicate alignment job cannot be disambiguated from filenames, so the
+// evidence is dropped rather than silently overwriting another artifact.
 function uniqueAlignments(artifacts) {
   const alignments = new Map(); const ambiguous = new Set();
   artifacts.forEach((artifact) => {
@@ -119,7 +121,7 @@ export default {
     const structures = preferredStructures(list(context.files.get("structures")));
     const alignments = uniqueAlignments(list(context.files.get("alignment")));
     const interfaceArtifact = list(context.files.get("interface_scores"))[0];
-    const scoresByModel = uniqueModels(list(context.files.get("scores")));
+    const scoresByModel = bestScores(list(context.files.get("scores")));
     const abort = new AbortController(); let generation = 0; let stageGeneration = 0; let localSeries = null; let matrix = null;
 
     const root = element("div", "colabfold-result");
