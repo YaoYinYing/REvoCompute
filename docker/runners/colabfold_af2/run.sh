@@ -22,7 +22,11 @@ num_seeds=$(_parse_param num_seeds)
 random_seed=$(_parse_param random_seed)
 num_relax=$(_parse_param num_relax)
 fasta_path=$(task_input sequence)
-msa_marker="${output_dir}/.colabfold-msa-complete"
+# This Runner owns one result subtree. Clearing never touches a sibling
+# producer's files at the Task output root, even one whose name happens to
+# start with a ColabFold job prefix.
+result_dir="${output_dir}/colabfold"
+msa_marker="${result_dir}/.colabfold-msa-complete"
 colabfold_batch=${COLABFOLD_BATCH:-colabfold_batch}
 normalizer=${COLABFOLD_NORMALIZER:-/app/revocompute/normalize_interface_scores.py}
 
@@ -54,21 +58,19 @@ fi
 # must not leave an earlier attempt's tree publishable under this one. Upstream
 # reuses an existing <job>.done.txt or <job>.pickle, so the features stage also
 # clears the MSA cache and the model stage keeps only this attempt's features.
+# Every removal stays inside result_dir; only the generic root task_finished
+# marker is touched outside it.
 case "$run_stage" in
   features|all)
-    for job_name in "${job_names[@]}"; do
-      rm -f -- "$output_dir/${job_name}.a3m" "$output_dir/${job_name}.pickle" \
-        "$output_dir/${job_name}.done.txt"
-      rm -rf -- "$output_dir/${job_name}"_*
-    done
-    rm -f -- "$output_dir/config.json" "$output_dir/log.txt" "$output_dir/interface_scores.json" \
-      "$msa_marker" "$output_dir/task_finished" ;;
+    rm -rf -- "$result_dir"
+    mkdir -p "$result_dir"
+    rm -f -- "$output_dir/task_finished" ;;
   model)
     for job_name in "${job_names[@]}"; do
-      rm -f -- "$output_dir/${job_name}.done.txt"
-      rm -rf -- "$output_dir/${job_name}"_*
+      rm -f -- "$result_dir/${job_name}.done.txt"
+      rm -rf -- "$result_dir/${job_name}"_*
     done
-    rm -f -- "$output_dir/interface_scores.json" "$output_dir/task_finished" ;;
+    rm -f -- "$result_dir/interface_scores.json" "$output_dir/task_finished" ;;
 esac
 
 # The marker carries a digest of every job's MSA cache so the model stage
@@ -76,7 +78,7 @@ esac
 msa_digest() {
   local job_name file
   for job_name in "${job_names[@]}"; do
-    for file in "$output_dir/${job_name}.a3m" "$output_dir/${job_name}.pickle"; do
+    for file in "$result_dir/${job_name}.a3m" "$result_dir/${job_name}.pickle"; do
       if [[ -f "$file" ]]; then
         printf '%s  %s\n' "$(sha256sum "$file" | cut -d ' ' -f 1)" "$(basename "$file")"
       fi
@@ -97,11 +99,11 @@ common_args=(
 
 run_msa() {
   echo "REVODESIGN_STAGE:msa_searching"
-  "$colabfold_batch" "${common_args[@]}" --msa-only "$fasta_path" "$output_dir"
+  "$colabfold_batch" "${common_args[@]}" --msa-only "$fasta_path" "$result_dir"
   for job_name in "${job_names[@]}"; do
-    [[ -s "$output_dir/${job_name}.a3m" ]] || {
+    [[ -s "$result_dir/${job_name}.a3m" ]] || {
       echo "ColabFold produced no MSA for $job_name" >&2; exit 1; }
-    [[ -s "$output_dir/${job_name}.pickle" ]] || {
+    [[ -s "$result_dir/${job_name}.pickle" ]] || {
       echo "ColabFold produced no MSA cache for $job_name" >&2; exit 1; }
   done
   msa_digest > "$msa_marker"
@@ -129,14 +131,14 @@ model_args+=(
 if (( num_relax > 0 )); then
   model_args+=(--amber --use-gpu-relax --num-relax "$num_relax")
 fi
-"$colabfold_batch" "${model_args[@]}" "$fasta_path" "$output_dir"
+"$colabfold_batch" "${model_args[@]}" "$fasta_path" "$result_dir"
 for job_name in "${job_names[@]}"; do
-  find "$output_dir" -maxdepth 1 -type f -name "${job_name}_*.pdb" -size +0c -print -quit | grep -q . || {
+  find "$result_dir" -maxdepth 1 -type f -name "${job_name}_*.pdb" -size +0c -print -quit | grep -q . || {
     echo "ColabFold produced no structure for $job_name" >&2; exit 1; }
 done
 # Interface confidence is optional upstream: it is emitted only for complexes.
 # Flatten the per-chain-pair values for the result protocol; absence is not a
 # run failure and must not discard the predicted structures.
-python3 "$normalizer" "$output_dir"
+python3 "$normalizer" "$result_dir"
 touch "${output_dir}/task_finished"
 echo "ColabFold complete."

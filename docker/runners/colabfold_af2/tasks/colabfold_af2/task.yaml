@@ -155,7 +155,7 @@ result_workspace:
       for single-chain predictions, which have no interface.
     sources:
       data:
-      - glob: interface_scores.json
+      - glob: colabfold/interface_scores.json
         required: false
     mapping:
       fields:
@@ -183,8 +183,8 @@ workflow:
   outputs:
   - name: msa
     type: a3m_alignment
-    # The runner searches recursively; its exact output location is input-dependent.
-    path: "**/*.a3m"
+    # Every job publishes under the Runner-owned colabfold/ subtree.
+    path: "colabfold/**/*.a3m"
 - name: model
   display_name: Model and optional relax
   requires_gpu: true

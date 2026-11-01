@@ -17,7 +17,7 @@ result:
       required: true
       type: alignment
     interface_scores:
-      path: interface_scores.json
+      path: colabfold/interface_scores.json
       cardinality: one
       required: false
       type: json
