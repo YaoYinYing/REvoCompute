@@ -31,13 +31,44 @@ const STYLE = `
 
 function list(value) { return Array.isArray(value) ? value : value ? [value] : []; }
 function name(artifact) { return artifact.name || String(artifact.path || "").split("/").pop(); }
-function rank(artifact) { const match = name(artifact).match(/_rank_(\d+)_/); return match ? Number(match[1]) : null; }
-// ColabFold writes one job per FASTA record: the job prefix is the part of each
-// artifact name before its role-specific suffix, and evidence only pairs within one.
-function job(artifact) {
+// ColabFold writes one job per FASTA record. Each role has a complete,
+// end-anchored suffix, and the greedy job group keeps the longest prefix that
+// still leaves that suffix, so a FASTA header that itself contains
+// `_relaxed_rank_` or `_scores_rank_` is not mistaken for the suffix. A name
+// with no recognized suffix has no identity and is never paired.
+const STRUCTURE_FILE = /^(.*)_(unrelaxed|relaxed)_rank_(\d+)_[^/]+\.pdb$/;
+const SCORES_FILE = /^(.*)_scores_rank_(\d+)_[^/]+\.json$/;
+const ALIGNMENT_FILE = /^(.*)\.a3m$/;
+function identity(artifact) {
   const base = name(artifact);
-  const match = base.match(/^(.*?)_(?:un)?relaxed_rank_\d+_/) || base.match(/^(.*?)_scores_rank_\d+_/);
-  return match ? match[1] : base.replace(/\.a3m$/i, "");
+  const structure = base.match(STRUCTURE_FILE);
+  if (structure) return { job: structure[1], rank: Number(structure[3]), relaxed: structure[2] === "relaxed" };
+  const scores = base.match(SCORES_FILE);
+  if (scores) return { job: scores[1], rank: Number(scores[2]), relaxed: null };
+  const alignment = base.match(ALIGNMENT_FILE);
+  if (alignment) return { job: alignment[1], rank: null, relaxed: null };
+  return null;
+}
+function modelKey(parsed) { return parsed.job + "\u0000" + parsed.rank; }
+// A duplicate key means the filenames cannot identify one producer record, so
+// the evidence is dropped rather than silently overwriting another artifact.
+function uniqueModels(artifacts) {
+  const models = new Map(); const ambiguous = new Set();
+  artifacts.forEach((artifact) => {
+    const parsed = identity(artifact); if (!parsed || parsed.rank == null) return;
+    const key = modelKey(parsed); if (models.has(key)) ambiguous.add(key); else models.set(key, artifact);
+  });
+  ambiguous.forEach((key) => models.delete(key));
+  return models;
+}
+function uniqueAlignments(artifacts) {
+  const alignments = new Map(); const ambiguous = new Set();
+  artifacts.forEach((artifact) => {
+    const parsed = identity(artifact); if (!parsed) return;
+    if (alignments.has(parsed.job)) ambiguous.add(parsed.job); else alignments.set(parsed.job, artifact);
+  });
+  ambiguous.forEach((jobName) => alignments.delete(jobName));
+  return alignments;
 }
 function element(tag, className, text) { const node = document.createElement(tag); node.className = className; if (text != null) node.textContent = text; return node; }
 function section(title, note) {
@@ -66,12 +97,12 @@ function seriesWording(direction) { return direction === "higher" ? "higher is b
 function preferredStructures(artifacts) {
   const byModel = new Map();
   artifacts.forEach((artifact) => {
-    const selectedRank = rank(artifact); if (selectedRank == null) return;
-    const key = job(artifact) + "\u0000" + selectedRank;
+    const parsed = identity(artifact); if (!parsed || parsed.rank == null) return;
+    const key = modelKey(parsed);
     const current = byModel.get(key);
-    if (!current || (/_relaxed_rank_/.test(name(artifact)) && !/_relaxed_rank_/.test(name(current)))) byModel.set(key, artifact);
+    if (!current || (parsed.relaxed && !identity(current).relaxed)) byModel.set(key, artifact);
   });
-  return Array.from(byModel.values()).sort((a, b) => job(a).localeCompare(job(b)) || rank(a) - rank(b));
+  return Array.from(byModel.values()).sort((a, b) => { const left = identity(a), right = identity(b); return left.job.localeCompare(right.job) || left.rank - right.rank; });
 }
 function entityRows(a3m) {
   const first = String(a3m).split(/\r?\n/, 1)[0];
@@ -86,10 +117,9 @@ export default {
     if (!Scientific) throw new Error("Scientific result components are unavailable.");
     const services = context.services || {};
     const structures = preferredStructures(list(context.files.get("structures")));
-    const scores = list(context.files.get("scores"));
-    const alignments = new Map(list(context.files.get("alignment")).map((artifact) => [job(artifact), artifact]));
+    const alignments = uniqueAlignments(list(context.files.get("alignment")));
     const interfaceArtifact = list(context.files.get("interface_scores"))[0];
-    const scoresByModel = new Map(scores.map((artifact) => [job(artifact) + "\u0000" + rank(artifact), artifact]));
+    const scoresByModel = uniqueModels(list(context.files.get("scores")));
     const abort = new AbortController(); let generation = 0; let stageGeneration = 0; let localSeries = null; let matrix = null;
 
     const root = element("div", "colabfold-result");
@@ -154,9 +184,9 @@ export default {
       }
     }
     async function select(structure, _index, request) {
-      const current = ++generation; const selectedRank = rank(structure); const selectedJob = job(structure);
-      const scoreArtifact = scoresByModel.get(selectedJob + "\u0000" + selectedRank);
-      const alignmentArtifact = alignments.get(selectedJob);
+      const current = ++generation; const selected = identity(structure);
+      const scoreArtifact = selected && scoresByModel.get(modelKey(selected));
+      const alignmentArtifact = selected && alignments.get(selected.job);
       clearCandidate("Loading candidate confidence...");
       void showStructure(structure, request);
       if (!scoreArtifact || !scoreArtifact.ndarray_url) { clearCandidate("No bounded score record matches this ranked model."); return; }
@@ -207,8 +237,8 @@ export default {
       if (source !== matrix) matrix.setSelection(state.token - 1);
       if (localSeries && source !== localSeries) localSeries.setSelection(state.token);
     }) || (() => {});
-    const multipleJobs = new Set(structures.map(job)).size > 1;
-    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, store: context.selection, label: (item) => (multipleJobs ? job(item) + " · " : "") + "Rank " + rank(item), onSelect: select });
+    const multipleJobs = new Set(structures.map((item) => identity(item).job)).size > 1;
+    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, store: context.selection, label: (item) => { const parsed = identity(item); return (multipleJobs ? parsed.job + " · " : "") + "Rank " + parsed.rank; }, onSelect: select });
     if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No ranked model was published."));
     return { destroy() { generation += 1; stageGeneration += 1; abort.abort(); unsubscribe(); selector.destroy(); if (localSeries) localSeries.destroy(); if (matrix) matrix.destroy(); } };
   },

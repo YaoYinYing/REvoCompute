@@ -66,6 +66,49 @@ MULTI_RESPONSES = {
     "/job_b/scores/1": {"plddt": [42, 41, 40], "ptm": 0.42, "max_pae": 22.4,
                         "pae": [[9, 8, 7], [8, 9, 8], [7, 8, 9]]},
 }
+
+# Legal FASTA headers may contain the tokens ColabFold uses in its own
+# suffixes. A delimiter-first parser truncates these job names or reads the
+# rank out of the header, collapsing distinct jobs onto one identity.
+COUNTEREXAMPLE_FILES = {
+    "structures": [
+        {"id": "structures", "name": "sample_unrelaxed_rank_001_model_1_seed_000.pdb",
+         "url": "/sample/unrelaxed"},
+        {"id": "structures", "name": "sample_relaxed_rank_001_model_1_seed_000.pdb",
+         "url": "/sample/relaxed"},
+        {"id": "structures", "name": "sample_relaxed_rank_001_foo_unrelaxed_rank_001_model_1_seed_000.pdb",
+         "url": "/foo/unrelaxed"},
+        {"id": "structures", "name": "sample_relaxed_rank_001_foo_relaxed_rank_001_model_1_seed_000.pdb",
+         "url": "/foo/relaxed"},
+        {"id": "structures", "name": "sample_scores_rank_007_bar_unrelaxed_rank_001_model_1_seed_000.pdb",
+         "url": "/bar/unrelaxed"},
+    ],
+    "scores": [
+        {"id": "scores", "name": "sample_scores_rank_001_model_1_seed_000.json", "url": "/sample/scores/1",
+         "ndarray_url": "/sample/arrays/1"},
+        {"id": "scores", "name": "sample_relaxed_rank_001_foo_scores_rank_001_model_1_seed_000.json",
+         "url": "/foo/scores/1", "ndarray_url": "/foo/arrays/1"},
+        {"id": "scores", "name": "sample_scores_rank_007_bar_scores_rank_001_model_1_seed_000.json",
+         "url": "/bar/scores/1", "ndarray_url": "/bar/arrays/1"},
+    ],
+    "alignment": [
+        {"id": "alignment", "name": "sample.a3m", "url": "/sample/alignment"},
+        {"id": "alignment", "name": "sample_relaxed_rank_001_foo.a3m", "url": "/foo/alignment"},
+        {"id": "alignment", "name": "sample_scores_rank_007_bar.a3m", "url": "/bar/alignment"},
+    ],
+}
+
+COUNTEREXAMPLE_RESPONSES = {
+    "/sample/alignment": "#2,1\t1\n>sample\nACD\n",
+    "/foo/alignment": "#3,1\t1\n>sample_relaxed_rank_001_foo\nACDEF\n",
+    "/bar/alignment": "#4,1\t1\n>sample_scores_rank_007_bar\nGHIK\n",
+    "/sample/scores/1": {"plddt": [91, 90, 89], "ptm": 0.91, "max_pae": 5.1,
+                         "pae": [[1, 2, 3], [2, 1, 2], [3, 2, 1]]},
+    "/foo/scores/1": {"plddt": [42, 41, 40], "ptm": 0.42, "max_pae": 22.4,
+                      "pae": [[9, 8, 7], [8, 9, 8], [7, 8, 9]]},
+    "/bar/scores/1": {"plddt": [73, 72, 71], "ptm": 0.73, "max_pae": 11.2,
+                      "pae": [[5, 4, 3], [4, 5, 4], [3, 4, 5]]},
+}
 # The declared views the storyboard reads its vocabulary from, transcribed from
 # task.yaml: the pLDDT series, the PAE matrix, and both scalar summaries.
 VIEWS = [
@@ -208,6 +251,49 @@ def test_colabfold_storyboard_pairs_each_job_with_its_own_scores_and_alignment(p
     expect(page.locator(".msa-block")).not_to_contain_text(">job_a")
     expect(page.locator(".entity-result-table tbody tr td").nth(1)).to_have_text("4")
     assert page.evaluate("window.__colabfold.opened") == ["/job_a/structure/1", "/job_b/structure/1"]
+
+
+def _expect_job_evidence(page: Page, *, ptm: str, pae: str, alignment: str, length: str) -> None:
+    expect(page.locator(".scalar-grid")).to_contain_text(f"pTM{ptm} score")
+    expect(page.locator(".matrix-readout")).to_contain_text(pae)
+    expect(page.locator(".msa-header")).to_have_text([alignment])
+    expect(page.locator(".entity-result-table tbody tr td").nth(1)).to_have_text(length)
+
+
+def test_colabfold_storyboard_parses_end_anchored_suffixes_not_header_tokens(page: Page) -> None:
+    _mount(page, files=COUNTEREXAMPLE_FILES, responses=COUNTEREXAMPLE_RESPONSES)
+
+    candidates = page.locator(".colabfold-candidates > .candidate-open")
+    expect(candidates).to_have_count(3)
+    # The job name is the longest prefix that still leaves the real, end-anchored
+    # suffix, even when it contains `_relaxed_rank_` or `_scores_rank_`.
+    expect(candidates.nth(0)).to_have_text("sample · Rank 1")
+    expect(candidates.nth(1)).to_have_text("sample_relaxed_rank_001_foo · Rank 1")
+    expect(candidates.nth(2)).to_have_text("sample_scores_rank_007_bar · Rank 1")
+
+    # Relaxed preference follows the true suffix, not relaxation-looking header text.
+    assert page.evaluate("window.__colabfold.opened") == ["/sample/relaxed"]
+    expect(page.locator(".colabfold-stage-label")).to_have_text("sample_relaxed_rank_001_model_1_seed_000.pdb")
+    _expect_job_evidence(page, ptm="0.91", pae="1.0 Å", alignment=">sample", length="2")
+
+    candidates.nth(1).click()
+    expect(candidates.nth(1)).to_have_attribute("aria-current", "true")
+    assert page.evaluate("window.__colabfold.opened") == ["/sample/relaxed", "/foo/relaxed"]
+    expect(page.locator(".colabfold-stage-label")).to_have_text(
+        "sample_relaxed_rank_001_foo_relaxed_rank_001_model_1_seed_000.pdb"
+    )
+    _expect_job_evidence(page, ptm="0.42", pae="9.0 Å", alignment=">sample_relaxed_rank_001_foo", length="3")
+    expect(page.locator(".scalar-grid")).not_to_contain_text("pTM0.91")
+
+    candidates.nth(2).click()
+    assert page.evaluate("window.__colabfold.opened") == [
+        "/sample/relaxed", "/foo/relaxed", "/bar/unrelaxed"
+    ]
+    expect(page.locator(".colabfold-stage-label")).to_have_text(
+        "sample_scores_rank_007_bar_unrelaxed_rank_001_model_1_seed_000.pdb"
+    )
+    _expect_job_evidence(page, ptm="0.73", pae="5.0 Å", alignment=">sample_scores_rank_007_bar", length="4")
+    expect(page.locator(".scalar-grid")).not_to_contain_text("pTM0.42")
 
 
 def test_colabfold_storyboard_opens_the_preferred_relaxed_structure(page: Page) -> None:
