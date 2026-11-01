@@ -552,6 +552,66 @@ def test_colabfold_multirecord_result_contract_accepts_one_alignment_per_job(tmp
     ]
 
 
+PREFIX_COLLISION_FASTA = (
+    ">query\nGSHMASMTGGQQMGRDLYDD\n"
+    ">query_other\nMKTAYIAKQRQISFVKSHFS\n"
+)
+
+
+def test_colabfold_model_stage_preserves_a_sibling_record_sharing_the_job_prefix(tmp_path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    input_file.write_text(PREFIX_COLLISION_FASTA, encoding="utf-8")
+    env["FAKE_INTERFACE_SCORES"] = "yes"
+    result = _result_dir(output_dir)
+
+    features = _run_stage(env, input_file, output_dir, "features")
+    assert features.returncode == 0, features.stderr
+    features_before = {
+        name: (result / name).read_bytes()
+        for name in ("query.a3m", "query.pickle", "query_other.a3m", "query_other.pickle")
+    }
+
+    model = _run_stage(env, input_file, output_dir, "model")
+
+    assert model.returncode == 0, model.stderr
+    for name, content in features_before.items():
+        assert (result / name).read_bytes() == content
+    for job in ("query", "query_other"):
+        assert (result / f"{job}_unrelaxed_rank_001_model_1.pdb").read_text(encoding="utf-8") == "FRESH\n"
+        assert (result / f"{job}_scores_rank_001_model_1.json").is_file()
+    assert (output_dir / "task_finished").is_file()
+
+    # A retry clears every job's stale model outputs but not the features.
+    for job in ("query", "query_other"):
+        (result / f"{job}_unrelaxed_rank_001_model_1.pdb").write_text("STALE\n", encoding="utf-8")
+    rerun = _run_stage(env, input_file, output_dir, "model")
+
+    assert rerun.returncode == 0, rerun.stderr
+    for job in ("query", "query_other"):
+        assert (result / f"{job}_unrelaxed_rank_001_model_1.pdb").read_text(encoding="utf-8") == "FRESH\n"
+    for name, content in features_before.items():
+        assert (result / name).read_bytes() == content
+    assert _calls(env) == ["features", "model", "model"]
+
+
+def test_colabfold_model_structure_check_is_not_masked_by_a_prefix_sibling(tmp_path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    input_file.write_text(PREFIX_COLLISION_FASTA, encoding="utf-8")
+    assert _run_stage(env, input_file, output_dir, "features").returncode == 0
+    env["FAKE_NO_JOB"] = "query"
+
+    model = _run_stage(env, input_file, output_dir, "model")
+
+    assert model.returncode != 0
+    assert "produced no structure for query" in model.stderr
+    result = _result_dir(output_dir)
+    assert (result / "query_other_unrelaxed_rank_001_model_1.pdb").is_file()
+    assert (result / "query.a3m").is_file()
+    assert (result / "query_other.a3m").is_file()
+    assert (result / "query_other.pickle").is_file()
+    assert not (output_dir / "task_finished").exists()
+
+
 def test_colabfold_stages_leave_a_sibling_producers_files_untouched(tmp_path):
     env, input_file, output_dir = _retry_env(tmp_path)
     result = _result_dir(output_dir)
