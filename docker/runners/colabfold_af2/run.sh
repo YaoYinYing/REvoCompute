@@ -53,6 +53,41 @@ if (( ${#job_names[@]} == 0 )); then
   job_names=("${job_name%.*}")
 fi
 
+# A ranked structure or score file carries its job as a greedy prefix followed
+# by a complete role suffix. Role-anchored suffixes alone are not enough: the
+# suffix token can itself be the beginning of another legal sanitized job name
+# (for example "query_scores_rank_foo"), and that sibling's files must not be
+# mistaken for this job's. Ownership therefore comes from the end-anchored
+# identity parse compared to the exact job. Usage: colabfold_ranked_files
+# <job> delete|present.
+colabfold_ranked_files() {
+  python3 - "$result_dir" "$1" "$2" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+result_dir, job, action = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+structure = re.compile(r"^(.*)_(unrelaxed|relaxed)_rank_\d+_[^/]+\.pdb$")
+scores = re.compile(r"^(.*)_scores_rank_\d+_[^/]+\.json$")
+patterns = (structure, scores) if action == "delete" else (structure,)
+if not result_dir.is_dir():
+    sys.exit(0)
+for path in result_dir.iterdir():
+    if not path.is_file():
+        continue
+    for pattern in patterns:
+        match = pattern.match(path.name)
+        if not match or match.group(1) != job:
+            continue
+        if action == "delete":
+            path.unlink()
+            break
+        if path.stat().st_size > 0:
+            print(path.name)
+            break
+PY
+}
+
 # Each attempt clears the outputs of the stages it runs before any preflight
 # check, because this Runner cannot bind the runtime image: a failed attempt
 # must not leave an earlier attempt's tree publishable under this one. Upstream
@@ -66,18 +101,13 @@ case "$run_stage" in
     mkdir -p "$result_dir"
     rm -f -- "$output_dir/task_finished" ;;
   model)
-    # Role-anchored suffixes only: <job>_* would also match a sibling record
-    # whose prefix starts with this job name (for example <job>_other), and
-    # deleting its a3m/pickle would break the handoff digest.
     for job_name in "${job_names[@]}"; do
       rm -f -- "$result_dir/${job_name}.done.txt" \
         "$result_dir/${job_name}_predicted_aligned_error_v1.json" \
         "$result_dir/${job_name}_coverage.png" "$result_dir/${job_name}_pae.png" \
         "$result_dir/${job_name}_plddt.png" "$result_dir/${job_name}_ext_metrics.png" \
         "$result_dir/${job_name}_template_domain_names.json"
-      rm -f -- "$result_dir/${job_name}_unrelaxed_rank_"*.pdb \
-        "$result_dir/${job_name}_relaxed_rank_"*.pdb \
-        "$result_dir/${job_name}_scores_rank_"*.json
+      colabfold_ranked_files "$job_name" delete
     done
     rm -f -- "$result_dir/interface_scores.json" "$output_dir/task_finished" ;;
 esac
@@ -142,9 +172,7 @@ if (( num_relax > 0 )); then
 fi
 "$colabfold_batch" "${model_args[@]}" "$fasta_path" "$result_dir"
 for job_name in "${job_names[@]}"; do
-  find "$result_dir" -maxdepth 1 -type f \
-    \( -name "${job_name}_unrelaxed_rank_*.pdb" -o -name "${job_name}_relaxed_rank_*.pdb" \) \
-    -size +0c -print -quit | grep -q . || {
+  [[ -n "$(colabfold_ranked_files "$job_name" present)" ]] || {
     echo "ColabFold produced no structure for $job_name" >&2; exit 1; }
 done
 # Interface confidence is optional upstream: it is emitted only for complexes.

@@ -612,6 +612,88 @@ def test_colabfold_model_structure_check_is_not_masked_by_a_prefix_sibling(tmp_p
     assert not (output_dir / "task_finished").exists()
 
 
+RANKED_PREFIX_SIBLINGS = (
+    "query_unrelaxed_rank_001_foo",
+    "query_relaxed_rank_001_foo",
+    "query_scores_rank_foo",
+)
+
+
+def _feature_bytes(result: Path, jobs: tuple[str, ...]) -> dict[str, bytes]:
+    return {
+        name: (result / name).read_bytes()
+        for job in jobs
+        for name in (f"{job}.a3m", f"{job}.pickle")
+    }
+
+
+@pytest.mark.parametrize("sibling", RANKED_PREFIX_SIBLINGS)
+def test_colabfold_model_stage_owns_only_the_exact_job_identity(tmp_path, sibling):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    input_file.write_text(
+        f">query\nGSHMASMTGGQQMGRDLYDD\n>{sibling}\nMKTAYIAKQRQISFVKSHFS\n", encoding="utf-8"
+    )
+    env["FAKE_INTERFACE_SCORES"] = "yes"
+    result = _result_dir(output_dir)
+    assert _run_stage(env, input_file, output_dir, "features").returncode == 0
+    features_before = _feature_bytes(result, ("query", sibling))
+
+    model = _run_stage(env, input_file, output_dir, "model")
+
+    assert model.returncode == 0, model.stderr
+    assert _feature_bytes(result, ("query", sibling)) == features_before
+    for job in ("query", sibling):
+        assert (result / f"{job}_unrelaxed_rank_001_model_1.pdb").read_text(encoding="utf-8") == "FRESH\n"
+        assert (result / f"{job}_scores_rank_001_model_1.json").is_file()
+    assert (output_dir / "task_finished").is_file()
+
+    # A retry clears both jobs' stale model outputs, never the features.
+    for job in ("query", sibling):
+        (result / f"{job}_unrelaxed_rank_001_model_1.pdb").write_text("STALE\n", encoding="utf-8")
+    rerun = _run_stage(env, input_file, output_dir, "model")
+
+    assert rerun.returncode == 0, rerun.stderr
+    assert _feature_bytes(result, ("query", sibling)) == features_before
+    for job in ("query", sibling):
+        assert (result / f"{job}_unrelaxed_rank_001_model_1.pdb").read_text(encoding="utf-8") == "FRESH\n"
+    assert _calls(env) == ["features", "model", "model"]
+
+    # The sibling's published structure must not satisfy this job's gate.
+    env["FAKE_NO_JOB"] = "query"
+    failed = _run_stage(env, input_file, output_dir, "model")
+
+    assert failed.returncode != 0
+    assert "produced no structure for query" in failed.stderr
+    assert (result / f"{sibling}_unrelaxed_rank_001_model_1.pdb").is_file()
+    assert _feature_bytes(result, ("query", sibling)) == features_before
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_colabfold_model_clear_owns_only_the_exact_job(tmp_path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    env["FAKE_INTERFACE_SCORES"] = "yes"
+    result = _result_dir(output_dir)
+    assert _run_stage(env, input_file, output_dir, "features").returncode == 0
+    (result / "query_unrelaxed_rank_001_model_1.pdb").write_text("STALE\n", encoding="utf-8")
+    (result / "query_scores_rank_001_model_1.json").write_text("STALE\n", encoding="utf-8")
+    # An external producer's files whose names only look like this job's prefix;
+    # their end-anchored identity parses to a different job, so query owns none.
+    sibling_pdb = result / "query_unrelaxed_rank_001_foo_relaxed_rank_002_model_1.pdb"
+    sibling_scores = result / "query_scores_rank_001_foo_scores_rank_002_model_1.json"
+    sibling_pdb.write_text("SIBLING\n", encoding="utf-8")
+    sibling_scores.write_text('{"ipsae": {"A-B": 0.1}}\n', encoding="utf-8")
+
+    model = _run_stage(env, input_file, output_dir, "model")
+
+    assert model.returncode == 0, model.stderr
+    assert (result / "query_unrelaxed_rank_001_model_1.pdb").read_text(encoding="utf-8") == "FRESH\n"
+    assert (result / "query_scores_rank_001_model_1.json").read_text(encoding="utf-8") != "STALE\n"
+    assert sibling_pdb.read_text(encoding="utf-8") == "SIBLING\n"
+    assert sibling_scores.read_text(encoding="utf-8") == '{"ipsae": {"A-B": 0.1}}\n'
+    assert (result / "query.a3m").is_file()
+    assert (result / "query.pickle").is_file()
+
+
 def test_colabfold_stages_leave_a_sibling_producers_files_untouched(tmp_path):
     env, input_file, output_dir = _retry_env(tmp_path)
     result = _result_dir(output_dir)
