@@ -243,18 +243,21 @@ Rules the code enforces:
 - The stage container binds that directory read-only and receives
   `TASK_STAGE_INPUTS`; a Runner re-hashes the artifact before use. Single-stage
   Tasks and `graph:` role inputs are unchanged. An adapter that resolves its role
-  from that document consumes only the verified copy (both GREMLIN families do);
-  an adapter that still reads the producer's published files from the task output
-  tree keeps its own integrity check, and the AF3 model stage is the present
-  example. Server admission is identical for both.
+  from that document consumes only the verified copy (both GREMLIN families do).
+  An adapter that still reads the producer's published files from the shared
+  output tree does not consume the staged copy and must authenticate the tree it
+  reads: the AF2 and AF3 model stages require the features digest their own
+  features stage wrote, and the ColabFold model stage requires the digest of this
+  attempt's a3m/pickle cache. Server admission is identical for both channels.
 - A missing, changed, or unverifiable producer artifact refuses the stage before
   any attempt or allocation (`stage_input_unavailable`, `stage_input_invalid`).
   The identity describes the whole artifact: a file it names that no declared
   port publishes any more refuses the stage instead of narrowing what the
   consumer is handed. The Task output tree stays mounted for every stage, so
   this is not a confinement boundary: the copy the role resolves is the
-  verified one, and integrity rests on the Runner resolving that role from the
-  document rather than on mount isolation.
+  verified one, and integrity rests on the Runner either resolving that role
+  from the document or authenticating the tree output it reads, never on mount
+  isolation.
 - The live-test harness enables and mounts every family a composed Task's graph
   names, so one isolated invocation exercises a stage that runs in a companion
   family instead of recording its case as omitted.
@@ -277,9 +280,9 @@ Rules the code enforces:
   window is an open limitation until an execution holds immutable bytes. A
   Runner therefore keeps the published bytes attributable to its attempt by
   deleting or rewriting every declared output rather than reusing what it finds.
-  The GREMLIN PSSM and AlphaFold 3 runners delete theirs first, and the
-  GREMLIN-LH fit rewrites each one; caching inside an upstream tool's own image
-  is outside this contract. The composed live acceptance runs CPU cases with
+  The GREMLIN PSSM, AlphaFold 2, ColabFold and AlphaFold 3 runners delete theirs
+  first, and the GREMLIN-LH fit rewrites each one; caching inside an upstream
+  tool's own image is outside this contract. The composed live acceptance runs CPU cases with
   accounting disabled, so it exercises the artifact handoff and submission
   admission, not the allocation-time readiness gate, which each family's own
   acceptance covers.
