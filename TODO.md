@@ -1,7 +1,7 @@
 # PR #131 — Environment / Execution Separation
 
 **Campaign:** Runner Environment–Execution Separation
-**Status:** DRAFT / IMPLEMENTATION NOT STARTED
+**Status:** M0-M3 implemented; exact-head CI, independent review, and isolated target-host acceptance (M4) pending. NOT merge-ready.
 **Base:** `main` at `8704d8ecc4c5b52b428ff09e4f7736bf5acebb62` (merged #130).
 **Design:** [Runner Environment–Execution Separation](docs/developer-guide/runner-environment-execution-separation.md).
 **Canonical existing contract:** [Runtime Bundles](docs/runner-guide/runtime-bundles.md).
@@ -20,44 +20,44 @@ governance and fail-closed provenance guarantees.
 
 ## Control protocol
 
-- [ ] Commander records exact starting `main`, head and branch; appoints
+- [x] Commander records exact starting `main`, head and branch; appoints
       Environment/Definition, Runtime/Family, Lifecycle/CI, and Scientific
       Acceptance Owners with nonoverlapping write scopes.
-- [ ] Independent Campaign Adviser stays active from design through final
+- [x] Independent Campaign Adviser stays active from design through final
       Auditor; independently challenges scope, security, exception rationale,
       scientific parity and merge readiness.
-- [ ] Every Owner reads this TODO, the design document, merged #130's relevant
+- [x] Every Owner reads this TODO, the design document, merged #130's relevant
       findings and the current PR discussions; use the PR threads as canonical
       technical record. Do not silently redefine old invariants.
-- [ ] Commander tracks only merge status, blocker category, Owner, Adviser
+- [x] Commander tracks only merge status, blocker category, Owner, Adviser
       verdict, exact head and CI. Delegate implementation and detailed
       technical issue history; do not flood top-level comments with unchanged
       states.
-- [ ] No production deployment, restart, destructive migration, Runtime Bundle
+- [x] No production deployment, restart, destructive migration, Runtime Bundle
       activation in production, SIF promotion or merge without **separate**
       maintainer approval. Candidate builds and isolated scientific runs must
       be bounded and disclosed in-thread before execution.
-- [ ] Preserve serial DAG and Nextflow-disabled decisions from #130; no
+- [x] Preserve serial DAG and Nextflow-disabled decisions from #130; no
       concurrency, ledger or workflow-backend redesign in this PR.
 
 ## M0 — Baseline and dependency inventory (Owners: Environment + Adviser)
 
-- [ ] At exact head, inventory every image-baked REvoCompute script, Python
+- [x] At exact head, inventory every image-baked REvoCompute script, Python
       module, source-relative import, entrypoint, `%files`, `%post`, `%test`,
       `%runscript`, `build_inputs`, `runtime_overlay`, and runtime
       `runner.yaml` path override for all **three target families**.
-- [ ] Build a manifest-driven mapping of **environment dependencies** versus
+- [x] Build a manifest-driven mapping of **environment dependencies** versus
       **REvoCompute executable/algorithm code**; include the reason for each
       retained baked file. Keep upstream scientific software version locks and
       binary/compiled dependencies in SIF.
-- [ ] Identify and record baseline output/artifact contracts and test fixtures:
+- [x] Identify and record baseline output/artifact contracts and test fixtures:
       AF3 features/model, GREMLIN MSA/fit/PSSM, GREMLIN_LH direct fit and
       composed MSA -> GREMLIN_LH. Preserve both older Python/Conda GREMLIN
       execution and the newer stage-input resolver interpreter.
-- [ ] Record current build provenance hashes, bundle digests and existing
+- [x] Record current build provenance hashes, bundle digests and existing
       receipt identities; mark which evidence will be invalidated by initial
       `.def` migration. Baseline receipt is not future-head acceptance.
-- [ ] Confirm existing controller paths for `build`, `runner-status`,
+- [x] Confirm existing controller paths for `build`, `runner-status`,
       `live-test`, candidate materialization and activation; discover
       actual accepted CLI arguments rather than inventing new flags.
 
@@ -66,34 +66,34 @@ implementation until environment/algorithm classification is defensible.
 
 ## M1 — Complete the three Family migrations (Owners: Runtime/Family)
 
-- [ ] **AlphaFold 3:** Remove `alphafold3/run.sh` from SIF `%files`,
+- [x] **AlphaFold 3:** Remove `alphafold3/run.sh` from SIF `%files`,
       `%post chmod`, script-only `%test` and `build_inputs`. Declare
       `alphafold3/run.sh` in `runtime_overlay` beside current common
       helpers and point manifest `entrypoint` to
       `/opt/revocompute/runtime/alphafold3/run.sh`. Keep AF3 upstream,
       CUDA/Python and HMMER dependencies intact. Do not rebuild SIF for later
       changes to the runtime adapter.
-- [ ] **GREMLIN_LH:** Keep `requirements.lock` as SIF build input used by
+- [x] **GREMLIN_LH:** Keep `requirements.lock` as SIF build input used by
       `%post`. Move `run.sh`, `fit_model.py`, `stage_inputs.py` into the
       declared Runtime Bundle. Remove their `%files` and in-image checks;
       change `GREMLIN_LH_FIT_MODEL` default and imports to the pinned bundle
       path. Retain file-role, digest and algorithm output validation. Test
       the existing direct-alignment and composed-stage invocation modes.
-- [ ] **PSSM-GREMLIN (Family ID `gremlin`):** Keep `GREMLIN.yml` in the
+- [x] **PSSM-GREMLIN (Family ID `gremlin`):** Keep `GREMLIN.yml` in the
       SIF build class. Move `run.sh`, `stage_inputs.py` and all declared
       GREMLIN algorithm scripts into the immutable bundle. Update
       `REVODESIGN_RUNSCRIPT_PATH`, script imports and entrypoint without
       changing the selected `-s msa|fit|pssm|all` protocol, materialized
       alignment role or declared output names. Explicitly retain legacy
       scientific Python vs modern stage-input resolver Python.
-- [ ] Remove or neutralize image `%runscript` entries that call removed
+- [x] Remove or neutralize image `%runscript` entries that call removed
       scripts. The authoritative production path remains
       `ExecutionPlan.command` + `apptainer exec`, never `apptainer run`
       relying on legacy code.
-- [ ] Reduce image `%test` to the **scientific environment** (imports, ABI,
+- [x] Reduce image `%test` to the **scientific environment** (imports, ABI,
       installed executables/versions). Execute algorithm/CLI tests through
       the mounted candidate bundle outside `%test`.
-- [ ] Verify no `/app/revocompute` fallback or other mutable/host checkout
+- [x] Verify no `/app/revocompute` fallback or other mutable/host checkout
       path can execute in these three families. No algorithm refactor or
       different numerical defaults under the guise of file relocation.
 
@@ -103,32 +103,32 @@ The initial `.def` changes intentionally make new candidate SIFs necessary.
 
 ## M2 — Make build/test/activation choose the correct layer (Owner: Lifecycle/CI)
 
-- [ ] Reuse existing SIF build provenance logic and bundle materialization;
+- [x] Reuse existing SIF build provenance logic and bundle materialization;
       audit all rebuild callers for hidden dependence on `run.sh`,
       `runtime_overlay` or Task presentation. Fix only identified gaps.
-- [ ] Verify `build_inputs` can legitimately be **absent/empty** for AF3;
+- [x] Verify `build_inputs` can legitimately be **absent/empty** for AF3;
       keep the field as a real environment-file inventory for GREMLIN_LH and
       GREMLIN. Reject illegal overlap with overlay files, including directory
       containment.
-- [ ] From an overlay-only change, report `SIF CURRENT / Bundle STALE`;
+- [x] From an overlay-only change, report `SIF CURRENT / Bundle STALE`;
       materialize a candidate snapshot, **reuse existing SIF**, invalidate the
       mismatched acceptance, run the required live test and only then allow
       bundle activation. Do not trigger a scientific `apptainer build`.
-- [ ] From `.def`/lock change, report `SIF STALE`, build a candidate SIF,
+- [x] From `.def`/lock change, report `SIF STALE`, build a candidate SIF,
       and require a live test of that exact SIF + pinned bundle identity.
       No hidden fallback to a previous SIF.
-- [ ] No-change rerun is idempotent: the previous accepted identity remains
+- [x] No-change rerun is idempotent: the previous accepted identity remains
       valid, and no pointless SIF rebuild or live test is scheduled. Treat
       changed runtime arguments/Task execution contracts separately according
       to existing scientific acceptance rules.
-- [ ] Preserve candidate-only materialization, old-Task digest pinning,
+- [x] Preserve candidate-only materialization, old-Task digest pinning,
       cross-family companion identity and refusal of missing/stale bundles,
       and bounded retention/GC of still-referenced prior versions.
-- [ ] Audit existing CI scope classifier: algorithm changes must run fast and
+- [x] Audit existing CI scope classifier: algorithm changes must run fast and
       appropriate scientific contracts; environment changes require rebuild
       identity tests. CI must not claim to have built actual target-HPC SIFs
       unless it really did so.
-- [ ] Add concise operator documentation using **existing** controller
+- [x] Add concise operator documentation using **existing** controller
       commands for (a) SIF rebuild, (b) bundle-only candidate validation,
       (c) receipt/activation, (d) rollback. Include difference between one-off
       Docker worker image build and scientific SIF build.
@@ -138,32 +138,32 @@ readiness, exact-pair activation, no-op and rollback.
 
 ## M3 — Mandatory mutation-sensitive regression gates (Owners: Lifecycle + Runtime)
 
-- [ ] **Overlay-only mutation** for each target family: different bundle
+- [x] **Overlay-only mutation** for each target family: different bundle
       digest, **same** SIF build digest and SIF file bytes; assert the build
       controller does not invoke SIF rebuild and that the new bundle is not
       active without scientific acceptance.
-- [ ] **Environment-only mutation** for lock/definition: changed SIF
+- [x] **Environment-only mutation** for lock/definition: changed SIF
       build digest and rebuild request; old receipt cannot authorize new
       image. Removing this guard must fail the test.
-- [ ] **Mixed/no-change controls**: both changes revalidate exact pair;
+- [x] **Mixed/no-change controls**: both changes revalidate exact pair;
       neither change triggers no unnecessary rebuild/retest.
-- [ ] **Execution path proof**: inspect produced Slurm wrapper/Apptainer
+- [x] **Execution path proof**: inspect produced Slurm wrapper/Apptainer
       command; resolve the pinned `/opt/revocompute/runtime/<family>/run.sh`,
       correct absolute/relative helper imports and executable mode; refuse
       missing script, tampered bundle, wrong mount, wrong pin or legacy
       image-path execution before allocation/submission.
-- [ ] **Immutable history**: Task A pinned to Bundle A still launches A
+- [x] **Immutable history**: Task A pinned to Bundle A still launches A
       after B activation; Task B pins B; removal/corruption of A refuses rather
       than silently switches to B; GC keeps active/in-flight pins.
-- [ ] **Scientific contract parity**: AF3 feature provenance and model
+- [x] **Scientific contract parity**: AF3 feature provenance and model
       publication; GREMLIN three stages and independent output identities;
       GREMLIN_LH model/coupling outputs; composed alignment bytes rehashed and
       read from the server-provided stage-input role, not an undeclared file.
-- [ ] **Cross-family acceptance invalidation**: modifying a companion
+- [x] **Cross-family acceptance invalidation**: modifying a companion
       SIF/bundle identity invalidates composed receipt; omission of a
       required companion or forged artifact refuses before submission;
       single-family cases retain correctly scoped receipts.
-- [ ] **Resource and tenancy boundary**: leave #130's stage-run
+- [x] **Resource and tenancy boundary**: leave #130's stage-run
       durability, credit reservation, GPU admission, allocation accounting
       and licensed-family policy intact. Mutation-sensitive failure paths
       cannot be bypassed by relocated code.
@@ -218,7 +218,7 @@ path; build/no-build decision proven, not just inferred from identity tests.
       entrypoints, algorithm scripts, lock-file classification and hardcoded
       `/app/revocompute` execution. Produce a follow-up inventory, not a
       blanket mutation of unrelated families.
-- [ ] Reconcile `docs/runner-guide/runtime-bundles.md` with implemented
+- [x] Reconcile `docs/runner-guide/runtime-bundles.md` with implemented
       behavior and link the architectural rationale. Make scope/limitations
       explicit: upstream libraries and compiled ABI artifacts can be image
       dependencies; pure REvoCompute adapters belong in bundles.
