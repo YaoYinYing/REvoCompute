@@ -579,6 +579,39 @@ class RunnerLiveTestWorker:
             return self.artifact
         return _selected_artifact(family)
 
+    def _runtime_bundle_pins(self, task_type: str) -> dict[str, str | None]:
+        """The exact family -> digest pair this case's graph will execute.
+
+        A family selected in this pass executes its candidate snapshot; a
+        companion that is not selected keeps the published binding a production
+        submission would pin.  An overlay family with no resolvable binding
+        refuses here, before the request exists, rather than silently running a
+        published companion the case's receipt does not name.
+        """
+        from revocompute import runtime_bundle
+        from revocompute.runner_bundles import runner_bundle_root
+
+        store_root = runner_bundle_root(self.state)
+        index = runtime_bundle.load_index(store_root)
+        pins: dict[str, str | None] = {}
+        for family in self._graph_families(task_type):
+            candidate = self._candidate_bundles.get(family.name)
+            try:
+                pins[family.name] = runtime_bundle.resolve_for_submission(
+                    store_root,
+                    index,
+                    family.name,
+                    declares_overlay=bool(family.runtime_overlay),
+                    digest=candidate,
+                )
+            except runtime_bundle.RuntimeBundleError as exc:
+                source = "candidate" if candidate is not None else "published"
+                raise LiveTestConfigurationError(
+                    f"Live test {task_type!r} cannot pin the {source} runtime bundle for "
+                    f"{family.name!r}: {exc}"
+                ) from exc
+        return pins
+
     def _run_case(
         self,
         case,
@@ -606,7 +639,17 @@ class RunnerLiveTestWorker:
             )
         except LiveTestConfigurationError as exc:
             raise RunnerLiveTestError("TEST_CONFIGURATION_FAILURE", str(exc)) from exc
-        atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": str(self.artifact.resolve()), "artifact_sha256": sha256_file(self.artifact), "runtime_bundle_sha256": self._candidate_bundle})
+        # The pin map is frozen before submission and travels into the snapshot,
+        # so the executed pair, the composed record, and the activated digest
+        # are one identity.
+        runtime_bundles = self._runtime_bundle_pins(case.task)
+        for record in composed:
+            name = str(record["family"])
+            if runtime_bundles.get(name) != record.get("runtime_bundle_sha256"):
+                raise LiveTestConfigurationError(
+                    f"Composed stage runtime bundle for {name!r} changed while the case was being submitted"
+                )
+        atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": str(self.artifact.resolve()), "artifact_sha256": sha256_file(self.artifact), "runtime_bundle_sha256": self._candidate_bundle, "runtime_bundles": runtime_bundles})
         request_path.chmod(0o444)
         self._transition(report, "SUBMITTED")
         self._transition(report, "RUNNING")

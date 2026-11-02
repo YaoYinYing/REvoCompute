@@ -111,7 +111,12 @@ def test_workflow_live_task_form_carries_a_dispatchable_frozen_graph(tmp_path):
     assert frozen["digest"] == graph["digest"]
 
 
-def test_composed_live_test_pins_every_referenced_family(monkeypatch, tmp_path):
+def test_composed_live_test_pins_each_graph_family_from_the_requested_map(monkeypatch, tmp_path):
+    """Every graph family - not only the owner - executes the requested digest.
+
+    A companion selected in the same pass must run its candidate, never the
+    published binding that a receipt could not have covered.
+    """
     from dataclasses import replace
 
     from revocompute import runtime_bundle
@@ -136,25 +141,48 @@ def test_composed_live_test_pins_every_referenced_family(monkeypatch, tmp_path):
     }
     runtime_bundle.write_index(store, published)
     for relative in base.runtime.runtime_overlay:
-        (runner_root / relative).write_text("candidate", encoding="utf-8")
-    candidate = runtime_bundle.materialize(runner_root, base.runtime.runtime_overlay, store)[0]
-    assert candidate != published[base.runtime.name]
+        (runner_root / relative).write_text("owner candidate", encoding="utf-8")
+    owner_candidate = runtime_bundle.materialize(runner_root, base.runtime.runtime_overlay, store)[0]
+    for relative in foreign_runtime.runtime_overlay:
+        (runner_root / relative).write_text("companion candidate", encoding="utf-8")
+    companion_candidate = runtime_bundle.materialize(runner_root, foreign_runtime.runtime_overlay, store)[0]
+    assert {owner_candidate, companion_candidate}.isdisjoint(published.values())
     monkeypatch.setattr(
         live_test_executor.task_runtime,
         "CONFIG",
         replace(live_test_executor.task_runtime.CONFIG, runtime_bundle_root=str(store)),
     )
 
-    pins = live_test_executor._pinned_runtime_bundles(composed, candidate)
+    requested = {base.runtime.name: owner_candidate, foreign_runtime.name: companion_candidate}
+    assert live_test_executor._pinned_runtime_bundles(composed, requested) == requested
 
-    assert pins == {
-        base.runtime.name: candidate,
-        foreign_runtime.name: published[foreign_runtime.name],
-    }
+    # An unselected companion keeps the published binding.
+    unselected = {base.runtime.name: owner_candidate, foreign_runtime.name: published[foreign_runtime.name]}
+    assert live_test_executor._pinned_runtime_bundles(composed, unselected) == unselected
 
-    runtime_bundle.write_index(store, {base.runtime.name: published[base.runtime.name]})
+    # An absent overlay companion pin refuses; it never resolves the published one.
+    with pytest.raises(ValueError, match="does not pin the runtime bundle"):
+        live_test_executor._pinned_runtime_bundles(composed, {base.runtime.name: owner_candidate})
+
+    # A named candidate whose snapshot is missing refuses; it never falls back.
     with pytest.raises(ValueError, match="runtime bundle is unavailable"):
-        live_test_executor._pinned_runtime_bundles(composed, candidate)
+        live_test_executor._pinned_runtime_bundles(
+            composed,
+            {base.runtime.name: owner_candidate, foreign_runtime.name: "sha256:" + "0" * 64},
+        )
+
+    # A key the graph does not run is refused.
+    with pytest.raises(ValueError, match="does not run"):
+        live_test_executor._pinned_runtime_bundles(composed, {**requested, "unknown": None})
+
+    # The snapshot and manifest pin exactly the requested map.
+    manifest = live_test_executor._live_task_manifest(
+        "a" * 32, "composed", composed, {}, {}, requested, {}
+    )
+    assert manifest["runtime_bundles"] == requested
+    assert manifest["runtime_bundles"][base.runtime.name] == owner_candidate
+    form = json.loads(live_test_executor._task_input_form([], tmp_path, "key", {}, requested, {}, None))
+    assert form["runtime_bundles"] == requested
 
 
 def test_gpu_accounting_uses_any_gpu_stage_in_the_graph(monkeypatch):

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from revocompute import live_test_executor, runtime_bundle
 from revocompute.artifact_evidence import read_staged_digest
 from revocompute.runner_live_test import (
     RunnerLiveTestError,
@@ -421,6 +422,251 @@ def _composed_tree(tmp_path: Path) -> tuple[RuntimeFamily, RuntimeFamily]:
             root=companion_root,
         ),
     )
+
+
+def _bundled_composed_tree(tmp_path: Path):
+    """The composed tree with real overlays and one published binding each."""
+    from dataclasses import replace
+
+    owner, companion = _composed_tree(tmp_path)
+    relative = {
+        owner.name: f"{owner.name}/run.sh",
+        companion.name: f"{companion.name}/run.sh",
+    }
+    for path in relative.values():
+        source = tmp_path / "runners" / path
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("published", encoding="utf-8")
+    owner = replace(owner, runtime_overlay=(relative[owner.name],))
+    companion = replace(companion, runtime_overlay=(relative[companion.name],))
+    store = tmp_path / "runtime-bundles"
+    published = {
+        family.name: runtime_bundle.materialize(family.root.parent, family.runtime_overlay, store)[0]
+        for family in (owner, companion)
+    }
+    runtime_bundle.write_index(store, published)
+    return owner, companion, published, store, relative
+
+
+def _composed_candidates(owner, companion, store, relative):
+    """Candidate snapshots for both families, materialized but not published."""
+    candidates = {}
+    for family in (owner, companion):
+        (family.root.parent / relative[family.name]).write_text(
+            f"{family.name} candidate", encoding="utf-8"
+        )
+        candidates[family.name] = runtime_bundle.materialize(
+            family.root.parent, family.runtime_overlay, store
+        )[0]
+    return candidates
+
+
+def _composed_artifacts_for_case(owner, companion):
+    """Write the owner/companion artifacts a composed case would run."""
+    artifact = Path(owner.slurm_image)
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"owner candidate")
+    companion_candidate = Path(f"{companion.slurm_image}.next")
+    companion_candidate.write_bytes(b"companion candidate")
+    write_artifact_evidence(
+        companion, sha256_file(companion_candidate), "build", {"build_provenance_digest": "build-b"}
+    )
+    return companion_candidate
+
+
+def test_composed_request_pins_match_the_recorded_and_executed_identities(tmp_path, monkeypatch):
+    """One identity: composed record, immutable request/snapshot, executed pair."""
+    owner, companion, published, store, relative = _bundled_composed_tree(tmp_path)
+    candidates = _composed_candidates(owner, companion, store, relative)
+    _composed_artifacts_for_case(owner, companion)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance",
+        lambda _state, _family: {"build_provenance_digest": "build-b"},
+    )
+    state = _State(tmp_path)
+    records = _composed_artifacts(
+        state, owner, families, {"composed_task"}, candidate_bundles=candidates
+    )
+    worker = RunnerLiveTestWorker(
+        state,
+        owner,
+        families=[owner, companion],
+        candidate_bundle=candidates[owner.name],
+        candidate_bundles=candidates,
+    )
+
+    pins = worker._runtime_bundle_pins("composed_task")
+
+    assert pins == candidates
+    assert pins[owner.name] == worker._candidate_bundle == candidates[owner.name]
+    assert {record["family"]: record["runtime_bundle_sha256"] for record in records} == {
+        name: digest for name, digest in pins.items() if name != owner.name
+    }
+
+    monkeypatch.setattr(worker, "_execute_in_worker", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        worker,
+        "_configured_execution_identity",
+        lambda: (_ for _ in ()).throw(RunnerLiveTestError("IDENTITY_FAILURE", "test")),
+    )
+    worker._run_case(
+        SimpleNamespace(id="case", task="composed_task", parameters={}, inputs={}),
+        LiveTestReport(owner.name, "smoke", "", "", "", ""),
+        TaskResourceSnapshot("composed_task", None, ()),
+        records,
+    )
+    request = json.loads((worker.work_root / "case.request.json").read_text(encoding="utf-8"))
+    assert request["runtime_bundles"] == pins
+    assert request["runtime_bundle_sha256"] == candidates[owner.name]
+
+    # The executor's snapshot and manifest pin that same map unchanged.
+    owner_runtime = SimpleNamespace(name=owner.name, runtime_overlay=owner.runtime_overlay)
+    companion_runtime = SimpleNamespace(
+        name=companion.name, runtime_overlay=companion.runtime_overlay
+    )
+    task_type_def = SimpleNamespace(
+        runtime=owner_runtime,
+        workflow=(SimpleNamespace(family=companion.name),),
+    )
+    monkeypatch.setattr(
+        live_test_executor, "get_family", lambda _name: (companion_runtime, None)
+    )
+    monkeypatch.setattr(
+        live_test_executor.task_runtime,
+        "CONFIG",
+        SimpleNamespace(runtime_bundle_root=str(store)),
+    )
+    snapshot = live_test_executor._pinned_runtime_bundles(task_type_def, request["runtime_bundles"])
+    assert snapshot == request["runtime_bundles"]
+    form = json.loads(
+        live_test_executor._task_input_form([], tmp_path, "key", {}, snapshot, {}, None)
+    )
+    assert form["runtime_bundles"] == request["runtime_bundles"]
+
+
+def test_composed_case_fails_without_running_the_published_companion_when_its_candidate_is_missing(
+    tmp_path, monkeypatch
+):
+    """A selected companion candidate that cannot resolve must fail the case.
+
+    The published companion is valid and would pass, so a silent fallback
+    would be invisible.  The case must refuse before submission and leave the
+    published binding untouched.
+    """
+    owner, companion, published, store, relative = _bundled_composed_tree(tmp_path)
+    candidates = _composed_candidates(owner, companion, store, relative)
+    _composed_artifacts_for_case(owner, companion)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance",
+        lambda _state, _family: {"build_provenance_digest": "build-b"},
+    )
+    missing = "sha256:" + "0" * 64
+    selected = {owner.name: candidates[owner.name], companion.name: missing}
+    records = _composed_artifacts(
+        _State(tmp_path), owner, families, {"composed_task"}, candidate_bundles=selected
+    )
+    assert records[0]["family"] == companion.name
+    assert records[0]["runtime_bundle_sha256"] == missing
+    worker = RunnerLiveTestWorker(
+        _State(tmp_path),
+        owner,
+        families=[owner, companion],
+        candidate_bundle=candidates[owner.name],
+        candidate_bundles=selected,
+    )
+    digest = "sha256:" + "6" * 64
+    monkeypatch.setattr("revocompute.runner_live_test.build_slurm_images", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.read_artifact_evidence",
+        lambda *_args: (digest, {"sif_sha256": digest, "build_provenance_digest": "build-b"}),
+    )
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance",
+        lambda *_args: {"build_provenance_digest": "build-b", "apptainer_version": "1.4"},
+    )
+    case = SimpleNamespace(id="case", task="composed_task", parameters={}, inputs={})
+    plan = SimpleNamespace(
+        digest="test",
+        select=lambda *_args, **_kwargs: [case],
+        omitted=(),
+        collections={},
+        fixture_hashes={},
+    )
+    monkeypatch.setattr(
+        worker,
+        "_load_identity",
+        lambda: ValidationIdentity(
+            plan, "config", (TaskResourceSnapshot("composed_task", None, ()),), tuple(records)
+        ),
+    )
+    worker._validate_candidate = lambda: None
+    executions = []
+    monkeypatch.setattr(worker, "_execute_in_worker", lambda *args: executions.append(args))
+
+    report = worker.run(build=False)
+
+    assert not report.passed
+    assert report.failure_category == "TEST_CONFIGURATION_FAILURE"
+    assert "candidate runtime bundle" in report.failure_message
+    # It never launched the published companion, and nothing was activated.
+    assert executions == []
+    assert runtime_bundle.load_index(store) == published
+
+
+def test_composed_case_refuses_an_unpublished_unselected_companion_before_submission(tmp_path):
+    """A fresh deployment has no published companion binding to fall back to."""
+    owner, companion, published, store, _relative = _bundled_composed_tree(tmp_path)
+    runtime_bundle.write_index(store, {owner.name: published[owner.name]})
+    worker = RunnerLiveTestWorker(
+        _State(tmp_path),
+        owner,
+        families=[owner, companion],
+        candidate_bundle=published[owner.name],
+    )
+
+    with pytest.raises(
+        LiveTestConfigurationError,
+        match="cannot pin the published runtime bundle for 'companion_runner'",
+    ):
+        worker._runtime_bundle_pins("composed_task")
+
+
+def test_composed_case_refuses_a_bundle_that_moves_after_verification(tmp_path, monkeypatch):
+    """The executed pin must equal the record, even if the index moved."""
+    owner, companion, _published, store, relative = _bundled_composed_tree(tmp_path)
+    candidates = _composed_candidates(owner, companion, store, relative)
+    _composed_artifacts_for_case(owner, companion)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance",
+        lambda _state, _family: {"build_provenance_digest": "build-b"},
+    )
+    records = _composed_artifacts(
+        _State(tmp_path), owner, families, {"composed_task"}, candidate_bundles=candidates
+    )
+    worker = RunnerLiveTestWorker(
+        _State(tmp_path),
+        owner,
+        families=[owner, companion],
+        candidate_bundle=candidates[owner.name],
+        candidate_bundles=candidates,
+    )
+    moved = {owner.name: candidates[owner.name], companion.name: "sha256:" + "9" * 64}
+    monkeypatch.setattr(worker, "_runtime_bundle_pins", lambda _task: moved)
+    executions = []
+    monkeypatch.setattr(worker, "_execute_in_worker", lambda *args: executions.append(args))
+
+    with pytest.raises(LiveTestConfigurationError, match="changed while the case was being submitted"):
+        worker._run_case(
+            SimpleNamespace(id="case", task="composed_task", parameters={}, inputs={}),
+            LiveTestReport(owner.name, "smoke", "", "", "", ""),
+            TaskResourceSnapshot("composed_task", None, ()),
+            records,
+        )
+
+    assert executions == []
 
 
 def test_a_promoted_companion_satisfies_the_acceptance_that_covered_its_bytes(tmp_path, monkeypatch):

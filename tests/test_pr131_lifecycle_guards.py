@@ -584,6 +584,29 @@ def test_composed_submission_refuses_a_missing_companion_record(tmp_path: Path) 
         _composed_for(owner, "composed_task", [], families)
 
 
+def test_composed_acceptance_refuses_an_unpublished_companion_before_submission(tmp_path: Path) -> None:
+    """A fresh deployment has no companion binding, so the case cannot launch.
+
+    ``live-test --runner composed_runner`` must refuse during identity
+    resolution instead of falling back to a published companion that does not
+    exist (or, worse, running one the receipt never named).
+    """
+    owner, companion = _composed_tree(tmp_path)
+    artifact = Path(owner.slurm_image)
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"owner candidate")
+    companion_candidate = Path(f"{companion.slurm_image}.next")
+    companion_candidate.write_bytes(b"companion candidate")
+    families = {owner.name: owner, companion.name: companion}
+    state = _State(tmp_path)
+
+    with pytest.raises(
+        runner_live_test.LiveTestConfigurationError,
+        match="Composed stage family 'companion_runner' has no published runtime bundle",
+    ):
+        _composed_artifacts(state, owner, families, {"composed_task"})
+
+
 def test_a_task_pinned_to_a_refuses_when_a_is_gone_after_b_activation(tmp_path: Path) -> None:
     state, family = _deployment(tmp_path)
     store = str(state.get("RUNTIME_BUNDLE_DIR"))
