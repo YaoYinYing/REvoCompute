@@ -445,6 +445,57 @@ def test_first_build_candidate_without_a_receipt_is_told_to_validate(evidence):
     assert result.ready is False
 
 
+def test_first_enablement_staged_candidate_without_a_published_bundle_is_told_to_live_test(
+    tmp_path: Path, monkeypatch
+):
+    """An empty index on first enablement is normal, not a configuration defect."""
+    family_root = tmp_path / "runners" / "overlay_family"
+    family_root.mkdir(parents=True)
+    (family_root / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    family = RuntimeFamily(
+        "overlay_family",
+        "1",
+        "overlay_family.def",
+        "overlay_family.sif",
+        str(tmp_path / "images" / "overlay_family.sif"),
+        root=family_root,
+        runtime_overlay=("overlay_family/run.sh",),
+    )
+    current = {
+        "build_provenance_digest": "sha256:build-current",
+        "apptainer_version": "apptainer version 1.4.5",
+    }
+    plan = SimpleNamespace(
+        digest="sha256:test-current",
+        select=lambda collection: (SimpleNamespace(id="minimal"),) if collection == "smoke" else (),
+        omitted=(),
+    )
+    monkeypatch.setattr("revocompute.runner_readiness.diagnose", lambda *_args, **_kwargs: DoctorReport(()))
+    monkeypatch.setattr("revocompute.runner_readiness._build_provenance", lambda *_args: current)
+    monkeypatch.setattr("revocompute.runner_readiness.sif_stale", lambda *_args: False)
+    monkeypatch.setattr(
+        "revocompute.runner_readiness.load_validation_identity",
+        lambda *_args, **_kwargs: ValidationIdentity(
+            plan,
+            "sha256:config-current",
+            (TaskResourceSnapshot("predict", None, ()),),
+        ),
+    )
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.parent.mkdir(parents=True)
+    candidate.write_bytes(b"first-enablement-candidate")
+    write_staged_identity(family, sha256_file(candidate), "sha256:build-current")
+
+    result = resolve_runner_readiness(_State(tmp_path), family)
+
+    assert result.status is RunnerReadinessStatus.NOT_VALIDATED
+    assert result.reason_code == "RECEIPT_MISSING"
+    assert result.next_action == "live-test"
+    assert "no published binding" in result.message
+    assert result.build_provenance_current is False
+    assert result.build_provenance_digest == "sha256:build-current"
+
+
 def test_runner_status_all_lists_enabled_families_and_json(evidence, monkeypatch, capsys):
     state, family, active = evidence
     _write_receipt(family, active)

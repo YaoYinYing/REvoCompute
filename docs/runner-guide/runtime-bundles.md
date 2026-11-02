@@ -176,8 +176,9 @@ snapshots remain available. See
 A scientific SIF build and a one-off Docker server/worker image build are
 different events with different identities. The worker image is the deployment
 orchestration boundary for a live test; building it is not a SIF rebuild and
-does not authorize one. Only `prepare --build-sif` builds a candidate, and it
-stages `<artifact>.next` without activating it. A later
+does not authorize one. `prepare --build-sif` and `restart --build-sif` stage a
+candidate, and `live-test` builds a missing or stale candidate before validating
+it. Every path stages `<artifact>.next` without activating it. A later
 `restart --mode=prepared` is the only SIF promotion path, and it is
 maintainer-authorized; a candidate never replaces the active SIF because it
 built or passed a test.

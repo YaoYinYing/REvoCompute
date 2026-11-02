@@ -230,10 +230,12 @@ state = State()
 ManageDatabase(str(root / "state" / "server" / "manage.sqlite")).resource_set("slurm_enabled", "true")
 family = next(item for item in load_instance_families(state) if item.name == "gremlin")
 # Submission fails closed when a family declares a runtime overlay but no
-# bundle is published, exactly as it does before `restart.sh setup` has run.
-# Publish the same activation `setup`/`restart` would, so this fixture exercises
-# the production admission path rather than bypassing it.
-bundle_sha256 = materialize_runner_bundles(state, [family])[family.name]
+# bundle is published, exactly as it does before any deployment has accepted
+# one.  Materialize the candidate without activating it, write the same
+# build/live-test evidence a real acceptance would, then activate through the
+# production path: publication is receipt-gated, so the snapshot must exist
+# (and its receipt must be recorded) before activation may publish it.
+bundle_sha256 = materialize_runner_bundles(state, [family], activate=False)[family.name]
 artifact = Path(family.slurm_image)
 provenance = _build_provenance(state, family)
 write_artifact_evidence(family, sha256_file(artifact), "build", provenance)
@@ -262,6 +264,8 @@ receipt = {
     "cases": [{"case_id": case.id, "passed": True} for case in identity.plan.select("smoke")],
 }
 write_artifact_evidence(family, sha256_file(artifact), "receipt", receipt)
+# Activate the exact validated candidate; this validates the receipt above.
+materialize_runner_bundles(state, [family], digests={family.name: bundle_sha256})
 readiness = resolve_runner_readiness(state, family)
 readiness_dir = Path(state.server_dir()) / "readiness"
 readiness_dir.mkdir(parents=True, exist_ok=True)

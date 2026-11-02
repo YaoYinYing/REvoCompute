@@ -76,7 +76,7 @@ def test_demo_setup_never_materializes_runtime_bundles(tmp_path, monkeypatch):
     (tmp_path / "server" / "docker" / "runners").mkdir(parents=True)
     for name in ("materialize_runner_families", "materialize_tool_families", "materialize_demo_replays"):
         monkeypatch.setattr(steps_module, name, lambda _state: None)
-    monkeypatch.setattr(steps_module, "load_plugin_families", lambda _root: [])
+    monkeypatch.setattr(steps_module, "load_instance_families", lambda _state: [])
     monkeypatch.setattr(
         steps_module,
         "materialize_runner_bundles",

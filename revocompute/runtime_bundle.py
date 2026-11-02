@@ -39,7 +39,7 @@ RUNTIME_MOUNT_TARGET = "/opt/revocompute/runtime"
 #: Roots that used to hold baked REvoCompute code.  They do not name overlay
 #: content: an executable delivered by the overlay must resolve under the
 #: reserved mount, never from a legacy image path.
-LEGACY_RUNTIME_ROOTS = ("/app/revocompute",)
+LEGACY_RUNTIME_ROOT = "/app/revocompute"
 
 #: Directory name for one materialized snapshot: ``sha256-<hex>``.
 _BUNDLE_PREFIX = "sha256-"
@@ -183,7 +183,7 @@ def _entrypoint_relative(path: str) -> str | None:
     Only the reserved mount and the legacy baked root map into the overlay
     namespace; any other absolute path is not an overlay reference.
     """
-    for root in (RUNTIME_MOUNT_TARGET, *LEGACY_RUNTIME_ROOTS):
+    for root in (RUNTIME_MOUNT_TARGET, LEGACY_RUNTIME_ROOT):
         if path.startswith(root + "/"):
             return path[len(root) + 1 :]
     return None
@@ -217,7 +217,7 @@ def overlay_entrypoint_error(entrypoint: Iterable[str], entries: Iterable[Overla
     # overlay entry ``example/run.sh`` name the same executable.  Refuse the
     # legacy spelling when the overlay delivers that file; an entrypoint the
     # overlay does not deliver belongs to an unmigrated family and stays baked.
-    if path.startswith(tuple(root + "/" for root in LEGACY_RUNTIME_ROOTS)) and (
+    if path.startswith(LEGACY_RUNTIME_ROOT + "/") and (
         relative in declared or Path(relative).name in {Path(entry.relative).name for entry in declared_entries}
     ):
         return (

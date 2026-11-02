@@ -29,6 +29,7 @@ import yaml
 from revocompute_ctl.compose import compose_args, remove_mcp_service, run_cmd, stack_services
 from revocompute_ctl.attestation import clear_deployment_attestations
 from revocompute.runner_bundles import materialize_runner_bundles, runner_bundle_root
+from revocompute.runner_readiness import load_instance_families
 from revocompute.runner_registry import (
     RuntimeFamily,
     build_slurm_images,
@@ -203,7 +204,6 @@ def cmd_rollback_bundle(state, runner: str, digest: str) -> None:
     """
     from revocompute import runtime_bundle
     from revocompute.runner_live_test import receipt_valid_for_bundle
-    from revocompute.runner_readiness import load_instance_families
 
     store_root = runner_bundle_root(state)
     if runtime_bundle.resolve_pinned(store_root, digest) is None:
@@ -755,7 +755,7 @@ def cmd_setup(state) -> None:
         materialize_demo_replays(state)
         if not state.demo_mode():
             os.makedirs(runner_bundle_root(state), exist_ok=True)
-            materialize_runner_bundles(state, load_plugin_families(deployment_plugin_root(state)))
+            materialize_runner_bundles(state, load_instance_families(state))
     print(f"Setup completed. Using env file: {state.env_file}")
     print(f"Review {state.env_file} before starting services.")
 

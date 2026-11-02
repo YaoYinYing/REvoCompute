@@ -69,10 +69,12 @@ violation, and the reason is recorded next to the manifest.
 
 CI contracts exercise the mutation classes: an overlay-only edit changes the
 bundle digest while the SIF identity and bytes stay fixed; an environment-only
-edit changes the SIF identity and cannot reuse the prior receipt; mixed changes
-require the exact pair; unchanged inputs are a no-op. Execution-path contracts
-assert that the generated Slurm/Apptainer command resolves the pinned bundle and
-refuses missing, tampered, or legacy-spelled code.
+edit changes the SIF identity and cannot reuse the prior receipt; a mixed edit
+is reported `BUILD_STALE` for the new build provenance, and the prior receipt
+does not authorize the new `(SIF, bundle)` pair; unchanged inputs are a no-op.
+Registry and Doctor validation refuse a legacy `/app/revocompute` entrypoint
+that names overlay-delivered code, and bundle resolution fails closed for a
+missing, tampered, or unpublished binding.
 
 GitHub-hosted CI may isolate OS and HPC boundaries for those checks, but it does
 not build a target-cluster SIF or establish scientific readiness. Real isolated

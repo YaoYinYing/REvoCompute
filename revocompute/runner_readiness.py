@@ -311,6 +311,31 @@ def _staged_candidate_readiness(
             build_provenance_current=False,
             build_provenance_digest=build_digest,
         )
+    if family.runtime_overlay:
+        from revocompute import runtime_bundle
+
+        try:
+            bundle_digest(state, family)
+        except runtime_bundle.RuntimeBundleError:
+            # First enablement: the candidate is staged and recorded, but no
+            # deployment has published a binding yet.  That is not a
+            # configuration defect -- the live test validates this candidate
+            # and its post-PASS activation publishes the binding.
+            return _result(
+                family,
+                RunnerReadinessStatus.NOT_VALIDATED,
+                "RECEIPT_MISSING",
+                "The Runtime Bundle has no published binding yet; the live test will validate the staged "
+                "Runner candidate and activate its bundle",
+                doctor_ok=True,
+                sif_exists=active_exists,
+                build_provenance_current=False,
+                build_provenance_digest=build_digest,
+            )
+        except (OSError, KeyError, TypeError, ValueError, RegistryError):
+            # Another resolution failure (an unreadable index, for example) is
+            # attributed by ``_receipt_evidence`` below as CONFIGURATION_INVALID.
+            pass
     evidence = _receipt_evidence(state, family, build_digest, candidate_sha256, artifact_bound=True)
     if evidence.failure is not None:
         return _result(

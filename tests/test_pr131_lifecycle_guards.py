@@ -45,6 +45,7 @@ from revocompute.runner_registry import (  # noqa: E402
     RegistryError,
     RuntimeFamily,
     _build_provenance,
+    build_slurm_images,
     load_plugin_families,
     sif_stale,
 )
@@ -112,11 +113,9 @@ def test_overlay_only_edit_reuses_the_sif_and_does_not_activate_untested_code(
     active = _publish(state, family)
     sif = _sif(family)
     sif_before = sif.read_bytes()
-    provenance_before = _build_provenance(state, family)["build_provenance_digest"]
-    commands: list[list[str]] = []
-    monkeypatch.setattr(
-        "revocompute.runner_registry.run_cmd", lambda argv, **_kwargs: commands.append(list(argv))
-    )
+    provenance_before = _build_provenance(state, family)
+    write_artifact_evidence(family, sha256_file(sif), "build", provenance_before)
+    assert sif_stale(state, family, str(sif)) is False
     # This edited source has no receipt, so restart activation must refuse it.
     monkeypatch.setattr(runner_live_test, "receipt_valid_for_bundle", lambda *_a, **_k: False)
 
@@ -124,10 +123,18 @@ def test_overlay_only_edit_reuses_the_sif_and_does_not_activate_untested_code(
     candidate = materialize_runner_bundles(state, [family])["demo"]
 
     assert candidate != active
-    # Same environment identity and same SIF bytes: no rebuild was requested.
-    assert _build_provenance(state, family)["build_provenance_digest"] == provenance_before
+    # Same environment identity and same SIF bytes: no rebuild was requested or
+    # needed, so a build pass still does not invoke Apptainer.
+    assert _build_provenance(state, family)["build_provenance_digest"] == provenance_before["build_provenance_digest"]
     assert sif.read_bytes() == sif_before
-    assert not any("build" in command[:3] for command in commands)
+    assert sif_stale(state, family, str(sif)) is False
+    apptainer_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "revocompute.runner_registry.run_cmd", lambda argv, **_kwargs: apptainer_calls.append(list(argv))
+    )
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/apptainer")
+    assert build_slurm_images(state, [family]) == 0
+    assert apptainer_calls == []
     # The snapshot exists for validation but is not what a new submission pins.
     assert rb.resolve_pinned(store, candidate) is not None
     assert rb.load_index(store) == {"demo": active}
@@ -170,6 +177,59 @@ def test_environment_only_edit_changes_the_build_identity_and_old_receipt_cannot
         configuration_digest="config",
         required_case_ids={"minimal"},
         runtime_bundle_sha256=bundle,
+    )
+
+
+def test_mixed_build_and_overlay_edit_reports_build_stale_and_the_old_receipt_cannot_authorize(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mixed change moves both identities; the exact pair is required."""
+    state, family = _deployment(tmp_path)
+    monkeypatch.setattr(
+        "revocompute.runner_readiness.diagnose",
+        lambda *_a, **_k: SimpleNamespace(ok=True, diagnostics=()),
+    )
+    active_bundle = _publish(state, family)
+    sif = _sif(family)
+    before = _build_provenance(state, family)
+    write_artifact_evidence(family, sha256_file(sif), "build", before)
+    old_receipt = {
+        "receipt_contract_version": 2,
+        "passed": True,
+        "sif_sha256": sha256_file(sif),
+        "build_provenance_digest": before["build_provenance_digest"],
+        "test_definition_digest": "test",
+        "configuration_digest": "config",
+        "runtime_bundle_sha256": active_bundle,
+        "cases": [{"case_id": "minimal", "passed": True}],
+    }
+    write_artifact_evidence(family, sha256_file(sif), "receipt", old_receipt)
+    assert sif_stale(state, family, str(sif)) is False
+
+    (family.root / "demo.def").write_text(
+        "Bootstrap: docker\nFrom: scratch\n# new environment lock\n", encoding="utf-8"
+    )
+    (family.root / "run.sh").write_text("#!/bin/sh\necho edited\n", encoding="utf-8")
+    after = _build_provenance(state, family)
+    mixed_bundle = rb.overlay_digest(family.root.parent, family.runtime_overlay)
+
+    result = resolve_runner_readiness(state, family)
+
+    assert result.status is RunnerReadinessStatus.BUILD_STALE
+    assert result.reason_code == "BUILD_PROVENANCE_STALE"
+    assert result.build_provenance_current is False
+    assert result.build_provenance_digest == after["build_provenance_digest"] != before["build_provenance_digest"]
+    assert mixed_bundle != active_bundle
+    # The old receipt names neither the new build provenance nor the new bundle,
+    # so the new pair is not authorized by it.
+    assert not receipt_matches(
+        old_receipt,
+        sif_sha256=sha256_file(sif),
+        build_provenance_digest=after["build_provenance_digest"],
+        test_definition_digest="test",
+        configuration_digest="config",
+        required_case_ids={"minimal"},
+        runtime_bundle_sha256=mixed_bundle,
     )
 
 
@@ -351,23 +411,23 @@ def test_entrypoint_declared_in_the_overlay_must_use_the_mounted_bundle(tmp_path
 def test_legacy_flat_entrypoint_is_refused_when_the_overlay_delivers_the_file(tmp_path: Path) -> None:
     """The image flattened family files to /app/revocompute/run.sh.
 
-    An overlay that delivers ``example/run.sh`` therefore owns that entrypoint,
-    and the legacy image spelling must not execute instead.
+    An overlay that delivers ``synthetic_family/run.sh`` therefore owns that
+    entrypoint, and the legacy image spelling must not execute instead.
     """
     runners = tmp_path / "runners"
-    family = runners / "example"
+    family = runners / "synthetic_family"
     family.mkdir(parents=True)
     (family / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
-    (family / "example.def").write_text("Bootstrap: docker\nFrom: scratch\n", encoding="utf-8")
+    (family / "synthetic_family.def").write_text("Bootstrap: docker\nFrom: scratch\n", encoding="utf-8")
     manifest = {
         "api_version": 1,
-        "id": "example",
+        "id": "synthetic_family",
         "version": "1",
         "runtime": {
-            "image_artifact": "example.sif",
-            "definition": "example.def",
+            "image_artifact": "synthetic_family.sif",
+            "definition": "synthetic_family.def",
             "entrypoint": ["bash", "/app/revocompute/run.sh"],
-            "runtime_overlay": ["example/run.sh"],
+            "runtime_overlay": ["synthetic_family/run.sh"],
         },
     }
     (family / "plugin.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
