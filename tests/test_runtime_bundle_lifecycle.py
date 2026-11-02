@@ -199,7 +199,7 @@ def _rollback_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert current != previous
     assert rb.load_index(store) == {"demo": current}
     monkeypatch.setattr(
-        "revocompute.runner_readiness.load_instance_families", lambda _state: [family]
+        "revocompute_ctl.steps.load_instance_families", lambda _state: [family]
     )
     return store, state, family, previous, current
 
@@ -266,7 +266,7 @@ def test_rollback_refuses_a_family_without_an_overlay(
 ) -> None:
     store, state, family, previous, _current = _rollback_setup(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "revocompute.runner_readiness.load_instance_families",
+        "revocompute_ctl.steps.load_instance_families",
         lambda _state: [replace(family, runtime_overlay=())],
     )
 
@@ -278,7 +278,7 @@ def test_rollback_refuses_an_unknown_family(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     store, state, _family_obj, previous, _current = _rollback_setup(tmp_path, monkeypatch)
-    monkeypatch.setattr("revocompute.runner_readiness.load_instance_families", lambda _state: [])
+    monkeypatch.setattr("revocompute_ctl.steps.load_instance_families", lambda _state: [])
 
     _refuse_rollback(store, state, previous)
     assert "Unknown Runner Family" in capsys.readouterr().err
