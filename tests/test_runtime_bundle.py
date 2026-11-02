@@ -478,6 +478,53 @@ def test_shell_punctuation_cannot_hide_a_legacy_path(
     assert rb.overlay_entrypoint_error(entrypoint, [entry]) is not None
 
 
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        ["bash", "/tmp/run.sh"],
+        ["bash", "./run.sh"],
+        ["bash", "demo/run.sh"],
+        ["bash", "run.sh"],
+        ["bash", "-c", "exec /tmp/run.sh"],
+        ["env", "X=/tmp/run.sh", "bash", "-c", 'exec "$X"'],
+        ["bash", "/tmp/opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "/opt/revocompute/runtime-extra/demo/run.sh"],
+        ["bash", "/app/revocompute_legacy/run.sh"],
+        ["bash", "x/opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-c", "exec `printf /tmp/run.sh`"],
+        ["bash", "-c", "sh -c \"exec '/tmp/run.sh'\""],
+    ],
+)
+def test_an_overlay_executable_outside_the_reserved_mount_is_refused(
+    tmp_path: Path, entrypoint: list[str]
+) -> None:
+    """The declared executable resolves only at its content-addressed mount.
+
+    A third location is refused even when it shares the declared basename, so
+    the bundle identity cannot claim an executable the run does not start.
+    """
+    entry = _entry(tmp_path, "demo/run.sh")
+
+    error = rb.overlay_entrypoint_error(entrypoint, [entry])
+
+    assert error is not None and "must resolve under" in error
+
+
+def test_an_argument_spelling_of_the_declared_executable_is_also_refused(tmp_path: Path) -> None:
+    """Every token is inspected, arguments included.
+
+    The exact mount path passes, but a relative argument naming the same
+    executable is not how the snapshot resolves it, so the entrypoint errors.
+    """
+    entry = _entry(tmp_path, "demo/run.sh")
+
+    error = rb.overlay_entrypoint_error(
+        ["/opt/revocompute/runtime/demo/run.sh", "--config", "./run.sh"], [entry]
+    )
+
+    assert error is not None and "must resolve under" in error
+
+
 def test_an_entrypoint_under_the_reserved_mount_must_be_declared(tmp_path: Path) -> None:
     entry = _entry(tmp_path, "demo/run.sh")
 

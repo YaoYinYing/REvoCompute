@@ -201,23 +201,60 @@ def _entrypoint_tokens(value: str) -> tuple[str, ...]:
         return tuple(value.split())
 
 
+def _token_basename(token: str) -> str:
+    """A path word's basename after one layer of shell quoting.
+
+    ``shlex`` leaves backticks and inner quotes attached, so a backtick- or
+    quote-suffixed ``/tmp/run.sh`` and ``./run.sh`` all name ``run.sh``.
+    Comparing the quoted spelling would let a declared executable hide behind
+    it.
+    """
+    return Path(token.lstrip("./").strip("\"'`")).name
+
+
+def _anchored_root_index(token: str, root: str) -> int | None:
+    """Where ``root`` begins a path word, or ``None``.
+
+    A substring is not a path prefix: ``/tmp/opt/...`` and ``x/opt/...`` occur
+    only inside a larger arbitrary path.  The occurrence must start the word or
+    follow ``=`` (an env assignment or ``--flag=``), and must end the word or be
+    followed by ``/``.  A match like ``/opt/revocompute/runtime-extra`` is a
+    different path, not the reserved mount.
+    """
+    start = 0
+    while (index := token.find(root, start)) >= 0:
+        before = token[index - 1] if index else ""
+        end = index + len(root)
+        after = token[end] if end < len(token) else ""
+        if (not before or before == "=") and (not after or after == "/"):
+            return index
+        start = index + 1
+    return None
+
+
 def overlay_entrypoint_error(entrypoint: Iterable[str], entries: Iterable[OverlayEntry]) -> str | None:
     """The contract violation for an entrypoint that names an overlay-declared file.
 
     An executable the bundle delivers resolves only under the reserved mount.
-    A manifest that still spells the legacy image path (or any other location)
-    would start baked code, or nothing, while its bundle identity says it runs
-    the snapshot.  Every argv element and every shell word is inspected, not
-    just the last one, so ``bash -c "exec /app/revocompute/run.sh"`` cannot
-    bypass the rule.  Families whose entrypoint is not overlay-declared are
-    outside this contract: they have not migrated and keep their image
-    entrypoint.
+    A manifest that spells it as a legacy image path, an arbitrary absolute
+    path, a relative path, or a shell-wrapped word would start baked code, or
+    nothing, while its bundle identity says it runs the snapshot.  Every argv
+    element and every shell word is inspected, not just the last one, so
+    ``bash -c "exec /app/revocompute/run.sh"`` cannot bypass the rule.  A path
+    under the reserved mount must be a declared entry.  Families whose
+    entrypoint is not overlay-declared are outside this contract: they have not
+    migrated and keep their image entrypoint.
     """
     declared_entries = tuple(entries)
     if not declared_entries:
         return None
     declared = {entry.relative for entry in declared_entries}
     declared_names = {Path(entry.relative).name for entry in declared_entries}
+    mounted = {f"{RUNTIME_MOUNT_TARGET}/{entry.relative}" for entry in declared_entries}
+    violation = (
+        "Runtime entrypoint for an overlay-declared file must resolve under "
+        f"{RUNTIME_MOUNT_TARGET}"
+    )
     for step in entrypoint or ():
         if not isinstance(step, str):
             continue
@@ -225,38 +262,40 @@ def overlay_entrypoint_error(entrypoint: Iterable[str], entries: Iterable[Overla
         # A shell command may ``cd`` to the legacy root and run a relative
         # script.  The relative name is only dangerous when the overlay
         # delivers an entry with that basename.
-        token_names = {Path(token.lstrip("./")).name for token in tokens if token}
+        token_names = {_token_basename(token) for token in tokens if token}
         for token in tokens:
+            if not token or token in mounted:
+                continue
+            match: tuple[str, str, bool] | None = None
             for root, legacy in ((RUNTIME_MOUNT_TARGET, False), (LEGACY_RUNTIME_ROOT, True)):
-                start = token.find(root)
-                if start < 0:
-                    continue
-                path = token[start:]
-                if path == root:
-                    if legacy and declared_names & token_names:
-                        return (
-                            f"Runtime entrypoint for an overlay-declared file must resolve under "
-                            f"{RUNTIME_MOUNT_TARGET}: {path}"
-                        )
-                    continue
-                if not path.startswith(root + "/"):
-                    continue
-                relative = path[len(root) + 1 :]
-                if not legacy:
-                    if relative not in declared:
-                        return f"Runtime entrypoint is not in the declared overlay: {path}"
-                    continue
-                # Legacy images flattened each family's declared files into
-                # ``/app/revocompute``, so a legacy ``/app/revocompute/run.sh``
-                # and an overlay entry ``example/run.sh`` name the same
-                # executable.  Refuse the legacy spelling when the overlay
-                # delivers that file; an entrypoint the overlay does not deliver
-                # belongs to an unmigrated family and stays baked.
-                if relative in declared or Path(relative).name in declared_names:
-                    return (
-                        f"Runtime entrypoint for an overlay-declared file must resolve under "
-                        f"{RUNTIME_MOUNT_TARGET}: {path}"
-                    )
+                if (index := _anchored_root_index(token, root)) is not None:
+                    match = (token[index:], root, legacy)
+                    break
+            # Outside either known root: a bare or relative spelling of a
+            # declared executable names that executable without resolving
+            # through the content-addressed mount.
+            if match is None:
+                if _token_basename(token) in declared_names:
+                    return f"{violation}: {token}"
+                continue
+            path, root, legacy = match
+            if path == root:
+                if legacy and declared_names & token_names:
+                    return f"{violation}: {path}"
+                continue
+            relative = path[len(root) + 1 :]
+            if not legacy:
+                if relative not in declared:
+                    return f"Runtime entrypoint is not in the declared overlay: {path}"
+                continue
+            # Legacy images flattened each family's declared files into
+            # ``/app/revocompute``, so a legacy ``/app/revocompute/run.sh``
+            # and an overlay entry ``example/run.sh`` name the same
+            # executable.  Refuse the legacy spelling when the overlay
+            # delivers that file; an entrypoint the overlay does not deliver
+            # belongs to an unmigrated family and stays baked.
+            if relative in declared or _token_basename(relative) in declared_names:
+                return f"{violation}: {path}"
     return None
 
 

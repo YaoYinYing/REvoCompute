@@ -72,14 +72,17 @@ bundle digest while the SIF identity and bytes stay fixed; an environment-only
 edit changes the SIF identity and cannot reuse the prior receipt; a mixed edit
 is reported `BUILD_STALE` for the new build provenance, and the prior receipt
 does not authorize the new `(SIF, bundle)` pair; unchanged inputs are a no-op.
-Registry and Doctor validation refuse a legacy `/app/revocompute` entrypoint
-that names overlay-delivered code, and bundle resolution fails closed for a
-missing, tampered, or unpublished binding.
+Registry and Doctor validation refuse any entrypoint spelling of an
+overlay-delivered executable other than its exact mount path, and bundle
+resolution fails closed for a missing, tampered, or unpublished binding.
 
-GitHub-hosted CI may isolate OS and HPC boundaries for those checks, but it does
-not build a target-cluster SIF or establish scientific readiness. Real isolated
-target-host acceptance for PR #131 has not been run yet; no CI result or page in
-this site is a substitute for it, and nothing here claims production activation.
+GitHub-hosted CI isolates OS and HPC boundaries for those checks, but it does
+not build a target-cluster SIF or establish scientific readiness. Isolated
+Slurm/Apptainer acceptance was run separately for the three migrated families
+and the composed GREMLIN-to-GREMLIN_LH path, with per-family SIF, build-provenance
+and bundle identities recorded in the PR discussion. No CI result or page in
+this site is a substitute for that acceptance, and nothing here claims
+production activation.
 
 ## Remaining scope
 

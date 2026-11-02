@@ -6,6 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 import pytest
 from revocompute.execution_graph import compile_graph
+from revocompute.runner_registry import load_plugin_families
+from revocompute.runtime_bundle import RUNTIME_MOUNT_TARGET
 from revocompute.task_types import discover_plugins, get, list_policies, list_types
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -52,3 +54,29 @@ def test_every_production_workflow_partitions_its_stage_markers():
         assert len(declared) == len(set(declared)) and set(declared) == set(task.stage_markers), (
             f"{task.name} workflow stage markers {declared} do not partition {list(task.stage_markers)}"
         )
+
+
+@pytest.mark.parametrize(
+    ("family_name", "source_directory"),
+    [
+        ("alphafold3", "alphafold3"),
+        ("gremlin_lh", "gremlin_lh"),
+        ("gremlin", "pssm_gremlin"),
+    ],
+)
+def test_migrated_families_load_with_their_mounted_entrypoints(
+    family_name: str, source_directory: str
+) -> None:
+    """The three migrated manifests keep executing from the bundle mount.
+
+    ``pssm_gremlin`` is the manifest directory; the plugin id it declares is
+    ``gremlin``.
+    """
+    families = {
+        family.name: family for family in load_plugin_families(ROOT / "docker" / "runners")
+    }
+
+    family = families[family_name]
+    mounted = f"{RUNTIME_MOUNT_TARGET}/{source_directory}/run.sh"
+    assert family.entrypoint[-1] == mounted
+    assert f"{source_directory}/run.sh" in family.runtime_overlay

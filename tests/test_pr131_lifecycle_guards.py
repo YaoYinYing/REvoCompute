@@ -498,6 +498,53 @@ def test_an_unmigrated_family_entrypoint_is_not_globally_rejected(tmp_path: Path
     assert load_plugin_families(runners)[0].entrypoint[-1] == "/app/revocompute/run.sh"
 
 
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        ["bash", "/tmp/run.sh"],
+        ["bash", "./run.sh"],
+        ["bash", "demo/run.sh"],
+        ["bash", "run.sh"],
+        ["bash", "-c", "exec /tmp/run.sh"],
+        ["env", "X=/tmp/run.sh", "bash", "-c", 'exec "$X"'],
+        ["bash", "/tmp/opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "/opt/revocompute/runtime-extra/demo/run.sh"],
+        ["bash", "/app/revocompute_legacy/run.sh"],
+        ["bash", "x/opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-c", "exec `printf /tmp/run.sh`"],
+        ["bash", "-c", "sh -c \"exec '/tmp/run.sh'\""],
+    ],
+)
+def test_an_overlay_entrypoint_outside_the_mount_is_refused(
+    tmp_path: Path, entrypoint: list[str]
+) -> None:
+    """Registry load and Doctor agree that only the mount may name the file."""
+    runners = tmp_path / "runners"
+    family = runners / "demo"
+    family.mkdir(parents=True)
+    (family / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (family / "demo.def").write_text("Bootstrap: docker\nFrom: scratch\n", encoding="utf-8")
+    manifest = {
+        "api_version": 1,
+        "id": "demo",
+        "version": "1",
+        "runtime": {
+            "image_artifact": "demo.sif",
+            "definition": "demo.def",
+            "entrypoint": entrypoint,
+            "runtime_overlay": ["demo/run.sh"],
+        },
+    }
+    (family / "plugin.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+    with pytest.raises(RegistryError):
+        load_plugin_families(runners)
+    assert any(
+        diagnostic.code == "E2005" and "must resolve under" in diagnostic.message
+        for diagnostic in diagnose(runners, repo_root=ROOT).diagnostics
+    )
+
+
 def _composed_tree(tmp_path: Path) -> tuple[RuntimeFamily, RuntimeFamily]:
     runners = tmp_path / "runners"
     owner_root = runners / "composed_runner"

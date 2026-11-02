@@ -58,10 +58,11 @@ A migrated family's entrypoint must resolve an overlay-delivered executable
 under the reserved mount:
 `/opt/revocompute/runtime/<repository-relative path>`. If the entrypoint names
 a path that maps into the overlay namespace, that file must be declared in the
-same overlay. A legacy `/app/revocompute/<file>` entrypoint is refused when the
-overlay delivers that executable (same repository-relative path or basename),
-because it would start baked or missing code while the bundle identity claims
-the snapshot ran. An entrypoint that does not name overlay content — an
+same overlay. Any other spelling of an overlay-delivered executable — a legacy
+`/app/revocompute/<file>`, a different absolute path, a relative path, or a
+shell-wrapped word — is refused when the overlay delivers that executable (same
+repository-relative path or basename), because it would start baked or missing
+code while the bundle identity claims the snapshot ran. An entrypoint that does not name overlay content — an
 unmigrated family, or an executable that genuinely belongs to the image — is
 accepted unchanged.
 
