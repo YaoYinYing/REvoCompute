@@ -34,7 +34,6 @@ from pathlib import Path
 from typing import Any
 
 from celery import Celery
-from revocompute.admission import resolve_submission_readiness
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_int, env_path
 from revocompute.db import (
     GPUAuthorizationUnavailableError,
@@ -817,7 +816,6 @@ def _compute_allocation_callbacks(
     stage_id: str,
     resource_policy: ResolvedResources | None,
     required_entitlements: tuple[str, ...] = (),
-    runner_family: str = "",
     attempt: int | None = None,
 ) -> tuple[Any, Any, Any]:
     """The three resource-accounting edges of one Slurm allocation.
@@ -952,14 +950,6 @@ def _compute_allocation_callbacks(
 
     def started(slurm_job_id: str, started_at: float) -> None:
         if accounting:
-            # Runner readiness is checked here because only the caller knows the
-            # runner family, but the outcome is handed to the store as the grant
-            # decision: the allocation fact is written first and unconditionally,
-            # so a not-ready runner denies the *command* without erasing the
-            # allocation the scheduler already handed this Task.
-            denied_reason = None
-            if runner_family and not resolve_submission_readiness(CONFIG.server_dir, runner_family).ready:
-                denied_reason = "Runner readiness is unavailable"
             # The allocation is recorded here — fact first, then the grant
             # decision in the same transaction.  There is deliberately no
             # separate entitlement read: a bare read cannot see that the hold
@@ -974,7 +964,6 @@ def _compute_allocation_callbacks(
                 cpu_cores=cpu_cores,
                 started_at=started_at,
                 required_entitlements=required_entitlements,
-                denied_reason=denied_reason,
                 gres=resource_policy.gres or "",
             )
             if not entitlement.get("granted", True):
@@ -1253,7 +1242,6 @@ def _run_compute_job(
         stage_id=tt.name,
         resource_policy=resource_policy,
         required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
-        runner_family=tt.runtime.name,
         attempt=attempt,
     )
     try:
@@ -1860,7 +1848,6 @@ def _execute_workflow_node(
         stage_id=stage.name,
         resource_policy=policy,
         required_entitlements=(stage_runtime.access_policy.requires if stage_runtime.access_policy else ()),
-        runner_family=stage_runtime.name,
         attempt=attempt,
     )
     try:

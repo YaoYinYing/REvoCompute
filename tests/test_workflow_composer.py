@@ -401,7 +401,6 @@ def test_foreign_family_node_uses_that_family_runtime_runner_and_policy(monkeypa
     assert foreign_job_runner is foreign_runner
     callback = next(item for item in callback_arguments if item["stage_id"] == "dag.b")
     assert callback["required_entitlements"] == ("synthetic_noncommercial",)
-    assert callback["runner_family"] == "restricted_runner"
     own_tt, own_job_runner = by_name["dag-a"]
     assert own_tt.runtime.name == "multistage_runner"
     assert own_job_runner is get_family("multistage_runner")[1]
@@ -1174,7 +1173,6 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
         "stage_id": "restricted_runner.model",
         "resource_policy": _policy(True),
         "required_entitlements": ("synthetic_noncommercial",),
-        "runner_family": "restricted_runner",
     }
 
 

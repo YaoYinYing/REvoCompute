@@ -690,7 +690,6 @@ def test_a_refused_handle_cancels_the_allocation_it_could_not_record(tmp_path, m
         stage_id=STAGE,
         resource_policy=_policy(),
         required_entitlements=(),
-        runner_family=STAGE,
         attempt=1,
     )
     dispatched("9999", time.time(), False)
@@ -712,7 +711,6 @@ def _dispatch(database, task_id: str, monkeypatch):
         stage_id=STAGE,
         resource_policy=_policy(),
         required_entitlements=(),
-        runner_family=STAGE,
         attempt=1,
     )
     return cancelled, dispatched

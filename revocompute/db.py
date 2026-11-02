@@ -3656,7 +3656,6 @@ class TaskDatabase:
         gpu_count: int = 0,
         started_at: float | None = None,
         required_entitlements: tuple[str, ...] | None = None,
-        denied_reason: str | None = None,
         gres: str = "",
     ) -> dict[str, Any]:
         """Record the instant a real Slurm allocation becomes observable.
@@ -3802,7 +3801,6 @@ class TaskDatabase:
                     slurm_job_id=slurm_job_id,
                     gpu_count=gpu_count,
                     required_entitlements=required_entitlements,
-                    denied_reason=denied_reason,
                     timestamp=timestamp,
                 )
                 actual = dict(
@@ -4326,7 +4324,6 @@ class TaskDatabase:
         slurm_job_id: str,
         gpu_count: int,
         required_entitlements: tuple[str, ...] | None,
-        denied_reason: str | None,
         timestamp: float,
     ) -> tuple[bool, str, int, bool]:
         """Decide whether a recorded allocation may run the scientific command.
@@ -4337,22 +4334,7 @@ class TaskDatabase:
         under the reason the Task was stopped, and the caller withholds the
         command.  Permission (#55 authorization) and quota are both checked here;
         a CPU-only allocation (``gpu_count == 0``) needs no quota decision.
-
-        ``denied_reason`` is the caller's own pre-decision — a runner that is not
-        ready, checked outside this store — so it denies here under the same rule
-        and records the reason it was refused.
         """
-        if denied_reason is not None:
-            # The caller's own pre-decision (a runner that is not ready) denies
-            # any allocation, GPU or CPU: the reason is recorded and the fact
-            # stands for what was actually held.
-            self._record_denial_in_connection(
-                conn,
-                slurm_job_id=slurm_job_id,
-                reason=denied_reason,
-                reason_code=rloan.AdmissionReason.RUNNER_READINESS_UNAVAILABLE.value,
-            )
-            return False, rloan.AdmissionReason.RUNNER_READINESS_UNAVAILABLE.value, 0, False
         if gpu_count < 1:
             return True, rloan.AdmissionReason.ADMITTED.value, 0, False
         if required_entitlements is not None:
