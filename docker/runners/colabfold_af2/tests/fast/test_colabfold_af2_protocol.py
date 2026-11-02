@@ -115,6 +115,10 @@ for job in "${jobs[@]}"; do
       rank_name=$(printf "%03d" "$rank")
       printf "%s\n" "$src" > "$output_dir/${job}_unrelaxed_rank_${rank_name}_model_1.pdb"
       [[ "${FAKE_NO_SCORE_JOB:-}" == "$job" || "${FAKE_NO_SCORE_RANK:-}" == "$rank" ]] && continue
+      if [[ "${FAKE_EMPTY_SCORE_JOB:-}" == "$job" ]]; then
+        printf "{}\n" > "$output_dir/${job}_scores_rank_${rank_name}_model_1.json"
+        continue
+      fi
       if [[ "${FAKE_INTERFACE_SCORES:-no}" == "yes" ]]; then
         printf '{"plddt":[80.0],"pae":[[1.0]],"ptm":0.8,"max_pae":1.0,"ipsae":{"A-B":0.61,"A-C":0.74},"pdockq2":{"A-B":0.71,"A-C":0.42}}\n' \
           > "$output_dir/${job}_scores_rank_${rank_name}_model_1.json"
@@ -512,6 +516,26 @@ def test_colabfold_model_requires_a_score_for_every_published_rank(tmp_path):
     assert (result / "query_scores_rank_001_model_1.json").is_file()
     assert (result / "query_unrelaxed_rank_002_model_1.pdb").is_file()
     assert not (result / "query_scores_rank_002_model_1.json").exists()
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_colabfold_model_rejects_a_score_without_confidence(tmp_path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    assert _run_stage(env, input_file, output_dir, "features").returncode == 0
+    env["FAKE_EMPTY_SCORE_JOB"] = "query"
+    result = _result_dir(output_dir)
+    features_before = {
+        name: (result / name).read_bytes() for name in ("query.a3m", "query.pickle")
+    }
+
+    model = _run_stage(env, input_file, output_dir, "model")
+
+    assert model.returncode != 0
+    assert "produced no score for job 'query' rank 1" in model.stderr
+    assert (result / "query_unrelaxed_rank_001_model_1.pdb").is_file()
+    assert (result / "query_scores_rank_001_model_1.json").read_text(encoding="utf-8") == "{}\n"
+    for name, content in features_before.items():
+        assert (result / name).read_bytes() == content
     assert not (output_dir / "task_finished").exists()
 
 

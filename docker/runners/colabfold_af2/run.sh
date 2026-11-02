@@ -80,9 +80,12 @@ mapfile -t job_names <<< "$job_list"
 # (for example "query_scores_rank_foo"), and that sibling's files must not be
 # mistaken for this job's. Ownership therefore comes from the end-anchored
 # identity parse compared to the exact job. "require-scores" also rejects a
-# published rank whose score file is missing or unreadable, because the result
-# contract needs one score per structure. Usage: colabfold_ranked_files
-# <job> delete|present|require-scores.
+# published rank whose score file is missing or has no confidence payload,
+# because the result contract needs one score per structure. Pinned ColabFold
+# always emits "plddt"; "pae"/"ptm" appear only for the pTM and multimer model
+# types, and plain alphafold2 (an accepted model_type) has no pAE head, so
+# "plddt" is the universal required field. Interface metrics stay optional.
+# Usage: colabfold_ranked_files <job> delete|present|require-scores.
 colabfold_ranked_files() {
   python3 - "$result_dir" "$1" "$2" <<'PY'
 import json
@@ -126,8 +129,11 @@ for path in result_dir.iterdir():
     if not match or match.group(1) != job:
         continue
     try:
-        json.loads(path.read_text(encoding="utf-8"))
+        document = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
+        continue
+    plddt = document.get("plddt") if isinstance(document, dict) else None
+    if not isinstance(plddt, list) or not plddt:
         continue
     score_ranks.add(int(match.group(2)))
 for rank in sorted(structure_ranks - score_ranks):
