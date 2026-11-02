@@ -2,7 +2,7 @@
 
 **Baseline:** merged main `b7a3190e63d08071812f0ad21be280f173eb3528` (PR #131).
 **Mission:** make the next REvoCompute release *safe to deploy*, **without deploying it**.
-**Authority:** maintainer retains merge, production build/promotion/restart/deployment and activation decisions. A live Slurm/Apptainer acceptance consumes resources and needs a bounded, separate maintainer authorization. No production secrets, configuration files, evidence DBs or identities may be committed.
+**Authority:** maintainer retains merge, production build/promotion/restart/deployment and activation decisions. Maintainer has authorized normal isolated Slurm/Apptainer scientific acceptance as campaign work. Existing BioEmu queues are not a campaign hold. No production secrets, configuration files, evidence DBs or identities may be committed.
 
 ## Definition of ready
 
@@ -49,7 +49,7 @@ Canonical finding: https://github.com/YaoYinYing/REvoCompute/pull/130#discussion
 
 - [ ] Verify issue #89's server-authoritative catalog/deep-link/preflight/POST admission consistency for the release cohort. A readiness race must refuse before Task, upload publication, quota hold or scheduler request. If already implemented, link evidence and do not redo the UI.
 - [ ] Verify issue #90's enabled state and active-image evidence are truthful; distinguish UNKNOWN from READY. No fake Web Promote/Restore buttons or changes to host authorization boundaries. Defer unrelated GPU waterfall issue #91.
-- [ ] For release cohort A and fixed cohort B candidates: exact-head Doctor, fleet/fast contracts, SIF build identity, published Bundle identity, required result tree/view acceptance, scientific references, required smoke, Slurm resource evidence and receipt statuses. Stage/host acceptance only with bounded maintainer approval and isolated stores/ports/DB, not against live production state.
+- [ ] For release cohort A and fixed cohort B candidates: exact-head Doctor, fleet/fast contracts, SIF build identity, published Bundle identity, required result tree/view acceptance, scientific references, required smoke, Slurm resource evidence and receipt statuses. Run isolated acceptance through normal shared Slurm scheduling with separate DB, stores and ports. The maintainer handles existing BioEmu jobs; proceed without repeated clearance or cancellation of production workloads.
 - [ ] Prove negative refusal for stale/corrupted/missing SIF/Bundle, unaccepted new code, missing resources, incorrect or incomplete scientific output, wrong upstream artifact roles, disabled family, and authorization/capacity difference. Check old running Tasks remain pinned and rollback stays receipt-gated.
 - [ ] Publish a release candidate matrix: family/TaskType, enabled (true/false/unknown), build-ready, bundle-ready, receipt (exact SHA), result-contract covered, required assets present, admission-ready, reason and next action. No invented values. A release may only claim the **verified cohort**, not the entire catalog.
 
@@ -63,6 +63,6 @@ Canonical finding: https://github.com/YaoYinYing/REvoCompute/pull/130#discussion
 
 ## Campaign protocol
 
-Commander delegates nonoverlapping Core/StageRun, Family, Docs, Lifecycle/Acceptance, and Independent Adviser owners. Execute approved code/docs work without routine maintainer interruptions; ask only for genuine policy/scope, credential-bound host data, resource-consuming acceptance or production authority. Keep the PR conversation as canonical technical evidence. Report compactly: merge state, blocker category, owner, Adviser, exact head, CI, release-cohort gate.
+Commander delegates nonoverlapping Core/StageRun, Family, Docs, Lifecycle/Acceptance, and Independent Adviser owners. Execute approved code/docs work without routine maintainer interruptions; ask only for genuine policy/scope changes, inaccessible host credentials, or production deployment/promotion/merge authority. Keep the PR conversation as canonical technical evidence. Report compactly: merge state, blocker category, owner, Adviser, exact head, CI, release-cohort gate.
 
 **Stop conditions:** a false READY claim, bypassed submission guard, invented scientific receipt, silent legacy executable fallback, output-contract loosening without scientific evidence, unvalidated SIF/Bundle activation, destructive migration, unauthorized HPC/production action, or scope expansion into all 43 families without a bounded reason.
