@@ -1483,27 +1483,45 @@ def receipt_valid_for_bundle(
     )
 
 
-def candidate_receipt_valid(state, family: RuntimeFamily, *, sif_sha256: str | None = None) -> bool:
-    """Return whether required smoke tests passed for the staged candidate."""
+def _published_bundle_digest(state, family: RuntimeFamily) -> tuple[bool, str | None]:
+    """``(resolved, digest)`` for the binding a submission would pin.
+
+    An overlay-declared family with no published binding is not validatable:
+    there is no digest for a receipt to cover, so callers fail closed instead of
+    propagating ``RuntimeBundleError`` out of a boolean predicate.
+    """
+    from revocompute import runtime_bundle
     from revocompute.runner_readiness import bundle_digest
 
+    try:
+        return True, bundle_digest(state, family)
+    except runtime_bundle.RuntimeBundleError:
+        return False, None
+
+
+def candidate_receipt_valid(state, family: RuntimeFamily, *, sif_sha256: str | None = None) -> bool:
+    """Return whether required smoke tests passed for the staged candidate."""
+    resolved, expected_bundle = _published_bundle_digest(state, family)
+    if not resolved:
+        return False
     return receipt_valid_for_artifact(
         state,
         family,
         f"{family.slurm_image}.next",
         sif_sha256=sif_sha256,
-        expected_runtime_bundle=bundle_digest(state, family),
+        expected_runtime_bundle=expected_bundle,
     )
 
 
 def active_receipt_valid(state, family: RuntimeFamily, *, sif_sha256: str | None = None) -> bool:
     """Return whether required smoke tests passed for the active SIF."""
-    from revocompute.runner_readiness import bundle_digest
-
+    resolved, expected_bundle = _published_bundle_digest(state, family)
+    if not resolved:
+        return False
     return receipt_valid_for_artifact(
         state,
         family,
         family.slurm_image,
         sif_sha256=sif_sha256,
-        expected_runtime_bundle=bundle_digest(state, family),
+        expected_runtime_bundle=expected_bundle,
     )

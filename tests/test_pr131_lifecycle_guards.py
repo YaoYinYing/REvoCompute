@@ -285,6 +285,16 @@ def test_activation_publishes_only_the_receipt_validated_digest(
     assert rb.load_index(store) == {"demo": candidate}
 
 
+def test_receipt_validators_fail_closed_without_a_published_binding(tmp_path: Path) -> None:
+    """No published bundle means no pinnable digest, never a traceback."""
+    state, family = _deployment(tmp_path)
+    _sif(family)
+    Path(f"{family.slurm_image}.next").write_bytes(b"candidate")
+
+    assert runner_live_test.active_receipt_valid(state, family) is False
+    assert runner_live_test.candidate_receipt_valid(state, family) is False
+
+
 def test_a_failed_live_test_leaves_the_prior_index_intact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -336,6 +346,38 @@ def test_entrypoint_declared_in_the_overlay_must_use_the_mounted_bundle(tmp_path
     manifest["runtime"]["entrypoint"] = ["bash", "/opt/revocompute/runtime/demo/run.sh"]
     (family / "plugin.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
     assert load_plugin_families(runners)[0].entrypoint[-1] == "/opt/revocompute/runtime/demo/run.sh"
+
+
+def test_legacy_flat_entrypoint_is_refused_when_the_overlay_delivers_the_file(tmp_path: Path) -> None:
+    """The image flattened family files to /app/revocompute/run.sh.
+
+    An overlay that delivers ``example/run.sh`` therefore owns that entrypoint,
+    and the legacy image spelling must not execute instead.
+    """
+    runners = tmp_path / "runners"
+    family = runners / "example"
+    family.mkdir(parents=True)
+    (family / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (family / "example.def").write_text("Bootstrap: docker\nFrom: scratch\n", encoding="utf-8")
+    manifest = {
+        "api_version": 1,
+        "id": "example",
+        "version": "1",
+        "runtime": {
+            "image_artifact": "example.sif",
+            "definition": "example.def",
+            "entrypoint": ["bash", "/app/revocompute/run.sh"],
+            "runtime_overlay": ["example/run.sh"],
+        },
+    }
+    (family / "plugin.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+    with pytest.raises(RegistryError):
+        load_plugin_families(runners)
+    assert any(
+        diagnostic.code == "E2005" and "must resolve under" in diagnostic.message
+        for diagnostic in diagnose(runners, repo_root=ROOT).diagnostics
+    )
 
 
 def test_an_unmigrated_family_entrypoint_is_not_globally_rejected(tmp_path: Path) -> None:

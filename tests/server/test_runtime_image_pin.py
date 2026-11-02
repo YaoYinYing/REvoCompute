@@ -927,6 +927,29 @@ def test_a_bundle_activation_during_admission_refuses_the_submission(monkeypatch
     assert module.task_store.list_tasks() == []
 
 
+def test_an_unpublished_binding_refuses_submission_instead_of_tracing(monkeypatch, tmp_path):
+    """A family that declares an overlay but has no published binding is a 503.
+
+    ``bundle_digest`` now fails closed by raising; the submission route must
+    convert that into the normal refusal contract, not a 500.
+    """
+    module, _family_row = _submission_setup(monkeypatch, tmp_path, image=True, receipt=True)
+    from revocompute import runner_readiness, runtime_bundle
+
+    def _unpublished(_state, _family):
+        raise runtime_bundle.RuntimeBundleError("no published bundle")
+
+    monkeypatch.setattr(runner_readiness, "bundle_digest", _unpublished)
+
+    response = _post(module)
+
+    assert response.status_code == 503, response.get_data(as_text=True)
+    body = response.get_json()
+    assert body["reason"] == "RUNTIME_BUNDLE_CHANGED"
+    assert body["next_action"] == "live-test"
+    assert module.task_store.list_tasks() == []
+
+
 def test_a_family_without_a_runtime_overlay_is_not_refused_by_the_bundle_check(monkeypatch, tmp_path):
     """No overlay means no bundle on either side; that is agreement, not drift."""
     module, _family_row = _submission_setup(monkeypatch, tmp_path, image=True, receipt=True)

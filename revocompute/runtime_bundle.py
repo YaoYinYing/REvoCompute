@@ -198,6 +198,9 @@ def overlay_entrypoint_error(entrypoint: Iterable[str], entries: Iterable[Overla
     the snapshot.  Families whose entrypoint is not overlay-declared are outside
     this contract: they have not migrated and keep their image entrypoint.
     """
+    declared_entries = tuple(entries)
+    if not declared_entries:
+        return None
     steps = tuple(entrypoint) if entrypoint is not None else ()
     if len(steps) < 2 or not isinstance(steps[-1], str) or not steps[-1]:
         return None
@@ -205,11 +208,18 @@ def overlay_entrypoint_error(entrypoint: Iterable[str], entries: Iterable[Overla
     relative = _entrypoint_relative(path)
     if relative is None:
         return None
-    declared = {entry.relative for entry in entries}
+    declared = {entry.relative for entry in declared_entries}
     under_mount = path.startswith(RUNTIME_MOUNT_TARGET + "/")
-    if relative not in declared:
-        return f"Runtime entrypoint is not in the declared overlay: {path}" if under_mount else None
-    if not under_mount:
+    if under_mount:
+        return None if relative in declared else f"Runtime entrypoint is not in the declared overlay: {path}"
+    # Legacy images flattened each family's declared files into
+    # ``/app/revocompute``, so a legacy ``/app/revocompute/run.sh`` and an
+    # overlay entry ``example/run.sh`` name the same executable.  Refuse the
+    # legacy spelling when the overlay delivers that file; an entrypoint the
+    # overlay does not deliver belongs to an unmigrated family and stays baked.
+    if path.startswith(tuple(root + "/" for root in LEGACY_RUNTIME_ROOTS)) and (
+        relative in declared or Path(relative).name in {Path(entry.relative).name for entry in declared_entries}
+    ):
         return (
             f"Runtime entrypoint for an overlay-declared file must resolve under "
             f"{RUNTIME_MOUNT_TARGET}: {path}"

@@ -2519,7 +2519,16 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             # validate the receipt against that exact digest.  Reading it after
             # a boolean answer would let an activation in between rebind the
             # admission to code no receipt covered.
-            pinned_bundle = bundle_digest(host_state, validated_family)
+            try:
+                pinned_bundle = bundle_digest(host_state, validated_family)
+            except runtime_bundle.RuntimeBundleError:
+                return _runner_refusal(
+                    family.name,
+                    admission.status.value,
+                    f"Runner family {family.name!r} has no published Runtime Bundle binding",
+                    "live-test",
+                    reason="RUNTIME_BUNDLE_CHANGED",
+                )
             if not receipt_valid_for_artifact(
                 host_state,
                 validated_family,
