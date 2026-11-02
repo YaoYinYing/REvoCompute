@@ -16,6 +16,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -185,6 +186,124 @@ def test_gc_keeps_every_family_the_active_index_binds(
 
     assert rb.load_index(store) == bound
     assert rb.resolve_pinned(store, bound["beta"]) is not None
+
+
+def _rollback_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    store = tmp_path / "runtime-bundles"
+    state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store)})
+    family = _family(tmp_path)
+    _authorize(monkeypatch)
+    previous = steps_mod.materialize_runner_bundles(state, [family])["demo"]
+    (family.root / "run.sh").write_text("#!/bin/sh\necho two\n", encoding="utf-8")
+    current = steps_mod.materialize_runner_bundles(state, [family])["demo"]
+    assert current != previous
+    assert rb.load_index(store) == {"demo": current}
+    monkeypatch.setattr(
+        "revocompute.runner_readiness.load_instance_families", lambda _state: [family]
+    )
+    return store, state, family, previous, current
+
+
+def _refuse_rollback(store: Path, state: _State, digest: str) -> None:
+    before = rb.index_path(store).read_bytes()
+    with pytest.raises(SystemExit) as excinfo:
+        steps_mod.cmd_rollback_bundle(state, "demo", digest)
+    assert excinfo.value.code == 1
+    assert rb.index_path(store).read_bytes() == before
+
+
+def test_rollback_switches_to_a_prior_accepted_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store, state, family, previous, current = _rollback_setup(tmp_path, monkeypatch)
+    seen: list[tuple[str, str, dict]] = []
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.receipt_valid_for_bundle",
+        lambda _state, selected, digest, **kwargs: seen.append(
+            (selected.name, digest, kwargs)
+        )
+        or True,
+    )
+
+    steps_mod.cmd_rollback_bundle(state, "demo", previous)
+
+    assert rb.load_index(store) == {"demo": previous}
+    assert seen == [("demo", previous, {"candidate_bundles": None})]
+    # The superseded snapshot is still materialized and verified: rollback is
+    # an index switch, never a rewrite or prune.
+    assert rb.resolve_pinned(store, current) is not None
+    assert rb.resolve_pinned(store, previous) is not None
+    out = capsys.readouterr().out
+    assert f"demo: {current} -> {previous}" in out
+
+
+@pytest.mark.parametrize("failure", ["unknown", "missing", "corrupt", "no-receipt"])
+def test_rollback_refusal_leaves_the_index_byte_identical(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    store, state, _family_obj, previous, _current = _rollback_setup(tmp_path, monkeypatch)
+    target = previous
+    if failure == "unknown":
+        target = "sha256:" + "0" * 64
+    elif failure == "missing":
+        rb._remove_tree(rb.bundle_directory(store, previous))
+    elif failure == "corrupt":
+        stored = rb.bundle_directory(store, previous) / "demo" / "run.sh"
+        stored.chmod(0o644)
+        stored.write_text("#!/bin/sh\necho tampered\n", encoding="utf-8")
+    else:
+        monkeypatch.setattr(
+            "revocompute.runner_live_test.receipt_valid_for_bundle", lambda *_a, **_k: False
+        )
+
+    _refuse_rollback(store, state, target)
+
+
+def test_rollback_refuses_a_family_without_an_overlay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store, state, family, previous, _current = _rollback_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "revocompute.runner_readiness.load_instance_families",
+        lambda _state: [replace(family, runtime_overlay=())],
+    )
+
+    _refuse_rollback(store, state, previous)
+    assert "no runtime overlay" in capsys.readouterr().err
+
+
+def test_rollback_refuses_an_unknown_family(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store, state, _family_obj, previous, _current = _rollback_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr("revocompute.runner_readiness.load_instance_families", lambda _state: [])
+
+    _refuse_rollback(store, state, previous)
+    assert "Unknown Runner Family" in capsys.readouterr().err
+
+
+def test_rollback_bundle_cli_contract() -> None:
+    from revocompute_ctl.__main__ import parse_args
+
+    digest = "sha256:" + "a" * 64
+    subcommand, reset_username, flags = parse_args(
+        ["rollback-bundle", "--runner", "demo", "--digest", digest]
+    )
+    assert (subcommand, reset_username, flags.runner, flags.digest) == (
+        "rollback-bundle",
+        "",
+        "demo",
+        digest,
+    )
+    for argv in (
+        ["rollback-bundle", "--runner", "demo"],
+        ["rollback-bundle", "--digest", digest],
+        ["restart", "--digest", digest],
+    ):
+        with pytest.raises(SystemExit):
+            parse_args(argv)
 
 
 def test_a_malformed_task_pin_is_inert(tmp_path: Path) -> None:

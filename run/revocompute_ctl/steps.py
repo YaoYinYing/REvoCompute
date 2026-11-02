@@ -192,6 +192,48 @@ def prune_runtime_bundles(state, keep: dict[str, str]) -> None:
         print(f"[SLURM] Pruned {len(removed)} superseded runtime bundle(s).")
 
 
+def cmd_rollback_bundle(state, runner: str, digest: str) -> None:
+    """Switch one family's active Runtime Bundle to an already-accepted prior one.
+
+    Rollback is an identity switch, never a rebuild: the target must be a
+    materialized snapshot that still verifies, and a live-test receipt must
+    authorize that exact family + digest for the current artifact, build
+    provenance, configuration, and test definition.  Every refusal leaves
+    ``index.json`` byte-identical.  Snapshots are never rewritten or pruned.
+    """
+    from revocompute import runtime_bundle
+    from revocompute.runner_live_test import receipt_valid_for_bundle
+    from revocompute.runner_readiness import load_instance_families
+
+    store_root = runner_bundle_root(state)
+    if runtime_bundle.resolve_pinned(store_root, digest) is None:
+        print(
+            f"Runtime bundle {digest!r} is not a materialized, verifiable snapshot in {store_root}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    families = [family for family in load_instance_families(state) if family.name == runner]
+    if not families:
+        print(f"Unknown Runner Family: {runner}", file=sys.stderr)
+        raise SystemExit(1)
+    family = families[0]
+    if not family.runtime_overlay:
+        print(f"Runner Family {runner} declares no runtime overlay; there is no bundle to roll back.", file=sys.stderr)
+        raise SystemExit(1)
+    if not receipt_valid_for_bundle(state, family, digest, candidate_bundles=None):
+        print(
+            f"Runtime bundle {digest} has no valid live-test receipt for Runner Family {runner}; "
+            "refusing rollback.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    index = runtime_bundle.load_index(store_root)
+    previous = index.get(family.name)
+    index[family.name] = digest
+    runtime_bundle.write_index(store_root, index)
+    print(f"Runtime bundle {family.name}: {previous or '-'} -> {digest}")
+
+
 def reserved_test_namespaces(source_root: Path, server_root: Path) -> tuple[Path, ...]:
     """Test-only namespace roots that must never reach the deployed snapshot.
 
@@ -577,6 +619,7 @@ class RestartFlags:
     collection: str = "smoke"
     all_runners: bool = False
     as_json: bool = False
+    digest: str = ""
 
 
 class StepRegistry:
