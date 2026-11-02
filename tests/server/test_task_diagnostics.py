@@ -466,6 +466,105 @@ def test_workflow_submission_failure_cannot_inherit_previous_stage_evidence(task
     assert payload["logs"] == []
 
 
+def test_failed_workflow_branch_survives_a_later_sibling_success(task_context, monkeypatch, tmp_path):
+    """The Task summary names the failed branch, not the sibling that succeeded.
+
+    A later independent allocation replaces the shared diagnostics row with its
+    own zero-exit evidence.  The durable failed StageRun is the authority, so
+    both the stored row and the user-facing summary must still name the branch
+    that failed, with its reason and exit status.
+    """
+    from types import SimpleNamespace
+
+    from revocompute.execution_diagnostics import REASONS
+    from revocompute.execution_graph import compile_graph
+    from revocompute.job import JobState
+    from revocompute.resource_policy import resolve_resources
+    from revocompute.task_types import WorkflowStage
+    from test_slurm_runner import _make_task_type
+
+    module, client, task_id, root, owner, *_ = task_context
+    store = module.task_store
+    runtime = module.task_runtime
+    stages = (
+        WorkflowStage("pipeline.failed", "Failed", False, (), ("first",)),
+        WorkflowStage("pipeline.sibling", "Sibling", False, (), ("second",)),
+    )
+    tt = _make_task_type(workflow=stages, stage_markers={"first": "First", "second": "Second"})
+    graph = compile_graph(tt)
+    assert store.update_task(
+        task_id,
+        status="pending",
+        run_stage="first",
+        input_form=json.dumps({
+            "execution_graph": {
+                "ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document,
+            },
+        }),
+    )
+    policy = resolve_resources(
+        lambda field: None, lambda field: None, requires_gpu=False, allowed_queues=(), default_timeout_seconds=60,
+    )
+    image = "sha256:" + "a" * 64
+
+    class Job:
+        def __init__(self, name):
+            self.name = name
+
+        def runtime_image_observation(self):
+            return SimpleNamespace(expected=image, observed=image)
+
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            if self.name == "pipeline-failed":
+                store.record_task_diagnostics(
+                    task_id,
+                    {"reason_code": "nonzero_exit", "exit_code": 2, "stage_id": "pipeline.failed"},
+                )
+                return JobState.FAILED
+            # The successful sibling replaces the row with its own evidence.
+            (root / "sibling.txt").write_text("sibling output")
+            store.record_task_diagnostics(
+                task_id, {"reason_code": "completed", "exit_code": 0, "stage_id": "pipeline.sibling"}
+            )
+            return JobState.COMPLETED
+
+    monkeypatch.setattr(runtime, "_create_job", lambda _id, stage_tt, *a, **kw: Job(stage_tt.name))
+    entities = [{"type": "workspace", "workspace_root": str(tmp_path / "workspace"), "workspace_key": "tester"}]
+
+    result = runtime._run_compute_workflow(
+        task_id,
+        store.get_task(task_id),
+        tt,
+        entities,
+        str(root),
+        {stage.name: policy for stage in stages},
+        lambda stage: None,
+    )
+
+    assert result == JobState.FAILED
+    evidence = store.get_task_diagnostics(task_id)
+    assert evidence["reason_code"] == "nonzero_exit"
+    assert evidence["stage_id"] == "pipeline.failed"
+    assert evidence["exit_code"] == 2
+
+    # Then settle the Task exactly as _execute_compute_task's failure path does.
+    runtime._record_failure(
+        task_id,
+        store.get_task(task_id),
+        1.0,
+        "second",
+        REASONS.get(evidence["reason_code"], "Execution failed."),
+    )
+    payload = client.get(f"/compute/api/tasks/{task_id}/diagnostics", headers=owner).json
+    assert payload["reason_code"] == "nonzero_exit"
+    assert payload["stage"] == "pipeline.failed"
+    assert payload["exit_code"] == 2
+    assert payload["summary"] == REASONS["nonzero_exit"]
+
+
 @pytest.mark.parametrize("fault", [None, "metadata", "publication"])
 def test_diagnostic_failures_preserve_terminal_ownership_accounting_and_cleanup(task_context, monkeypatch, fault):
     """Publication is best effort after allocation settlement; it cannot own execution."""

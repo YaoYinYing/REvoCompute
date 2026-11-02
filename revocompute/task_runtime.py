@@ -1537,6 +1537,57 @@ def _record_workflow_refusal(task_id: str, stage_name: str, reason_code: str) ->
         logging.exception("Could not retain workflow refusal for task %s", task_id)
 
 
+def _record_workflow_failure(task_id: str, failed_evidence: dict[str, dict[str, Any]]) -> None:
+    """Settle the Task-level row on the workflow's primary failed StageRun.
+
+    The newest attempt of every stage is the durable authority: the first
+    failed stage in manifest order is what the Task failed for, which makes two
+    failures attribute deterministically instead of racing the last writer.
+    Its captured adapter facts are restored with it, because a later
+    independent sibling replaced the shared row with its own success.  Fields
+    belonging to that sibling's allocation are dropped rather than presented
+    as this failure's evidence.
+    """
+    try:
+        projection = stage_state.workflow_state_projection(task_store.list_stage_runs(task_id))
+        primary = next(
+            (name for name, step in projection.items() if step["status"] == stage_state.FAILED.lower()),
+            None,
+        )
+        if primary is None:
+            # A pre-dispatch refusal has no durable attempt; the row it
+            # recorded already names the refusing stage.
+            return
+        evidence = task_store.get_task_diagnostics(task_id) or {}
+        captured = failed_evidence.get(primary) or {}
+        # The captured row can be more specific than the attempt (the adapter
+        # distinguishes a nonzero exit from a generic allocation failure), but
+        # only a real failure classification may be adopted: a stage the
+        # composer reclassified after a zero exit keeps the attempt's reason.
+        captured_reason = captured.get("reason_code")
+        evidence["reason_code"] = (
+            captured_reason
+            if captured_reason in REASONS
+            else stage_state.bounded_reason(projection[primary].get("reason_code"))
+        )
+        evidence["stage_id"] = primary
+        for key in ("attempt_id", "record_sha256"):
+            if captured.get(key) is not None:
+                evidence[key] = captured[key]
+            else:
+                evidence.pop(key, None)
+        # Exit status describes the allocation, so it travels only with a real
+        # failure classification: a zero exit cannot explain the failure.
+        for key in ("exit_code", "scheduler_state"):
+            if captured_reason in REASONS and captured.get(key) is not None:
+                evidence[key] = captured[key]
+            else:
+                evidence.pop(key, None)
+        task_store.record_task_diagnostics(task_id, evidence)
+    except Exception:
+        logging.exception("Could not attribute workflow failure for task %s", task_id)
+
+
 def _record_blocked_nodes(task_id: str, blocked: set[str]) -> None:
     """Record one bounded diagnostic naming every node blocked by a failure."""
     try:
@@ -1619,6 +1670,32 @@ def _run_compute_workflow(
     completed: set[str] = set()
     failed: set[str] = set()
     blocked: set[str] = set()
+    #: The adapter row a failed stage left before a later sibling replaced it.
+    failed_evidence: dict[str, dict[str, Any]] = {}
+
+    def capture_failed_evidence(stage_name: str) -> None:
+        """Snapshot the failed stage's diagnostics row before a sibling replaces it.
+
+        Each allocation rewrites the single Task-level row, so a later
+        independent sibling's success would otherwise be the only evidence the
+        workflow leaves behind.  The durable StageRun remains the authority for
+        *which* stage failed; this snapshot keeps its exit code, scheduler
+        state, attempt identity and log record alongside it.
+        """
+        if stage_name in failed_evidence:
+            return
+        try:
+            evidence = task_store.get_task_diagnostics(task_id) or {}
+        except Exception:
+            logging.exception("Could not preserve failed-stage evidence for task %s", task_id)
+            return
+        if str(evidence.get("stage_id") or "") not in {stage_name, stage_name.replace(".", "-")}:
+            return
+        failed_evidence[stage_name] = {
+            key: evidence[key]
+            for key in ("reason_code", "exit_code", "scheduler_state", "attempt_id", "record_sha256")
+            if evidence.get(key) is not None
+        }
 
     def block_descendants(node_id: str) -> None:
         pending = list(children[node_id])
@@ -1651,6 +1728,7 @@ def _run_compute_workflow(
                 # the Server never saw.  A stage with a row is recomputed
                 # instead, because that row cannot be tied to this image.
                 _record_workflow_refusal(task_id, node.id, "stage_output_unverified")
+                capture_failed_evidence(node.id)
                 failed.add(node.id)
                 block_descendants(node.id)
                 progressed = True
@@ -1671,6 +1749,7 @@ def _run_compute_workflow(
                 if refreshed is not None:
                     latest_runs[node.id] = refreshed
             else:
+                capture_failed_evidence(node.id)
                 failed.add(node.id)
                 block_descendants(node.id)
         if all(node.id in completed or node.id in failed or node.id in blocked for node in graph.nodes):
@@ -1680,6 +1759,8 @@ def _run_compute_workflow(
                 f"Workflow made no progress; unresolved stages: "
                 f"{', '.join(node.id for node in graph.nodes if node.id not in completed | failed | blocked)}"
             )
+    if failed:
+        _record_workflow_failure(task_id, failed_evidence)
     if blocked:
         _record_blocked_nodes(task_id, blocked)
     return JobState.FAILED if failed else JobState.COMPLETED
@@ -3205,7 +3286,18 @@ def _record_failure(
         if reason_code is not None or not evidence.get("reason_code"):
             evidence["reason_code"] = stage_reason
         if run_stage and evidence.get("reason_code") != "stage_blocked_by_failed_dependency":
-            evidence["stage_id"] = run_stage
+            # A workflow failure already carries the failed stage's identity;
+            # the progress marker may name an independent sibling that finished
+            # after it, so it must not replace a durable failed StageRun.
+            latest_failed = {
+                name
+                for name, step in stage_state.workflow_state_projection(
+                    task_store.list_stage_runs(md5sum)
+                ).items()
+                if step["status"] == stage_state.FAILED.lower()
+            }
+            if str(evidence.get("stage_id") or "") not in latest_failed:
+                evidence["stage_id"] = run_stage
         task_store.record_task_diagnostics(md5sum, evidence)
     except Exception:
         logging.exception("Could not retain failure classification for task %s", md5sum)

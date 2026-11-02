@@ -217,6 +217,9 @@ def diagnostic_payload(
         reason = None
     if reason:
         payload.update(reason_code=reason, summary=REASONS[reason], availability="available")
+        # A failed task's durable attribution names the stage that failed; the
+        # progress marker may name an independent sibling that finished later.
+        payload["stage"] = safe_diagnostic_text(evidence.get("stage_id"))[:255] or payload["stage"]
     exit_code = evidence.get("exit_code")
     if isinstance(exit_code, int) and not isinstance(exit_code, bool):
         payload.update(exit_code=exit_code, exit_code_source="srun", availability="available")
