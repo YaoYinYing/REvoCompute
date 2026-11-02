@@ -140,6 +140,11 @@ class RunnerScenario:
     readiness_state: ReadinessState = field(default_factory=ReadinessState)
     preflight: PreflightSpec = field(default_factory=PreflightSpec)
     lifecycle: LifecycleSpec = field(default_factory=LifecycleSpec)
+    #: The per-stage projection the status endpoint serves. Empty means the
+    #: endpoint omits ``stages``, as it does for a single-stage Task with no record.
+    stages: tuple[Mapping[str, Any], ...] = ()
+    #: Model a status projection that does not carry ``dependency``.
+    stages_omit_dependency: bool = False
     result: ResultFixture | None = None
     archive: ArchiveSpec = field(default_factory=ArchiveSpec)
     task_id: str = DEFAULT_TASK_ID
@@ -184,6 +189,10 @@ class RunnerScenario:
 
     def with_lifecycle(self, *statuses: str) -> RunnerScenario:
         return replace(self, lifecycle=LifecycleSpec(statuses=tuple(statuses)))
+
+    def with_stages(self, stages: Iterable[Mapping[str, Any]], *, omit_dependency: bool = False) -> RunnerScenario:
+        """Declare the per-stage state the status endpoint projects."""
+        return replace(self, stages=tuple(stages), stages_omit_dependency=omit_dependency)
 
     def with_result(self, fixture: ResultFixture | str | None) -> RunnerScenario:
         if isinstance(fixture, str):
@@ -322,6 +331,8 @@ class RunnerScenario:
                 result_available=result_available,
                 display_name=self.replay_display_name(),
                 error=self.status_error(status) if terminal else None,
+                stages=self.stages or None,
+                stages_omit_dependency=self.stages_omit_dependency,
             )
             return payload, terminal, status
         payload = builders.build_task_status(
@@ -330,6 +341,8 @@ class RunnerScenario:
             status,
             result_available=result_available,
             error=self.status_error(status) if terminal else None,
+            stages=self.stages or None,
+            stages_omit_dependency=self.stages_omit_dependency,
         )
         return payload, terminal, status
 

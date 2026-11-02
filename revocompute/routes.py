@@ -110,6 +110,7 @@ from revocompute.ingress_security import (
     phase_for_code,
 )
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
+from revocompute.execution_graph import GraphValidationError, execution_graph_payload
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute import resource_lifecycle
@@ -162,7 +163,8 @@ from revocompute.result_storyboard import (
     storyboard_asset_root,
     storyboard_declaration,
 )
-from revocompute import runtime_bundle
+from revocompute import runtime_bundle, runtime_image
+from revocompute.runner_host import build_server_host
 from revocompute.schemas import (
     AccessDecisionRequest,
     AccessRequestCreate,
@@ -210,8 +212,10 @@ from revocompute.task_runtime import (
 )
 from revocompute.task_types import default_task_type, get as get_task_type
 from revocompute.task_types import (
+    RuntimeFamily,
     declared_entitlements,
     get_policy,
+    get_runtime_family,
     iter_capabilities,
     list_categories,
     list_policies,
@@ -1095,10 +1099,19 @@ def _submission_payload(tt) -> dict[str, Any] | None:
     )
     if evidence is None:
         return None
+    accepted = evidence.accepts(tt.name)
     if g.get("current_user") is None:
-        return {"submittable": evidence.ready}
+        return {"submittable": accepted}
+    if not accepted and evidence.ready:
+        return {
+            "ready": False,
+            "status": evidence.status.value,
+            "reason_code": "LIVE_TEST_CASE_OMITTED",
+            "message": "The deployment's Runner acceptance did not run this Task's live-test case",
+            "next_action": "live-test",
+        }
     return {
-        "ready": evidence.ready,
+        "ready": accepted,
         "status": evidence.status.value,
         "reason_code": evidence.reason_code,
         "message": evidence.message,
@@ -1331,43 +1344,48 @@ def task_type_form(name: str):
             return jsonify({"error": f"Task resource policy is invalid: {exc}"}), 503
 
     workspace_payload = _input_workspace_payload(tt)
-    return jsonify(
-        {
-            **_task_summary(tt),
-            **_task_guidance(tt),
-            "access": _runner_access_payload(tt),
-            "definition_version": 4,
-            "runtime_family": tt.runtime.name,
-            "gpus": tt.gpus,
-            "requires_network": tt.requires_network or any(stage.requires_network for stage in tt.workflow),
-            "inputs": [
-                {
-                    "id": role.name,
-                    "title": role.title,
-                    "type": role.type,
-                    "formats": list(role.formats),
-                    "extensions": list(role.extensions),
-                    "accept": ",".join(role.extensions),
-                    "cardinality": {"min": role.minimum, "max": role.maximum},
-                    "description": role.description,
-                }
-                for role in tt.inputs
-            ],
-            "citations": [citation.projection() for citation in tt.citations],
-            "workflow": [
-                {
-                    "name": stage.name,
-                    "display_name": stage.display_name,
-                    "requires_gpu": stage.requires_gpu,
-                    "requires_network": stage.requires_network,
-                    "stage_markers": list(stage.stage_markers),
-                }
-                for stage in tt.workflow
-            ],
-            "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
-            "input_workspace": workspace_payload,
-        }
-    )
+    try:
+        execution_graph = execution_graph_payload(tt)
+    except GraphValidationError as exc:
+        return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
+    payload = {
+        **_task_summary(tt),
+        **_task_guidance(tt),
+        "access": _runner_access_payload(tt),
+        "definition_version": 4,
+        "runtime_family": tt.runtime.name,
+        "gpus": tt.gpus,
+        "requires_network": tt.requires_network or any(stage.requires_network for stage in tt.workflow),
+        "inputs": [
+            {
+                "id": role.name,
+                "title": role.title,
+                "type": role.type,
+                "formats": list(role.formats),
+                "extensions": list(role.extensions),
+                "accept": ",".join(role.extensions),
+                "cardinality": {"min": role.minimum, "max": role.maximum},
+                "description": role.description,
+            }
+            for role in tt.inputs
+        ],
+        "citations": [citation.projection() for citation in tt.citations],
+        "workflow": [
+            {
+                "name": stage.name,
+                "display_name": stage.display_name,
+                "requires_gpu": stage.requires_gpu,
+                "requires_network": stage.requires_network,
+                "stage_markers": list(stage.stage_markers),
+            }
+            for stage in tt.workflow
+        ],
+        "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
+        "input_workspace": workspace_payload,
+    }
+    if execution_graph is not None:
+        payload["execution_graph"] = execution_graph
+    return jsonify(payload)
 
 
 def _enabled_task_type_or_404(name: str):
@@ -2253,87 +2271,284 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         if enabled is False:
             return jsonify({"error": f"Task type {task_type!r} is currently disabled"}), 400
 
-    policy = tt.runtime.access_policy
+    # A composed Task executes every family its graph names, so the submission
+    # is admitted against each referenced family, never only the composing one.
+    referenced_families: dict[str, RuntimeFamily] = {tt.runtime.name: tt.runtime}
+    for stage in tt.workflow:
+        family_id = stage.family or tt.runtime.name
+        if family_id not in referenced_families:
+            referenced_families[family_id] = get_runtime_family(family_id)
+    graph_requires_gpu = bool(tt.gpus) or any(stage.requires_gpu for stage in tt.workflow)
+
     abuse_scope = getattr(_get_user_db(), "path", "")
-    if policy is not None:
-        suspension = access_guard.active_suspension(int(g.current_user["id"]), policy.id, abuse_scope)
+    checked_policies: set[str] = set()
+    for family in referenced_families.values():
+        family_policy = family.access_policy
+        if family_policy is None or family_policy.id in checked_policies:
+            continue
+        checked_policies.add(family_policy.id)
+        suspension = access_guard.active_suspension(int(g.current_user["id"]), family_policy.id, abuse_scope)
         if suspension.active:
-            already_granted, _ = authorize(policy, current_app.config["user_db"], int(g.current_user["id"]))
+            already_granted, _ = authorize(
+                family_policy, current_app.config["user_db"], int(g.current_user["id"])
+            )
             if already_granted:
-                access_guard.clear_policy_state(int(g.current_user["id"]), policy.id, abuse_scope)
+                access_guard.clear_policy_state(int(g.current_user["id"]), family_policy.id, abuse_scope)
                 suspension = access_guard.SuspensionState(active=False)
         if suspension.active:
-            if access_guard.mark_blocked_event(int(g.current_user["id"]), policy.id, abuse_scope):
+            if access_guard.mark_blocked_event(int(g.current_user["id"]), family_policy.id, abuse_scope):
                 _audit_runner_access(
-                    _get_user_db(), int(g.current_user["id"]), policy.id, "blocked", "temporary_suspension", tt
+                    _get_user_db(),
+                    int(g.current_user["id"]),
+                    family_policy.id,
+                    "blocked",
+                    "temporary_suspension",
+                    tt,
+                    runtime_family=family.name,
                 )
             response = jsonify(
                 {
                     "error": "Runner access temporarily suspended",
-                    "policy_id": policy.id,
+                    "policy_id": family_policy.id,
                     "retry_after_seconds": max(suspension.retry_after_seconds, 1),
                 }
             )
             response.headers["Retry-After"] = str(max(suspension.retry_after_seconds, 1))
             return response, 429
-    allowed, access_error = authorize(
-        tt.runtime.access_policy, current_app.config["user_db"], int(g.current_user["id"])
-    )
-    if not allowed:
-        if policy is not None:
-            state = access_guard.record_denial(int(g.current_user["id"]), policy.id, abuse_scope)
+        allowed, access_error = authorize(
+            family_policy, current_app.config["user_db"], int(g.current_user["id"])
+        )
+        if not allowed:
+            state = access_guard.record_denial(int(g.current_user["id"]), family_policy.id, abuse_scope)
             outcome = "suspended" if state.active else "denied"
             if not state.active or state.newly_suspended:
                 _audit_runner_access(
                     _get_user_db(),
                     int(g.current_user["id"]),
-                    policy.id,
+                    family_policy.id,
                     outcome,
                     "temporary_suspension" if state.active else "missing_entitlement",
                     tt,
+                    runtime_family=family.name,
                 )
-            elif access_guard.mark_blocked_event(int(g.current_user["id"]), policy.id, abuse_scope):
+            elif access_guard.mark_blocked_event(int(g.current_user["id"]), family_policy.id, abuse_scope):
                 _audit_runner_access(
-                    _get_user_db(), int(g.current_user["id"]), policy.id, "blocked", "temporary_suspension", tt
+                    _get_user_db(),
+                    int(g.current_user["id"]),
+                    family_policy.id,
+                    "blocked",
+                    "temporary_suspension",
+                    tt,
+                    runtime_family=family.name,
                 )
             if state.active and not state.newly_suspended:
                 response = jsonify(
                     {
                         "error": "Runner access temporarily suspended",
-                        "policy_id": policy.id,
+                        "policy_id": family_policy.id,
                         "retry_after_seconds": max(state.retry_after_seconds, 1),
                     }
                 )
                 response.headers["Retry-After"] = str(max(state.retry_after_seconds, 1))
                 return response, 429
-        return jsonify(access_error), 403
+            return jsonify(access_error), 403
     # Admission is based on the same immutable build/live-test evidence shown
     # by runner-status.  Evaluate it before validating or saving uploads so a
     # non-ready Runner cannot create task or scheduler side effects.
-    admission = submission_admission(CONFIG.server_dir, tt.runtime.name, manage_db=managedb)
-    if admission is not None and not admission.ready:
+    #
+    # The same boundary pins each referenced family's runtime image: the exact
+    # bytes the Slurm wrapper will open, resolved once and recorded in the
+    # immutable snapshot.  A family without a resolvable digest, or without a
+    # live-test receipt for exactly that digest, refuses the submission.
+    runtime_images: dict[str, str] = {}
+    admissions = {
+        family.name: submission_admission(CONFIG.server_dir, family.name, manage_db=managedb)
+        for family in referenced_families.values()
+    }
+
+    def _runner_refusal(
+        family_name: str,
+        status: str,
+        message: str,
+        next_action: str,
+        reason: str = "RUNTIME_IMAGE_UNPINNED",
+    ):
         return (
             jsonify(
                 {
                     "error": "Runner is currently unavailable for new submissions",
-                    "runner": tt.runtime.name,
-                    "status": admission.status.value,
-                    "reason": admission.reason_code,
-                    "message": admission.message,
-                    "next_action": admission.next_action,
+                    "runner": family_name,
+                    "status": status,
+                    "reason": reason,
+                    "message": message,
+                    "next_action": next_action,
                 }
             ),
             503,
         )
+
+    # A Slurm deployment that applies no managed admission decision would pin
+    # no image and create a Task that can only fail when the scheduler refuses
+    # it.  Refuse at the shared submission boundary instead.  A non-Slurm
+    # (preview/demo) deployment keeps its existing behavior.
+    if CONFIG.job_executor == "slurm" and all(item is None for item in admissions.values()):
+        return _runner_refusal(
+            tt.runtime.name,
+            "NOT_CONFIGURED",
+            "This deployment executes on Slurm but applies no managed Runner admission decision, "
+            "so submissions are refused instead of creating an unpinned Task.",
+            "doctor",
+            reason="RUNNER_ADMISSION_UNMANAGED",
+        )
+    for family in referenced_families.values():
+        admission = admissions[family.name]
+        if admission is None:
+            # A deployment that does not run managed Slurm applies no Runner
+            # admission decision and opens no SIF, so it pins no image.
+            continue
+        if not admission.accepts(task_type):
+            if admission.ready:
+                # The family is validated, but its acceptance never ran this
+                # Task's own case (a narrower live-test scope).  Submitting it
+                # would execute a composed path no receipt has covered.
+                return (
+                    jsonify(
+                        {
+                            "error": "Runner is currently unavailable for new submissions",
+                            "runner": family.name,
+                            "status": admission.status.value,
+                            "reason": "LIVE_TEST_CASE_OMITTED",
+                            "message": (
+                                "The deployment's Runner acceptance did not run this Task's live-test case; "
+                                "re-run the live test with every family it references enabled"
+                            ),
+                            "next_action": "live-test",
+                        }
+                    ),
+                    503,
+                )
+            return (
+                jsonify(
+                    {
+                        "error": "Runner is currently unavailable for new submissions",
+                        "runner": family.name,
+                        "status": admission.status.value,
+                        "reason": admission.reason_code,
+                        "message": admission.message,
+                        "next_action": admission.next_action,
+                    }
+                ),
+                503,
+            )
+    # Preflight is advice, not the submission decision: it neither creates the
+    # snapshot that carries a pin nor starts an allocation.
+    if not preflight_only:
+        from revocompute.runner_live_test import receipt_valid_for_artifact
+        from revocompute.runner_readiness import bundle_digest, load_instance_families
+        from revocompute.runner_registry import RegistryError
+
+        host_state = build_server_host(CONFIG)
+        # Acceptance is recorded against the deployment's family view; the
+        # artifact checked is the exact path this submission pins.  A
+        # deployment that applies no admission decision never resolves it.
+        deployment_families: dict[str, Any] | None = None
+        accepted_bundles: dict[str, str] = {}
+
+        def _same_path(left: Any, right: Any) -> bool:
+            left, right = str(left or ""), str(right or "")
+            if not left or not right:
+                return left == right
+            try:
+                return os.path.samefile(left, right)
+            except OSError:
+                return Path(left).resolve() == Path(right).resolve()
+
+        def _family_disagrees(left: Any, right: Any) -> bool:
+            """Whether the active and deployment views describe different contracts.
+
+            The SIF path itself is not compared: acceptance is bound to the
+            bytes at the pinned path by ``sif_sha256``, so two paths holding the
+            same artifact are the same execution.  The source root, definition,
+            entrypoint, build inputs and runtime overlay determine the contract
+            and the Runtime Bundle binding submission will pin.
+            """
+            for field_name in ("name", "version", "definition", "image_artifact"):
+                if getattr(left, field_name, "") != getattr(right, field_name, ""):
+                    return True
+            for field_name in ("entrypoint", "build_inputs", "runtime_overlay"):
+                if tuple(getattr(left, field_name, ())) != tuple(getattr(right, field_name, ())):
+                    return True
+            return not _same_path(getattr(left, "root", ""), getattr(right, "root", ""))
+
+        for family in referenced_families.values():
+            admission = admissions[family.name]
+            if admission is None:
+                continue
+            if deployment_families is None:
+                try:
+                    deployment_families = {
+                        item.name: item for item in load_instance_families(host_state)
+                    }
+                except (OSError, ValueError, runtime_bundle.RuntimeBundleError, RegistryError):
+                    return _runner_refusal(
+                        family.name,
+                        admission.status.value,
+                        "The deployment's Runner inventory cannot be resolved",
+                        "doctor",
+                    )
+            try:
+                image = runtime_image.runtime_image_for_submission(family)
+            except runtime_image.RuntimeImageError as exc:
+                return _runner_refusal(family.name, admission.status.value, str(exc), "build-sif")
+            # Resolving the pin is not acceptance: only the deployment's
+            # live-test authority can prove these exact bytes carry a current,
+            # passed validation with the identity submission would pin.  A
+            # READY attestation for another SIF is not evidence for this one.
+            # The acceptance identity must describe the same family contract the
+            # Task will execute, so a disagreement refuses rather than silently
+            # preferring either view.
+            validated_family = deployment_families.get(family.name)
+            if validated_family is None or _family_disagrees(family, validated_family):
+                return _runner_refusal(
+                    family.name,
+                    admission.status.value,
+                    "The active Runner family contract disagrees with the deployment's family view",
+                    "doctor",
+                )
+            # Resolve the binding the Task will pin *before* validation and
+            # validate the receipt against that exact digest.  Reading it after
+            # a boolean answer would let an activation in between rebind the
+            # admission to code no receipt covered.
+            pinned_bundle = bundle_digest(host_state, validated_family)
+            if not receipt_valid_for_artifact(
+                host_state,
+                validated_family,
+                image.path,
+                sif_sha256=image.digest,
+                discover=False,
+                expected_runtime_bundle=pinned_bundle,
+            ):
+                return _runner_refusal(
+                    family.name,
+                    admission.status.value,
+                    f"Runner family {family.name!r} has no current accepted live-test receipt "
+                    f"for runtime image {image.digest}",
+                    "live-test",
+                )
+            # The manifest resolves its own binding later from the activation
+            # index; a later read that names anything else refuses.
+            accepted_bundles[family.name] = pinned_bundle or ""
+            runtime_images[family.name] = image.digest
     # Reject GPU-ineligible users and invalid scheduler configuration before
     # writing uploads or creating a task record.
-    if tt.gpus and not g.current_user.get("allow_gpu_use"):
+    policy = tt.runtime.access_policy
+    if graph_requires_gpu and not g.current_user.get("allow_gpu_use"):
         if policy is not None:
             _audit_runner_access(
                 _get_user_db(), int(g.current_user["id"]), policy.id, "denied", "gpu_access_denied", tt
             )
         return jsonify({"error": "GPU access required for this task type. Contact an administrator."}), 403
-    if tt.gpus:
+    if graph_requires_gpu:
         _project_gpu_authorization(int(g.current_user["id"]))
     try:
         placement = resolve_submission_placement(managedb, tt, runner)
@@ -2345,6 +2560,11 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         return jsonify({"error": "This task type has an invalid resource policy; contact an administrator."}), 503
     resource_policy = placement.primary
     resource_policies = placement.stage_resources
+
+    try:
+        execution_graph = execution_graph_payload(tt)
+    except GraphValidationError as exc:
+        return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
 
     uploaded_inputs, upload_error = _validate_input_uploads(task_type)
     if upload_error is not None:
@@ -2383,7 +2603,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             # the scheduler/worker/storage path, and only GPU work additionally
             # depends on GPU inventory.  The global aggregate still drives the
             # operator/user overview.
-            block = readiness_service.admission_block(requires_gpu=bool(tt.gpus))
+            block = readiness_service.admission_block(requires_gpu=graph_requires_gpu)
             if block is not None:
                 # The refusal is an admission decision like any other, so it is
                 # reported in the same bounded vocabulary instead of only as
@@ -2469,7 +2689,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 ),
                 403,
             )
-        if tt.gpus:
+        if graph_requires_gpu:
             try:
                 gpu_credit = task_store.require_compute_entitlement(user_id)
             except GPUCreditUnavailableError:
@@ -2644,6 +2864,8 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "workspace": workspace_payload,
         "request_id": g.request_id,
     }
+    if execution_graph is not None:
+        input_form["execution_graph"] = execution_graph
 
     # Runner protocol v3: the immutable snapshot carries task.json — the
     # single manifest every runner reads (params + file paths).  No
@@ -2677,20 +2899,43 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # is activated before Slurm starts it.  ``resolve_for_submission`` raises
     # when the family declares an overlay but its bound snapshot is missing, so
     # a submission never silently becomes one that cannot launch.
+    runtime_bundles: dict[str, str] = {}
     try:
-        bundle_digest = runtime_bundle.resolve_for_submission(
-            CONFIG.runtime_bundle_root,
-            runtime_bundle.load_index(CONFIG.runtime_bundle_root),
-            tt.runtime.name,
-            declares_overlay=bool(tt.runtime.runtime_overlay),
-        )
+        bundle_index = runtime_bundle.load_index(CONFIG.runtime_bundle_root)
+        for family in referenced_families.values():
+            runtime_bundles[family.name] = runtime_bundle.resolve_for_submission(
+                CONFIG.runtime_bundle_root,
+                bundle_index,
+                family.name,
+                declares_overlay=bool(family.runtime_overlay),
+            )
     except runtime_bundle.RuntimeBundleError as exc:
         return jsonify({"error": f"This Runner is not ready to accept submissions: {exc}"}), 503
-    # The digest is also recorded on the task row, because the task store is the
+    # The acceptance above covered one Runtime Bundle per family.  An
+    # activation between that check and this resolution would pin code the
+    # receipt never validated, so the two reads must agree.
+    for name, accepted in accepted_bundles.items():
+        # A family with no runtime overlay resolves to ``None`` and acceptance
+        # stores ``""``; both mean "no bundle", so compare normalized.
+        if (runtime_bundles.get(name) or "") != (accepted or ""):
+            admission = admissions.get(name)
+            return _runner_refusal(
+                name,
+                admission.status.value if admission is not None else "READY",
+                "The Runner code binding changed while this submission was being admitted; "
+                "resubmit after the activation settles.",
+                "retry",
+                reason="RUNTIME_BUNDLE_CHANGED",
+            )
+    # The map is also recorded on the task row, because the task store is the
     # only durable index of "a Task that can still be launched references this
     # bundle" — retention reads it so a queued Task's runtime code is never
     # pruned before the Task runs.
-    input_form["runtime_bundle_sha256"] = bundle_digest
+    input_form["runtime_bundles"] = runtime_bundles
+    # The image pin travels in the immutable snapshot and on the Task row.  The
+    # snapshot is the authority the wrapper re-checks at launch; the mirror is a
+    # query/recovery projection and a disagreement refuses rather than repairs.
+    input_form["runtime_images"] = runtime_images
     task_manifest = {
         "version": 4,
         "task_id": md5sum,
@@ -2703,7 +2948,8 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "resource_guidance": observations_for_guidance(
             tt.runtime.name, tt.resource_adaptation, store=task_store
         ),
-        "runtime_bundle_sha256": bundle_digest,
+        "runtime_bundles": runtime_bundles,
+        "runtime_images": runtime_images,
     }
     # Claim the Task ID BEFORE destroying or rebuilding any content-derived
     # directory.  The input/output roots are keyed by the ID, so preparation is
@@ -2754,12 +3000,23 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # the same final entitlement loses here instead of both being dispatched.
     # The hold is taken on the class-agnostic scope: the allowance is one
     # deployment budget, and the requested GRES class is preserved on the hold
-    # rather than opening a per-class balance.  A CPU-only Task holds nothing.
-    if tt.gpus:
+    # rather than opening a per-class balance.  A graph with no GPU stage holds
+    # nothing; a CPU-composed Task whose graph contains one still holds.
+    gpu_resource_policy = resource_policy
+    if not tt.gpus and graph_requires_gpu:
+        gpu_resource_policy = next(
+            (
+                placement.stage_resources[stage.name]
+                for stage in tt.workflow
+                if stage.requires_gpu and stage.name in placement.stage_resources
+            ),
+            None,
+        )
+    if graph_requires_gpu:
         reservation = task_store.reserve_compute_admission(
             user_id=int(g.current_user["id"]),
             task_id=md5sum,
-            gres=(resource_policy.gres if resource_policy is not None else None) or "",
+            gres=(gpu_resource_policy.gres if gpu_resource_policy is not None else None) or "",
         )
         if not reservation["allowed"]:
             task_store.release_task_preparation(md5sum, token=claim.token)
@@ -4399,7 +4656,9 @@ def admin_report_activity():
     )
 
 
-def _audit_runner_access(db, user_id: int, policy_id: str, outcome: str, reason_code: str, tt=None) -> None:
+def _audit_runner_access(
+    db, user_id: int, policy_id: str, outcome: str, reason_code: str, tt=None, *, runtime_family: str | None = None
+) -> None:
     """Persist bounded access evidence without changing the admission decision."""
     try:
         metadata = _request_metadata()
@@ -4409,7 +4668,7 @@ def _audit_runner_access(db, user_id: int, policy_id: str, outcome: str, reason_
             outcome,
             reason_code,
             task_type=getattr(tt, "name", ""),
-            runtime_family=getattr(getattr(tt, "runtime", None), "name", ""),
+            runtime_family=runtime_family or getattr(getattr(tt, "runtime", None), "name", ""),
             ip_address=metadata.get("ip"),
             user_agent=metadata.get("user_agent"),
             auth_method=g.get("auth_method"),

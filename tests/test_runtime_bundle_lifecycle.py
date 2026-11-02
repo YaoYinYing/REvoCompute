@@ -65,7 +65,7 @@ def _pin_task(
         )
         connection.execute(
             "INSERT INTO tasks VALUES (?, ?, ?, ?, NULL)",
-            (task_id, status, json.dumps({"runtime_bundle_sha256": digest}), job),
+            (task_id, status, json.dumps({"runtime_bundles": {"demo": digest}}), job),
         )
 
 

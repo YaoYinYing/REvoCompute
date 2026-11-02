@@ -31,12 +31,14 @@ from conftest import (
     _task_owner,
 )
 from jsonschema import Draft202012Validator
+from revocompute.execution_graph import GraphValidationError, compile_graph
 from revocompute.resource_ledger import DataLifecycleState
 from revocompute.task_types import TaskInputRole
 from werkzeug.utils import secure_filename
 
 SERVER_PACKAGE = Path(__file__).resolve().parents[1] / "revocompute"
 ROOT = SERVER_PACKAGE.parent
+_IMAGE = "sha256:" + "a" * 64
 
 # Flask test-client tests
 # ==================================================================
@@ -408,6 +410,68 @@ def test_multistage_runner_multimer_submission_preserves_selected_preset(monkeyp
     assert set(input_form["resource_policies"]) == {"multistage_runner.features", "multistage_runner.model"}
     assert input_form["resource_policies"]["multistage_runner.features"]["requires_gpu"] is False
     assert input_form["resource_policies"]["multistage_runner.model"]["requires_gpu"] is True
+    frozen = input_form["execution_graph"]
+    assert len(frozen["digest"]) == 64
+    assert frozen["document"]["execution_order"] == ["multistage_runner.features", "multistage_runner.model"]
+
+
+def test_workflow_type_detail_projects_the_graph_submission_freezes(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234", "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "multistage_runner,cpu_runner",
+        },
+    )
+    client = module.app.test_client()
+
+    response = client.get("/compute/api/types/multistage_runner")
+
+    assert response.status_code == 200
+    execution_graph = response.get_json()["execution_graph"]
+    task_type, _ = module.task_runtime._get_task_type("multistage_runner")
+    compiled = compile_graph(task_type)
+    assert execution_graph == json.loads(
+        json.dumps(
+            {
+                "ir_version": compiled.ir_version,
+                "digest": compiled.digest,
+                "document": compiled.document,
+            }
+        )
+    )
+    assert "execution_graph" not in client.get("/compute/api/types/cpu_runner").get_json()
+
+
+def test_submission_refuses_a_task_whose_graph_cannot_run(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "multistage_runner"},
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+    before = {task["md5sum"] for task in module.task_store.list_tasks()}
+    def refuse(_task_type):
+        raise GraphValidationError("graph contains a cycle")
+
+    monkeypatch.setattr("revocompute.execution_graph.compile_graph", refuse)
+    fasta_path = Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta"
+    with fasta_path.open("rb") as handle:
+        response = client.post(
+            "/compute/api/post",
+            headers=auth_header,
+            data={
+                "task_type": "multistage_runner",
+                "file": (handle, fasta_path.name),
+                "input_roles": "sequence",
+            },
+            content_type="multipart/form-data",
+        )
+
+    assert response.status_code == 400
+    assert {task["md5sum"] for task in module.task_store.list_tasks()} == before
 
 
 def test_dashboard_serves_structure_preview_for_pdb_tasks(monkeypatch, tmp_path):
@@ -802,6 +866,7 @@ def test_task_status_endpoint_reports_per_stage_state(monkeypatch, tmp_path):
         username="tester",
         status="running",
         task_type="multistage_runner",
+        input_form=json.dumps({"runtime_images": {"multistage_runner": _IMAGE}}),
     )
     features = module.task_store.begin_stage_attempt(
         task_id=md5sum, stage_index=0, stage_name="multistage_runner.features",
@@ -811,6 +876,8 @@ def test_task_status_endpoint_reports_per_stage_state(monkeypatch, tmp_path):
         task_id=md5sum, stage_name="multistage_runner.features", attempt=features["attempt"],
         status=module.task_runtime.stage_state.COMPLETED,
         reason_code=module.task_runtime.stage_state.Reason.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
     )
     module.task_store.begin_stage_attempt(
         task_id=md5sum, stage_index=1, stage_name="multistage_runner.model",
@@ -850,6 +917,11 @@ def test_worker_redispatch_with_existing_stage_run_keeps_task_running(monkeypatc
     )
     md5sum = _insert_pending_task(module, tmp_path / "result", task_type="multistage_runner")
     form = json.loads(module.task_store.get_task(md5sum)["input_form"])
+    task_type, _ = module.task_runtime._get_task_type("multistage_runner")
+    graph = compile_graph(task_type)
+    form["execution_graph"] = {
+        "ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document,
+    }
     form["resource_policies"] = {
         "multistage_runner.features": {
             "cpus": 4, "memory": "8G", "max_runtime_seconds": 600,
@@ -863,8 +935,10 @@ def test_worker_redispatch_with_existing_stage_run_keeps_task_running(monkeypatc
     module.task_store.update_task(
         md5sum, input_form=json.dumps(form), submitted_by_user_id=0
     )
-    # The Task was already running when its CPU stage completed; this re-entry
-    # must skip that stage, keep the Task running, and open the GPU stage.
+    # The Task was already running when its CPU stage completed. This re-entry
+    # re-runs that stage too: no attempt records its runtime image, so a
+    # completion from an earlier execution cannot be attributed to this one.
+    # The Task stays running and the GPU stage still opens.
     prior = module.task_store.begin_stage_attempt(
         task_id=md5sum, stage_index=0, stage_name="multistage_runner.features"
     )
@@ -872,6 +946,8 @@ def test_worker_redispatch_with_existing_stage_run_keeps_task_running(monkeypatc
         task_id=md5sum, stage_name="multistage_runner.features", attempt=prior["attempt"],
         status=module.task_runtime.stage_state.COMPLETED,
         reason_code=module.task_runtime.stage_state.Reason.COMPLETED,
+        expected_runtime_image=_IMAGE,
+        observed_runtime_image=_IMAGE,
     )
     observed: dict[str, str] = {}
     created: list[str] = []
@@ -897,6 +973,11 @@ def test_worker_redispatch_with_existing_stage_run_keeps_task_running(monkeypatc
         def poll(self):
             return module.task_runtime.JobState.COMPLETED
 
+        def runtime_image_observation(self):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
+
     def _create_job(_task_id, tt, _runner, _entities, _output, stage_callback=None, **kwargs):
         created.append(tt.name)
         return _Job(
@@ -916,16 +997,17 @@ def test_worker_redispatch_with_existing_stage_run_keeps_task_running(monkeypatc
 
     module.task_runtime._execute_compute_task(md5sum)
 
-    # The completed CPU stage was not run again.
-    assert created == ["multistage_runner-model"]
+    # Both stages run in this execution; the earlier completion is history.
+    assert created == ["multistage_runner-features", "multistage_runner-model"]
     # The GPU stage is queued; the Task is still running, not rolled back.
     assert observed["multistage_runner-model:dispatched"] == "running"
     assert observed["model:after_marker"] == "running"
     assert observed["multistage_runner-model:started"] == "running"
     runs = module.task_store.list_stage_runs(md5sum)
-    assert [(run["stage_index"], run["status"]) for run in runs] == [
-        (0, "COMPLETED"),
-        (1, "COMPLETED"),
+    assert sorted((run["stage_index"], run["attempt"], run["status"]) for run in runs) == [
+        (0, 1, "COMPLETED"),
+        (0, 2, "COMPLETED"),
+        (1, 1, "COMPLETED"),
     ]
 
 
@@ -954,7 +1036,13 @@ def test_worker_recovery_cancels_slurm_orphans_and_preserves_unstarted_queue(mon
 
     monkeypatch.setattr(runtime.task_store, "list_tasks", lambda: tasks)
     monkeypatch.setattr(runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
-    monkeypatch.setattr(runtime.subprocess, "run", lambda args, **kwargs: cancellations.append((args, kwargs)))
+    def _run(args, **kwargs):
+        if args[0].endswith("scancel"):
+            cancellations.append((args, kwargs))
+            return None
+        return runtime.subprocess.CompletedProcess(args, 0, stdout="JobState=COMPLETED\n", stderr="")
+
+    monkeypatch.setattr(runtime.subprocess, "run", _run)
     monkeypatch.setattr(runtime, "_record_failure", lambda *args, **kwargs: failures.append(args))
     monkeypatch.setattr(
         runtime.SlurmJob,
@@ -1898,6 +1986,7 @@ def _upsert_task_for_user(
     status: str = "finished",
     run_stage: str | None = None,
     task_type: str = "cpu_runner",
+    input_form: str | None = None,
 ) -> None:
     owner = _task_owner(module, username)
     _relocate_task_artifacts(module, md5sum, result_dir, owner)
@@ -1918,6 +2007,7 @@ def _upsert_task_for_user(
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         run_stage=run_stage,
         storage_key=owner["storage_key"],
+        input_form=input_form,
     )
 
 

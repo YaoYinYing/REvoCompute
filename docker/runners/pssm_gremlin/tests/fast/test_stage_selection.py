@@ -1,0 +1,605 @@
+# Copyright (c) 2026 The REvoDesign Developers.
+# Distributed under the terms of the GNU General Public License v3.0.
+# SPDX-License-Identifier: GPL-3.0-only
+"""PSSM-GREMLIN stage selection and fit output provenance.
+
+Each test runs the real ``run.sh`` against a protocol manifest with stub
+search tools on PATH, so the assertions cover the executable stage logic:
+which stage ran and what it wrote. The fit script is stubbed through
+``GREMLIN_TFV1_SCRIPT`` so a test can observe which alignment bytes were
+actually fitted and which outputs were published.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.runner_contract
+
+ROOT = Path(__file__).resolve().parents[5]
+sys.path.insert(0, str(ROOT / "docker" / "runner_testkit"))
+from runner_protocol import run_with_manifest
+
+RUN_SCRIPT = ROOT / "docker" / "runners" / "pssm_gremlin" / "run.sh"
+FASTA = ">2KL8\nMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ\n"
+INSTANCE = "2KL8"
+STEM = f"{INSTANCE}.i90c75_aln"
+
+# Runs as ``python <this file> <alignment> <output_dir> <iteration>``. It
+# records the alignment bytes it fitted and writes the model and plot the fit
+# stage checks for. STUB_FIT_FAIL simulates a fit that fails before writing
+# outputs; STUB_NO_PLOT writes the model but no plot.
+FIT_STUB = """\
+import hashlib
+import os
+import pathlib
+import sys
+
+alignment, output_dir, iteration = sys.argv[1:4]
+data = pathlib.Path(alignment).read_bytes()
+digest = hashlib.sha256(data).hexdigest()
+with open(os.path.join(os.environ["STUB_CALLS"], "fit.calls"), "a", encoding="utf-8") as handle:
+    handle.write(f"{alignment}\\t{digest}\\t{iteration}\\n")
+if os.environ.get("STUB_FIT_FAIL"):
+    sys.exit(1)
+model = pathlib.Path(output_dir) / (pathlib.Path(alignment).stem + ".GREMLIN.mrf.pkl")
+plot = pathlib.Path(output_dir) / (pathlib.Path(alignment).stem + "_GREMLIN_mtx.png")
+model.write_text(f"model {digest}\\n", encoding="utf-8")
+if not os.environ.get("STUB_NO_PLOT"):
+    plot.write_text(f"plot {digest}\\n", encoding="utf-8")
+"""
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _write_executable(path: Path, body: str) -> None:
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _stub_environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
+    """A PATH with stub search tools and a link to the test interpreter."""
+    bin_dir = tmp_path / "bin"
+    calls = tmp_path / "calls"
+    bin_dir.mkdir()
+    calls.mkdir()
+    os.symlink(sys.executable, bin_dir / "python")
+    fit_script = tmp_path / "fit_stub.py"
+    fit_script.write_text(FIT_STUB, encoding="utf-8")
+    _write_executable(
+        bin_dir / "hhblits",
+        """#!/bin/bash
+set -e
+echo "hhblits" >> "${STUB_CALLS}/hhblits.calls"
+[[ -n "${STUB_HHBLITS_FAIL:-}" ]] && exit 1
+prev=""
+for arg in "$@"; do
+  if [[ "$prev" == "-oa3m" ]]; then printf ">q\\nACDE\\n>h\\nACDE\\n" > "$arg"; fi
+  prev="$arg"
+done
+""",
+    )
+    _write_executable(
+        bin_dir / "hhfilter",
+        """#!/bin/bash
+set -e
+prev=""
+source=""
+for arg in "$@"; do
+  [[ "$prev" == "-i" ]] && source="$arg"
+  if [[ "$prev" == "-o" ]]; then cp "$source" "$arg"; fi
+  prev="$arg"
+done
+echo "hhfilter" >> "${STUB_CALLS}/hhfilter.calls"
+""",
+    )
+    _write_executable(
+        bin_dir / "psiblast",
+        """#!/bin/bash
+set -e
+if [[ "${1:-}" == "-version" ]]; then echo "psiblast: 2.13.0+"; exit 0; fi
+echo "psiblast" >> "${STUB_CALLS}/psiblast.calls"
+[[ -n "${STUB_PSIBLAST_FAIL:-}" ]] && exit 1
+prev=""
+for arg in "$@"; do
+  if [[ "$prev" == "-out_ascii_pssm" ]]; then printf "1 A 0\\n" > "$arg"; fi
+  prev="$arg"
+done
+""",
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:/usr/local/bin:/usr/bin:/bin",
+        "STUB_CALLS": str(calls),
+        "GREMLIN_TFV1_SCRIPT": str(fit_script),
+    }
+    return env, bin_dir, calls
+
+
+def _calls(calls: Path, tool: str) -> int:
+    path = calls / f"{tool}.calls"
+    return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
+
+
+def _fit_calls(calls: Path) -> list[list[str]]:
+    """Each recorded fit: [alignment path, alignment sha256, iteration]."""
+    path = calls / "fit.calls"
+    if not path.exists():
+        return []
+    return [line.split("\t") for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _model(output: Path) -> Path:
+    return output / "gremlin_res" / f"{STEM}.GREMLIN.mrf.pkl"
+
+
+def _plot(output: Path) -> Path:
+    return output / "gremlin_res" / f"{STEM}_GREMLIN_mtx.png"
+
+
+def _run(tmp_path: Path, *extra_args: str, output: Path | None = None, env=None, params=None):
+    source = tmp_path / f"{INSTANCE}.fasta"
+    if not source.exists():
+        source.write_text(FASTA, encoding="utf-8")
+    output = output or (tmp_path / "output")
+    env = env or _stub_environment(tmp_path)[0]
+    return run_with_manifest(
+        RUN_SCRIPT, source, output, env, params=params or {}, extra_args=extra_args, role="sequence"
+    )
+
+
+def _formatted_uniref90(tmp_path: Path) -> str:
+    directory = tmp_path / "uniref90"
+    directory.mkdir()
+    (directory / "uniref90.phr").write_text("index", encoding="utf-8")
+    return str(directory / "uniref90")
+
+
+def test_unknown_stage_is_rejected_before_any_search(tmp_path: Path) -> None:
+    completed = _run(tmp_path, "-s", "nonsense")
+    assert completed.returncode != 0
+    assert "Unknown stage" in completed.stderr
+    assert not (tmp_path / "output" / "task_finished").exists()
+
+
+def test_msa_stage_writes_alignment_and_does_not_run_pssm(tmp_path: Path) -> None:
+    env, _bin, calls = _stub_environment(tmp_path)
+    completed = _run(tmp_path, "-s", "msa", "-U", str(tmp_path / "uniref30"), env=env)
+    assert completed.returncode == 0, completed.stderr
+    alignment = tmp_path / "output" / "gremlin_msa" / f"{STEM}.fas"
+    assert alignment.is_file() and alignment.stat().st_size > 0
+    assert _calls(calls, "hhblits") == 1
+    assert _calls(calls, "hhfilter") == 1
+    assert _calls(calls, "psiblast") == 0
+
+
+MSA_OUTPUT = ">q\nACDE\n>h\nACDE\n"
+PSSM_OUTPUT = "1 A 0\n"
+
+
+def test_msa_stage_recomputes_on_every_run(tmp_path: Path) -> None:
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    args = ("-s", "msa", "-U", str(tmp_path / "uniref30"))
+    first = _run(tmp_path, *args, output=output, env=env)
+    alignment = output / "gremlin_msa" / f"{STEM}.fas"
+    alignment.write_text("stale alignment\n", encoding="utf-8")
+    second = _run(tmp_path, *args, output=output, env=env)
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    assert _calls(calls, "hhblits") == 2
+    assert _calls(calls, "hhfilter") == 2
+    assert alignment.read_text(encoding="utf-8") == MSA_OUTPUT
+
+
+def test_msa_stage_replaces_outputs_from_an_earlier_run(tmp_path: Path) -> None:
+    """A valid-looking alignment and its intermediates are never reused."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    msa_dir = output / "gremlin_msa"
+    msa_dir.mkdir(parents=True)
+    alignment = msa_dir / f"{STEM}.fas"
+    expected_msa = msa_dir / f"{INSTANCE}.i90c75.a3m"
+    a3m = msa_dir / f"{INSTANCE}.a3m"
+    for path in (alignment, expected_msa, a3m):
+        path.write_text(">old\nAAAA\n", encoding="utf-8")
+
+    completed = _run(
+        tmp_path, "-s", "msa", "-U", str(tmp_path / "uniref30"), output=output, env=env
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert _calls(calls, "hhblits") == 1
+    assert _calls(calls, "hhfilter") == 1
+    assert alignment.read_text(encoding="utf-8") == MSA_OUTPUT
+    assert expected_msa.read_text(encoding="utf-8") == MSA_OUTPUT
+    assert a3m.read_text(encoding="utf-8") == MSA_OUTPUT
+
+
+def test_failed_msa_publishes_no_stale_output(tmp_path: Path) -> None:
+    """A failing recompute must not leave an earlier alignment behind."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    msa_dir = output / "gremlin_msa"
+    msa_dir.mkdir(parents=True)
+    alignment = msa_dir / f"{STEM}.fas"
+    expected_msa = msa_dir / f"{INSTANCE}.i90c75.a3m"
+    a3m = msa_dir / f"{INSTANCE}.a3m"
+    for path in (alignment, expected_msa, a3m):
+        path.write_text(">old\nAAAA\n", encoding="utf-8")
+
+    failed = _run(
+        tmp_path,
+        "-s",
+        "msa",
+        "-U",
+        str(tmp_path / "uniref30"),
+        output=output,
+        env={**env, "STUB_HHBLITS_FAIL": "1"},
+    )
+
+    assert failed.returncode != 0
+    assert _calls(calls, "hhblits") == 1
+    assert not alignment.exists()
+    assert not expected_msa.exists()
+    assert not a3m.exists()
+
+
+def test_pssm_stage_replaces_outputs_from_an_earlier_run(tmp_path: Path) -> None:
+    """A valid-looking PSSM and its checkpoint are never reused."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    pssm_dir = output / "pssm_msa"
+    pssm_dir.mkdir(parents=True)
+    ascii_file = pssm_dir / f"{INSTANCE}_ascii_mtx_file"
+    checkpoint = pssm_dir / f"{INSTANCE}.ckp"
+    ascii_file.write_text("stale ascii\n", encoding="utf-8")
+    checkpoint.write_text("stale checkpoint\n", encoding="utf-8")
+
+    completed = _run(
+        tmp_path,
+        "-s",
+        "pssm",
+        "-u",
+        _formatted_uniref90(tmp_path),
+        output=output,
+        env=env,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert _calls(calls, "psiblast") == 1
+    assert ascii_file.read_text(encoding="utf-8") == PSSM_OUTPUT
+    assert not checkpoint.exists()
+
+
+def test_failed_pssm_publishes_no_stale_output(tmp_path: Path) -> None:
+    """A failing recompute must not leave an earlier PSSM behind."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    pssm_dir = output / "pssm_msa"
+    pssm_dir.mkdir(parents=True)
+    ascii_file = pssm_dir / f"{INSTANCE}_ascii_mtx_file"
+    checkpoint = pssm_dir / f"{INSTANCE}.ckp"
+    ascii_file.write_text("stale ascii\n", encoding="utf-8")
+    checkpoint.write_text("stale checkpoint\n", encoding="utf-8")
+
+    failed = _run(
+        tmp_path,
+        "-s",
+        "pssm",
+        "-u",
+        _formatted_uniref90(tmp_path),
+        output=output,
+        env={**env, "STUB_PSIBLAST_FAIL": "1"},
+    )
+
+    assert failed.returncode != 0
+    assert _calls(calls, "psiblast") == 1
+    assert not ascii_file.exists()
+    assert not checkpoint.exists()
+
+
+def test_empty_stage_outputs_are_rebuilt_rather_than_reused(tmp_path: Path) -> None:
+    """A zero-byte leftover is deleted before the stage recomputes."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    alignment = output / "gremlin_msa" / f"{STEM}.fas"
+    pssm = output / "pssm_msa" / f"{INSTANCE}_ascii_mtx_file"
+    alignment.parent.mkdir(parents=True)
+    pssm.parent.mkdir(parents=True)
+    alignment.write_bytes(b"")
+    pssm.write_bytes(b"")
+
+    msa = _run(tmp_path, "-s", "msa", "-U", str(tmp_path / "uniref30"), output=output, env=env)
+    pssm_run = _run(tmp_path, "-s", "pssm", "-u", _formatted_uniref90(tmp_path), output=output, env=env)
+
+    assert msa.returncode == 0, msa.stderr
+    assert pssm_run.returncode == 0, pssm_run.stderr
+    assert _calls(calls, "hhblits") == 1
+    assert _calls(calls, "psiblast") == 1
+    assert alignment.read_text(encoding="utf-8") == MSA_OUTPUT
+    assert pssm.read_text(encoding="utf-8") == PSSM_OUTPUT
+
+
+def test_fit_stage_without_msa_alignment_fails_closed(tmp_path: Path) -> None:
+    env, _bin, calls = _stub_environment(tmp_path)
+    completed = _run(tmp_path, "-s", "fit", env=env)
+    assert completed.returncode != 0
+    assert "requires the msa-stage alignment" in completed.stderr
+    assert _calls(calls, "hhblits") == 0
+    assert _calls(calls, "psiblast") == 0
+    assert not (tmp_path / "output" / "task_finished").exists()
+
+
+def test_pssm_stage_requires_a_formatted_uniref90_database(tmp_path: Path) -> None:
+    env, _bin, calls = _stub_environment(tmp_path)
+    completed = _run(tmp_path, "-s", "pssm", "-u", str(tmp_path / "missing" / "uniref90"), env=env)
+    assert completed.returncode != 0
+    assert "not found" in completed.stderr
+    assert _calls(calls, "psiblast") == 0
+    assert not (tmp_path / "output" / "task_finished").exists()
+
+
+def test_all_selects_msa_fit_and_pssm(tmp_path: Path) -> None:
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    completed = _run(
+        tmp_path, "-s", "all", "-U", str(tmp_path / "uniref30"),
+        "-u", _formatted_uniref90(tmp_path), output=output, env=env,
+    )
+    assert completed.returncode == 0, completed.stderr
+    alignment = output / "gremlin_msa" / f"{STEM}.fas"
+    assert alignment.is_file()
+    digest = _sha(alignment.read_bytes())
+    # The fit stage ran against the alignment the msa stage produced.
+    assert [_line[1] for _line in _fit_calls(calls)] == [digest]
+    assert _model(output).read_text(encoding="utf-8") == f"model {digest}\n"
+    assert (output / "pssm_msa" / f"{INSTANCE}_ascii_mtx_file").is_file()
+    assert (output / "log" / "task_finished").is_file()
+    assert _calls(calls, "hhblits") == 1
+    assert _calls(calls, "psiblast") == 1
+
+
+def _stage_inputs_document(tmp_path: Path, artifact: Path, digest: str | None = None) -> Path:
+    document = tmp_path / "stage_inputs.json"
+    document.write_text(
+        json.dumps({
+            "version": 1,
+            "stage": "gremlin_msa_to_lh_fit.fit",
+            "inputs": {
+                "alignment": {
+                    "path": str(artifact),
+                    "files": [{
+                        "path": str(artifact),
+                        "source_path": f"gremlin_msa/{artifact.name}",
+                        "sha256": digest or _sha(artifact.read_bytes()),
+                        "size": artifact.stat().st_size,
+                    }],
+                    "producer": "gremlin_msa_to_lh_fit.msa",
+                    "producer_attempt": 1,
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+    return document
+
+
+def _staged_alignment(tmp_path: Path, name: str, body: bytes) -> Path:
+    staged = tmp_path / name / f"{STEM}.fas"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(body)
+    return staged
+
+
+def test_fit_stage_without_a_shared_alignment_runs_from_the_document(tmp_path: Path) -> None:
+    """A composed fit consumes the Server's copy; the shared tree need not exist."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
+    document = _stage_inputs_document(tmp_path, artifact)
+
+    completed = _run(
+        tmp_path, "-s", "fit", output=output, env={**env, "TASK_STAGE_INPUTS": str(document)}
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert not (output / "gremlin_msa").exists()
+    fitted = _fit_calls(calls)
+    assert len(fitted) == 1
+    assert fitted[0][0] == str(artifact)
+    assert fitted[0][1] == _sha(artifact.read_bytes())
+    assert _model(output).read_text(encoding="utf-8") == f"model {_sha(artifact.read_bytes())}\n"
+    assert _plot(output).read_text(encoding="utf-8") == f"plot {_sha(artifact.read_bytes())}\n"
+
+
+def test_fit_stage_refuses_a_documented_alignment_that_changed(tmp_path: Path) -> None:
+    """The document, not the shared writable tree, decides which bytes are modelled."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    shared = output / "gremlin_msa"
+    shared.mkdir(parents=True)
+    (shared / f"{STEM}.fas").write_text(">q\nACDE\n", encoding="utf-8")
+    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
+    document = _stage_inputs_document(tmp_path, artifact)
+    artifact.write_text(">q\nAAAA\n>h\nAAAA\n", encoding="utf-8")
+
+    completed = _run(
+        tmp_path, "-s", "fit", output=output, env={**env, "TASK_STAGE_INPUTS": str(document)}
+    )
+
+    assert completed.returncode != 0
+    assert "digest does not match" in completed.stderr
+    assert _calls(calls, "hhblits") == 0
+    assert _calls(calls, "psiblast") == 0
+
+
+def test_fit_reruns_for_different_alignment_bytes_with_the_same_filename(tmp_path: Path) -> None:
+    """A fit belongs to the bytes that produced it, not to a basename."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    first = _staged_alignment(tmp_path, "first", b">q\nACDE\n>h\nACDE\n")
+    second = _staged_alignment(tmp_path, "second", b">q\nAAAA\n>h\nAAAA\n")
+    assert first.name == second.name
+
+    document = _stage_inputs_document(tmp_path, first)
+    first_run = _run(
+        tmp_path, "-s", "fit", output=output, env={**env, "TASK_STAGE_INPUTS": str(document)}
+    )
+    assert first_run.returncode == 0, first_run.stderr
+    first_model = _model(output).read_text(encoding="utf-8")
+    assert first_model == f"model {_sha(first.read_bytes())}\n"
+    assert _plot(output).read_text(encoding="utf-8") == f"plot {_sha(first.read_bytes())}\n"
+
+    # The first outputs are still present; input B is a different verified
+    # alignment that happens to share a filename.
+    document = _stage_inputs_document(tmp_path, second)
+    second_run = _run(
+        tmp_path, "-s", "fit", output=output, env={**env, "TASK_STAGE_INPUTS": str(document)}
+    )
+    assert second_run.returncode == 0, second_run.stderr
+
+    fitted = _fit_calls(calls)
+    assert len(fitted) == 2
+    assert fitted[1][0] == str(second)
+    assert fitted[1][1] == _sha(second.read_bytes())
+    assert _model(output).read_text(encoding="utf-8") != first_model
+    assert _model(output).read_text(encoding="utf-8") == f"model {_sha(second.read_bytes())}\n"
+    assert _plot(output).read_text(encoding="utf-8") == f"plot {_sha(second.read_bytes())}\n"
+
+
+def test_fit_removes_stale_contact_sidecars(tmp_path: Path) -> None:
+    """Undeclared contact files from another alignment are not republished."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
+    document = _stage_inputs_document(tmp_path, artifact)
+    run_env = {**env, "TASK_STAGE_INPUTS": str(document)}
+    sidecar = output / "gremlin_res" / "W_for_positions_1_2.csv"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text("from another alignment\n", encoding="utf-8")
+
+    completed = _run(tmp_path, "-s", "fit", output=output, env=dict(run_env))
+
+    assert completed.returncode == 0, completed.stderr
+    assert len(_fit_calls(calls)) == 1
+    assert not sidecar.exists()
+
+
+def test_fit_replaces_a_stale_plot(tmp_path: Path) -> None:
+    """A non-empty plot left from an earlier fit is regenerated, never republished."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
+    document = _stage_inputs_document(tmp_path, artifact)
+    run_env = {**env, "TASK_STAGE_INPUTS": str(document)}
+    expected = f"plot {_sha(artifact.read_bytes())}\n"
+
+    first = _run(tmp_path, "-s", "fit", output=output, env=dict(run_env))
+    assert first.returncode == 0, first.stderr
+    model_before = _model(output).read_bytes()
+    assert _plot(output).read_text(encoding="utf-8") == expected
+
+    _plot(output).write_bytes(b"stale plot\n")
+    second = _run(tmp_path, "-s", "fit", output=output, env=dict(run_env))
+
+    assert second.returncode == 0, second.stderr
+    assert len(_fit_calls(calls)) == 2
+    assert _model(output).read_bytes() == model_before
+    assert _plot(output).read_text(encoding="utf-8") == expected
+
+
+def test_fit_regenerates_a_missing_plot(tmp_path: Path) -> None:
+    """A missing required plot forces a fit that regenerates it."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
+    document = _stage_inputs_document(tmp_path, artifact)
+    run_env = {**env, "TASK_STAGE_INPUTS": str(document)}
+    expected = f"plot {_sha(artifact.read_bytes())}\n"
+
+    first = _run(tmp_path, "-s", "fit", output=output, env=dict(run_env))
+    assert first.returncode == 0, first.stderr
+    _plot(output).unlink()
+    second = _run(tmp_path, "-s", "fit", output=output, env=dict(run_env))
+
+    assert second.returncode == 0, second.stderr
+    assert len(_fit_calls(calls)) == 2
+    assert _model(output).read_text(encoding="utf-8") == f"model {_sha(artifact.read_bytes())}\n"
+    assert _plot(output).read_text(encoding="utf-8") == expected
+
+
+def test_fit_fails_when_the_fit_produces_no_plot(tmp_path: Path) -> None:
+    """A failed output check must not publish a plot left in the shared tree."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
+    document = _stage_inputs_document(tmp_path, artifact)
+    stale_plot = _plot(output)
+    stale_plot.parent.mkdir(parents=True)
+    stale_plot.write_bytes(b"stale plot\n")
+
+    failed = _run(
+        tmp_path,
+        "-s",
+        "fit",
+        output=output,
+        env={**env, "TASK_STAGE_INPUTS": str(document), "STUB_NO_PLOT": "1"},
+    )
+
+    assert failed.returncode != 0
+    assert "fit stage did not produce" in failed.stderr
+    assert _fit_calls(calls)
+    assert not stale_plot.exists()
+
+
+def test_fit_reruns_when_the_iteration_parameter_changes(tmp_path: Path) -> None:
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
+    document = _stage_inputs_document(tmp_path, artifact)
+    run_env = {**env, "TASK_STAGE_INPUTS": str(document)}
+
+    first = _run(tmp_path, "-s", "fit", output=output, env=run_env, params={"iter": 100})
+    second = _run(tmp_path, "-s", "fit", output=output, env=run_env, params={"iter": 101})
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    fitted = _fit_calls(calls)
+    assert len(fitted) == 2
+    assert [line[2] for line in fitted] == ["100", "101"]
+
+
+def test_fit_failure_publishes_no_stale_output(tmp_path: Path) -> None:
+    """Pre-existing outputs are removed before a fit, so a failure cannot publish them."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
+    document = _stage_inputs_document(tmp_path, artifact)
+    model = _model(output)
+    plot = _plot(output)
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"stale model\n")
+    plot.write_bytes(b"stale plot\n")
+
+    failed = _run(
+        tmp_path,
+        "-s",
+        "fit",
+        output=output,
+        env={**env, "TASK_STAGE_INPUTS": str(document), "STUB_FIT_FAIL": "1"},
+    )
+
+    assert failed.returncode != 0
+    assert len(_fit_calls(calls)) == 1
+    assert not model.exists()
+    assert not plot.exists()

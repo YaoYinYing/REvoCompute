@@ -89,13 +89,13 @@ def test_colabfold_interface_summary_resolves_published_interface_scores(monkeyp
                 {"predicted_aligned_error": [[1.0, 2.0], [2.0, 1.0]], "max_predicted_aligned_error": 20.0}
             ),
             "sample.a3m": ">query\nAC\n",
-            "interface_scores.json": json.dumps({"ipsae": 0.62, "pdockq2": 0.71}),
+            "colabfold/interface_scores.json": json.dumps({"ipsae": 0.62, "pdockq2": 0.71}),
         },
     )
 
     assert manifest["output_check"]["state"] == "passed"
     interface = next(view for view in manifest["views"] if view["id"] == "interface_confidence")
-    assert interface["sources"]["data"] == ["interface_scores.json"]
+    assert interface["sources"]["data"] == ["colabfold/interface_scores.json"]
     assert [field["path"] for field in interface["mapping"]["fields"]] == ["ipsae", "pdockq2"]
 
 

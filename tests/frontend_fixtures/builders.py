@@ -708,6 +708,59 @@ def build_submit(task_id: str, definition: RunnerDefinition, *, status: str = "q
     return payload, 202
 
 
+#: The stage vocabulary the status projection documents.
+STAGE_STATUSES = frozenset({
+    "NOT_STARTED", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED",
+})
+
+
+def build_task_stages(
+    items: Sequence[Mapping[str, Any]], *, omit_dependency: bool = False
+) -> dict[str, Any]:
+    """Build the per-stage projection the status endpoint serves.
+
+    Each item names the stage's scheduler status and its independent dependency
+    state, and is validated whole against the canonical ``TaskStageItem``.
+    ``omit_dependency`` models a status projection without the field, which the
+    browser must render as scheduler status alone.
+    """
+    built: list[dict[str, Any]] = []
+    for index, source in enumerate(items):
+        if "dependency" not in source and not omit_dependency:
+            raise ValueError("a stage fixture must declare dependency unless omit_dependency is set")
+        stage = {
+            "index": source.get("index", index),
+            "name": source["name"],
+            "display_name": source["display_name"],
+            "status": source["status"],
+            "source": source.get("source", "record"),
+            "attempt": source.get("attempt"),
+            "started_at": source.get("started_at"),
+            "ended_at": source.get("ended_at"),
+            "reason_code": source.get("reason_code"),
+            "planned_resources": source.get("planned_resources"),
+            # The canonical component requires the field even when the payload
+            # under test omits it; validate with a placeholder, then drop it.
+            "dependency": source.get("dependency", "waiting"),
+        }
+        if stage["status"] not in STAGE_STATUSES:
+            raise ValueError(f"unknown stage status: {stage['status']!r}")
+        validate_payload("TaskStageItem", stage)
+        if omit_dependency:
+            stage.pop("dependency")
+        built.append(stage)
+    current = next((item for item in built if item["status"] == "RUNNING"), None)
+    if current is None:
+        current = next((item for item in built if item["status"] == "QUEUED"), None)
+    return {
+        "source": "record",
+        "total": len(built),
+        "completed": sum(1 for item in built if item["status"] == "COMPLETED"),
+        "current": current,
+        "items": built,
+    }
+
+
 def build_task_status(
     task_id: str,
     definition: RunnerDefinition,
@@ -716,6 +769,8 @@ def build_task_status(
     result_available: bool = False,
     display_name: str | None = None,
     error: str | None = None,
+    stages: Sequence[Mapping[str, Any]] | None = None,
+    stages_omit_dependency: bool = False,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "task_id": task_id,
@@ -731,6 +786,8 @@ def build_task_status(
     if error:
         payload["error"] = error
     validate_payload("TaskStatus", payload)
+    if stages is not None:
+        payload["stages"] = build_task_stages(stages, omit_dependency=stages_omit_dependency)
     return payload
 
 

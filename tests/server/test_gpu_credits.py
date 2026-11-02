@@ -16,6 +16,7 @@ import pytest
 import sqlalchemy as sa
 from conftest import _load_pssm_module
 from revocompute.access_control import project_effective_entitlements
+from revocompute.admission import AdmissionEvidence
 from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
 from revocompute.resource_ledger import AdmissionReason, ReservationState
 from revocompute.resource_policy import ResolvedResources
@@ -400,7 +401,9 @@ def test_gpu_allocation_callback_rechecks_runner_readiness(monkeypatch, tmp_path
     monkeypatch.setattr(
         module.task_runtime,
         "resolve_submission_readiness",
-        lambda server_dir, runner_family: SimpleNamespace(ready=False),
+        lambda server_dir, runner_family: AdmissionEvidence(
+            {"runner_family": "demo_runner", "status": "NOT_VALIDATED", "ready": False}
+        ),
     )
     _dispatched, started, _finished = module.task_runtime._compute_allocation_callbacks(
         task_id="3" * 32,

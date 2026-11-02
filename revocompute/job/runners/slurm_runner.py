@@ -27,9 +27,17 @@ from itertools import islice
 from pathlib import Path
 from typing import Any
 
-from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
+from revocompute.job import (
+    STAGE_INPUTS_CONTAINER_DIR,
+    STAGE_INPUTS_DOCUMENT_NAME,
+    ExecutionBuilder,
+    ExecutionPlan,
+    Job,
+    JobState,
+)
 from revocompute.job._stages import extract_stage_from_log_line
-from revocompute import runtime_bundle
+from revocompute import runtime_bundle, runtime_image
+from revocompute.runtime_image import RuntimeImageObservation
 from revocompute.execution_diagnostics import (
     MAX_LOG_BYTES,
     STATUS_PATH,
@@ -329,8 +337,20 @@ class SlurmJob(Job):
         allocation_accounting: bool | None = None,
         task_store: Any = None,
         runtime_bundle_root: str = "",
+        stage_inputs_dir: str | None = None,
+        stage_name: str | None = None,
+        stage_attempt: int | None = None,
     ):
         super().__init__(task_id, tt, runner, entities, output_dir, stage_callback)
+        #: The StageRun identity this allocation settles.  ``tt.name`` is the
+        #: dash-form execution name; a workflow stage settles under its manifest
+        #: node name, so the caller supplies it rather than deriving it here.
+        self._stage_name = stage_name or str(tt.name)
+        self._stage_attempt = stage_attempt
+        #: Server-materialized directory holding this stage's verified upstream
+        #: artifacts and the document that names them.  ``None`` for a stage
+        #: whose inputs are all graph inputs or whose producer ran no artifact.
+        self._stage_inputs_dir = stage_inputs_dir
         self._db = manage_db
         # The task-row store, used to persist what the runner reports on stdout.
         # ``manage_db`` cannot serve that purpose: it is the admin configuration
@@ -682,6 +702,11 @@ class SlurmJob(Job):
         never downgraded to "nothing was allocated".
         """
         return self._wrapper_started
+
+    @property
+    def scheduler_request_started(self) -> bool:
+        """srun is created before its job id can be read from the wrapper."""
+        return self._process is not None
 
     def poll(self) -> JobState:
         if self._process is None:
@@ -1308,6 +1333,16 @@ class SlurmJob(Job):
             checksum_record = f"{fe['hash']}  {fe['snapshot_path']}"
             lines.append(f"printf '%s\\n' {_sh_quote(checksum_record)} | sha256sum --check --status")
 
+    def _task_manifest(self) -> dict[str, Any] | None:
+        """The immutable submission snapshot every pin is read from."""
+        try:
+            manifest = json.loads(
+                Path(self.input_snapshot_root, "task.json").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            return None
+        return manifest if isinstance(manifest, dict) else None
+
     def _pinned_runtime_bundle(self) -> str | None:
         """Resolve the task's pinned Runtime Bundle directory, or fail closed.
 
@@ -1317,13 +1352,9 @@ class SlurmJob(Job):
         resolves is a hard error: mounting a *different* bundle would silently
         run code the task's receipt never validated.
         """
-        try:
-            manifest = json.loads(
-                Path(self.input_snapshot_root, "task.json").read_text(encoding="utf-8")
-            )
-        except (OSError, json.JSONDecodeError):
-            manifest = None
-        pinned = manifest.get("runtime_bundle_sha256") if isinstance(manifest, dict) else None
+        manifest = self._task_manifest()
+        bundles = manifest.get("runtime_bundles") if manifest is not None else None
+        pinned = bundles.get(self.tt.runtime.name) if isinstance(bundles, dict) else None
         if not isinstance(pinned, str) or not pinned:
             # A family that declares an overlay cannot execute without the
             # bundle: it would launch an entrypoint that is not mounted.  That
@@ -1341,16 +1372,108 @@ class SlurmJob(Job):
             )
         return resolved
 
+    @property
+    def runtime_image_receipt_path(self) -> str:
+        """Where the wrapper records what it observed immediately before exec.
+
+        A sibling of the allocation receipt but a *separate* file: the schema-1
+        allocation receipt is adopted and deleted by ``_notify_dispatched``
+        before the scientific command runs, and that deletion must never take
+        the image observation with it.
+        """
+        attempt = self._stage_attempt if isinstance(self._stage_attempt, int) else 0
+        label = _sanitize_name(self._stage_name)
+        return os.path.join(self.allocation_dir, f"runtime-image-{label}-{attempt}.receipt")
+
+    def _task_row_runtime_image(self) -> str | None:
+        """The Task row's mirror of this family's pin, when it is readable."""
+        if self._task_store is None:
+            return None
+        try:
+            row = self._task_store.get_task(self.task_id) or {}
+            form = row.get("input_form")
+            form = json.loads(form) if isinstance(form, str) else form
+            images = form.get("runtime_images") if isinstance(form, dict) else None
+            value = images.get(self.tt.runtime.name) if isinstance(images, dict) else None
+        except Exception:
+            return None
+        return value if isinstance(value, str) else None
+
+    def _pinned_runtime_image_digest(self) -> str | None:
+        """The family's pinned image digest, or ``None`` to fail closed.
+
+        The immutable ``task.json`` is the authority.  The Task row is a mirror
+        for query and recovery, so a readable row that names a *different* pin
+        refuses the launch instead of silently repairing either copy.
+        """
+        manifest = self._task_manifest()
+        images = manifest.get("runtime_images") if manifest is not None else None
+        pinned = images.get(self.tt.runtime.name) if isinstance(images, dict) else None
+        pinned = pinned if isinstance(pinned, str) and runtime_image.SHA256_PREFIXED.fullmatch(pinned) else None
+        row_pin = self._task_row_runtime_image()
+        if row_pin is not None and pinned is not None and row_pin != pinned:
+            raise RuntimeError(
+                f"Task {self.task_id!r} runtime image pin disagrees with its immutable snapshot"
+            )
+        return pinned
+
+    def runtime_image_observation(self) -> RuntimeImageObservation | None:
+        """The attributable schema-2 observation for this attempt, or ``None``.
+
+        Reading is non-destructive and the file is never deleted, so a worker
+        that dies after the wrapper wrote it leaves recovery the only evidence
+        it has.  An observation from another Task, stage, attempt, family or
+        Slurm job is not this attempt's evidence and is treated as absent.
+        """
+        if self._stage_attempt is None:
+            return None
+        try:
+            text = Path(self.runtime_image_receipt_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            # Unreadable or non-text evidence is absent, never guessed at.
+            return None
+        observation = runtime_image.parse_runtime_image_receipt(text)
+        if observation is None:
+            return None
+        try:
+            expected = self._pinned_runtime_image_digest()
+        except RuntimeError:
+            # The row and the immutable snapshot disagree about the pin.  That
+            # is not evidence for a completion; settlement then refuses it.
+            return None
+        if (
+            expected is None
+            or observation.task_id != self.task_id
+            or observation.stage_name != self._stage_name
+            or observation.attempt != self._stage_attempt
+            or observation.family != self.tt.runtime.name
+            or observation.slurm_job_id != str(self._job_id or "")
+            or observation.expected != expected
+            or observation.observed != expected
+        ):
+            return None
+        return observation
+
     def _render_apptainer_invocation(self, lines: list[str]) -> None:
         sif_image = self.execution_plan.image
         if not sif_image or sif_image == "<missing-image>":
             raise RuntimeError(f"Execution plan for task {self.task_id!r} has no slurm_image")
+        # An empty pin renders the fail-closed branch: no attempt may run
+        # unpinned, and the schema-2 receipt it leaves names no expected digest,
+        # so completion cannot be claimed from it either.
+        expected_image_sha = self._pinned_runtime_image_digest() or ""
 
         bind_parts: list[str] = []
         bind_parts.append(
             f"--bind {_sh_quote(self.input_snapshot_root)}:{_sh_quote(self.virtual_workspace_root + '/inputs')}:ro"
         )
         bind_parts.append(f"--bind {_sh_quote(self.output_dir)}:{_sh_quote(self.virtual_workspace_root + '/outputs')}")
+        if self._stage_inputs_dir is not None:
+            # Read-only: the consumer reads its verified upstream artifact, it
+            # never gets to write over the bytes the Server admitted.
+            bind_parts.append(
+                f"--bind {_sh_quote(self._stage_inputs_dir)}:{_sh_quote(STAGE_INPUTS_CONTAINER_DIR)}:ro"
+            )
         for m in self.execution_plan.mounts:
             bind_parts.append(
                 f"--bind {_sh_quote(str(m['source']))}:{_sh_quote(str(m['target']))}:{m.get('mode', 'ro')}"
@@ -1397,6 +1520,11 @@ class SlurmJob(Job):
         lines.append(
             "export APPTAINERENV_TASK_MANIFEST=" + _sh_quote(self.virtual_workspace_root + "/inputs/task.json")
         )
+        if self._stage_inputs_dir is not None:
+            lines.append(
+                "export APPTAINERENV_TASK_STAGE_INPUTS="
+                + _sh_quote(f"{STAGE_INPUTS_CONTAINER_DIR}/{STAGE_INPUTS_DOCUMENT_NAME}")
+            )
         gpu_flag = " --nv" if self.tt.gpus else ""
         if self.tt.gpus:
             # --cleanenv otherwise drops SLURM's selected GPU before OpenMM
@@ -1565,6 +1693,42 @@ class SlurmJob(Job):
                 f"system_cpu_seconds=%S\\nmax_rss_kib=%M' -o {resource_time_path})",
                 "else",
                 "  time_prefix=()",
+                "fi",
+                # -- runtime image observation --
+                # Immediately before the container starts, re-hash the SIF the
+                # Apptainer command names and compare it to the digest pinned in
+                # the immutable submission snapshot.  This proves what the
+                # wrapper observed at that moment; it does not prove what
+                # Apptainer later opened (a rename can still land in the window
+                # between this hash and exec).  The observation is durable and
+                # separate from the schema-1 allocation receipt, which
+                # ``_notify_dispatched`` may already have adopted and deleted.
+                f"runtime_image_receipt={_sh_quote(self.runtime_image_receipt_path)}",
+                'mkdir -p -- "$(dirname -- "${runtime_image_receipt}")"',
+                "observed_image_sha=''",
+                f"if [[ -f {_sh_quote(sif_image)} ]]; then",
+                f'  image_hash_line="$(sha256sum -- {_sh_quote(sif_image)})"',
+                '  observed_image_sha="sha256:${image_hash_line%% *}"',
+                "fi",
+                'runtime_image_receipt_tmp="${runtime_image_receipt}.$$.tmp"',
+                "{",
+                "  printf 'schema_version=2\\n'",
+                f"  printf 'task_id=%s\\n' {_sh_quote(self.task_id)}",
+                f"  printf 'stage=%s\\n' {_sh_quote(self._stage_name)}",
+                f"  printf 'attempt=%s\\n' {_sh_quote(str(self._stage_attempt or 0))}",
+                f"  printf 'family=%s\\n' {_sh_quote(self.tt.runtime.name)}",
+                "  printf 'slurm_job_id=%s\\n' \"${SLURM_JOB_ID:-}\"",
+                f"  printf 'expected_sha256=%s\\n' {_sh_quote(expected_image_sha)}",
+                "  printf 'observed_sha256=%s\\n' \"${observed_image_sha}\"",
+                "  printf 'observed_at=%s\\n' \"$(date +%s)\"",
+                "} > \"${runtime_image_receipt_tmp}\"",
+                'sync "${runtime_image_receipt_tmp}"',
+                'mv -f -- "${runtime_image_receipt_tmp}" "${runtime_image_receipt}"',
+                f"if [[ -z {_sh_quote(expected_image_sha)} "
+                f'|| "${{observed_image_sha}}" != {_sh_quote(expected_image_sha)} ]]; then',
+                f'  echo "runtime image {_sh_quote(sif_image)} does not match the pinned digest '
+                f'{_sh_quote(expected_image_sha or "<none>")}" >&2',
+                "  exit 1",
                 "fi",
                 # The task runs in its own process group (job control), so the
                 # capacity guard can stop the entire task tree — apptainer and

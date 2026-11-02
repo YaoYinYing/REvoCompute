@@ -4,6 +4,7 @@ From: python:3.12.8-slim-bookworm
 %files
     gremlin_lh/run.sh /app/revocompute/run.sh
     gremlin_lh/fit_model.py /app/revocompute/fit_model.py
+    gremlin_lh/stage_inputs.py /app/revocompute/stage_inputs.py
     gremlin_lh/requirements.lock /app/revocompute/requirements.lock
 
 %post

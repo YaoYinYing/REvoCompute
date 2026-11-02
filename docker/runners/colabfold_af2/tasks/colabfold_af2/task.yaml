@@ -18,7 +18,10 @@ summary: ColabFold AlphaFold2 prediction with online MMseqs2 MSA search and loca
   GPU inference.
 use_when: Use this for AlphaFold2 prediction with public MMseqs2 MSA search and local
   model inference.
-input_summary: One FASTA file; multiple records represent a complex.
+input_summary: One FASTA file; each record is predicted as an independent job, so multiple
+  records produce independent predictions. Headers must be non-empty and sanitize to unique
+  job names; empty or colliding headers are rejected. Chain complexes are not accepted by
+  this Task's input contract.
 output_summary: The searched alignment, ranked predicted structures, scores, and optional
   relaxed models.
 considerations:
@@ -153,7 +156,7 @@ result_workspace:
       for single-chain predictions, which have no interface.
     sources:
       data:
-      - glob: interface_scores.json
+      - glob: colabfold/interface_scores.json
         required: false
     mapping:
       fields:
@@ -178,6 +181,11 @@ workflow:
   - features
   stage_markers:
   - msa_searching
+  outputs:
+  - name: msa
+    type: a3m_alignment
+    # Every job publishes under the Runner-owned colabfold/ subtree.
+    path: "colabfold/**/*.a3m"
 - name: model
   display_name: Model and optional relax
   requires_gpu: true
@@ -185,6 +193,10 @@ workflow:
   runner_args:
   - -s
   - model
+  inputs:
+  - name: features
+    type: a3m_alignment
+    from: colabfold_af2.features:msa
   stage_markers:
   - modeling
 id: colabfold_af2

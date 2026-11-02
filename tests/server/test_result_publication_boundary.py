@@ -25,6 +25,7 @@ import zipfile
 
 import pytest
 from revocompute import stage_state
+from revocompute.db import StageDispatchOutcome
 from revocompute.result_storyboard import ResultContractError, declared_file_roles, load_expected_file_tree
 from revocompute.storage import ResultPublicationError
 from revocompute.task_types import ArtifactSelector, ResultView, RuntimeFamily, TaskType, WorkflowStage
@@ -2427,7 +2428,7 @@ def test_a_recorded_stage_projection_and_a_scientific_view_are_independent(monke
     store.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="multistage_runner.features")
     assert store.record_stage_dispatched(
         task_id=task_id, stage_name="multistage_runner.features", attempt=1, slurm_job_id="4100"
-    )
+    ) is StageDispatchOutcome.RECORDED
     assert store.record_stage_running(task_id=task_id, stage_name="multistage_runner.features", attempt=1)
     store.finish_stage_attempt(
         task_id=task_id,

@@ -7,6 +7,7 @@ runtime:
   build_inputs:
   - pssm_gremlin/GREMLIN.yml
   - pssm_gremlin/run.sh
+  - pssm_gremlin/stage_inputs.py
   - pssm_gremlin/scripts/GREMLIN_TFv1.py
   - pssm_gremlin/scripts/fasta_lower_char_rm.py
   - pssm_gremlin/scripts/gremlin_labels.py
@@ -20,3 +21,4 @@ runtime:
   - /app/revocompute/run.sh
 tasks:
 - tasks/gremlin/task.yaml
+- tasks/gremlin_msa_to_lh_fit/task.yaml

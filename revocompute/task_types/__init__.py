@@ -12,6 +12,7 @@ runner configuration.
 
 from __future__ import annotations
 
+import logging
 import os
 import json
 import re
@@ -138,8 +139,19 @@ class RuntimeFamily:
 
 
 @dataclass(frozen=True)
+class StagePortSpec:
+    """One typed workflow artifact port and its optional upstream binding."""
+
+    name: str
+    type: str
+    path: str | None = None
+    required: bool = True
+    source: str | None = None
+
+
+@dataclass(frozen=True)
 class WorkflowStage:
-    """One scheduler allocation in an ordered task workflow."""
+    """One scheduler allocation in a task workflow."""
 
     name: str
     display_name: str
@@ -147,6 +159,11 @@ class WorkflowStage:
     runner_args: tuple[str, ...] = ()
     stage_markers: tuple[str, ...] = ()
     requires_network: bool = False
+    #: Runtime family that executes this stage. ``None`` means the composing
+    #: task's own family.
+    family: str | None = None
+    inputs: tuple[StagePortSpec, ...] = ()
+    outputs: tuple[StagePortSpec, ...] = ()
     #: What this stage needs from an accelerator, in semantic terms (device class
     #: and count).  Declared by the owning manifest, never as this deployment's
     #: partition or GRES name: placement resolves the requirement against the
@@ -448,6 +465,41 @@ def _load_ui_control(raw: Any, param_type: str | None, minimum: Any, maximum: An
     return {"kind": "seed", "random": {"minimum": lower, "maximum": upper}}
 
 
+def _unenabled_families_used(workflow: Any, enabled: set[str] | None) -> set[str]:
+    """The families a task's stages run in that this deployment does not enable.
+
+    A deployment that names its families cannot run a stage anywhere else,
+    whatever the tree on disk holds: a narrowed deployment tree may omit that
+    family entirely.  A deployment that enables every family is validated
+    against the tree instead, so a stage naming no real family is still an
+    authoring error and the post-registration family check refuses it.
+    """
+    if not enabled or not isinstance(workflow, list):
+        return set()
+    return {
+        str(stage["family"])
+        for stage in workflow
+        if isinstance(stage, dict) and isinstance(stage.get("family"), str) and stage["family"] not in enabled
+    }
+
+
+def _validate_stage_families(manager: Any) -> None:
+    """Refuse a workflow stage that names a runtime family discovery never registered.
+
+    Resolution happens after every family and task is registered: a manifest may
+    reference a family that appears later in discovery, but not one that does not
+    exist at all.
+    """
+    registered = {identifier for identifier, _runtime in manager.contributions.items("runtime_families")}
+    for _task_id, task in manager.contributions.items("tasks"):
+        for stage in task.workflow:
+            if stage.family is not None and stage.family not in registered:
+                raise ValueError(
+                    f"Task type {task.name!r} stage {stage.name!r} references unknown runtime family "
+                    f"{stage.family!r}"
+                )
+
+
 def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     """Load runner families and task contributions from deployed manifests.
 
@@ -476,6 +528,10 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     from revocompute.plugins import PluginManager
     manager = PluginManager()
     manifests = manager.discover(root, enabled=enabled)
+    # A composed Task may run a stage in another family.  An explicit enabled
+    # list is this deployment's whole family universe, so a stage outside it
+    # removes the Task rather than aborting discovery for every family.
+    enabled_families = set(enabled) if enabled else None
     categories: dict[str, Category] = {}
     capability_schemas: dict[str, dict[str, Any]] = {}
     workspace_schemas_by_owner: dict[str, dict[str, dict[str, Any]]] = {}
@@ -596,6 +652,13 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             runtime_overlay=runtime_overlay,
         )
         manager.register_contribution(family_id, "runtime_families", family_id, runtime)
+        runner_file = family_dir / "runner.yaml"
+        manager.register_contribution(
+            family_id,
+            "runner_configs",
+            family_id,
+            _load_runner_config(str(runner_file)) if runner_file.is_file() else RunnerConfig(),
+        )
         task_refs = manifest_obj.tasks
         for ref in task_refs:
             ref_path = Path(str(ref))
@@ -613,6 +676,13 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                     f"{', '.join(sorted(legacy_citation_fields))}; migrate to the 'citations' contract"
                 )
             task_id = str(raw.get("id") or raw.get("name") or task_path.parent.name)
+            off = _unenabled_families_used(raw.get("workflow"), enabled_families)
+            if off:
+                logging.warning(
+                    "Task %r is not registered while runtime family %s is not enabled",
+                    task_id, ", ".join(repr(name) for name in off),
+                )
+                continue
             schema = dict(raw.get("schema") or raw.get("parameters") or {})
             params = _load_task_params(raw.get("params"), schema, task_id)
             workspace_owner = manifest_obj.runner_family or family_id
@@ -663,10 +733,8 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                     description="",
                     order=len(categories),
                 )
-            runner_file = family_dir / "runner.yaml"
-            runner_cfg = _load_runner_config(str(runner_file)) if runner_file.is_file() else RunnerConfig()
             manager.register_contribution(family_id, "tasks", task_id, task)
-            manager.register_contribution(family_id, "runner_configs", task_id, runner_cfg)
+    _validate_stage_families(manager)
     _install_snapshot(_RegistryState(plugin_manager=manager, categories=categories, policies=policies))
 
 
@@ -802,12 +870,29 @@ def get(name: str) -> tuple[TaskType, RunnerConfig]:
     if manager is None:
         raise KeyError(f"Unknown task type: {name!r}") from None
     try:
-        return (
-            manager.contributions.resolve("tasks", name),
-            manager.contributions.resolve("runner_configs", name),
-        )
+        task = manager.contributions.resolve("tasks", name)
+        return task, get_family(task.runtime.name)[1]
     except KeyError:
         raise KeyError(f"Unknown task type: {name!r}") from None
+
+
+def get_family(family_id: str) -> tuple[RuntimeFamily, RunnerConfig]:
+    """Resolve a runtime family and the one RunnerConfig every task in it shares."""
+    manager = _active().plugin_manager
+    if manager is None:
+        raise KeyError(f"Unknown runtime family: {family_id!r}") from None
+    try:
+        return (
+            manager.contributions.resolve("runtime_families", family_id),
+            manager.contributions.resolve("runner_configs", family_id),
+        )
+    except KeyError:
+        raise KeyError(f"Unknown runtime family: {family_id!r}") from None
+
+
+def get_runtime_family(family_id: str) -> RuntimeFamily:
+    """Resolve a discovered runtime family from the active registry."""
+    return get_family(family_id)[0]
 
 
 def list_types() -> list[TaskType]:
@@ -1161,19 +1246,40 @@ def _load_result_workspace(raw: Any) -> tuple[ResultView, ...]:
     return tuple(views)
 
 
-def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> tuple[WorkflowStage, ...]:
-    """Load a task's ordered workflow and enforce the marker-partition invariant.
+def _load_stage_ports(raw: Any, task_name: str, stage_name: str, *, input_port: bool) -> tuple[StagePortSpec, ...]:
+    if not isinstance(raw, list):
+        raise ValueError(f"Workflow stage {task_name}.{stage_name} ports must be a list")
+    ports = []
+    seen: set[str] = set()
+    for port in raw:
+        allowed = {"name", "type", "required", "from"} if input_port else {"name", "type", "path", "required"}
+        if not isinstance(port, dict) or set(port) - allowed:
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} has an invalid artifact port")
+        name, data_type = port.get("name"), port.get("type")
+        if not _valid_identifier(name) or name in seen:
+            # A port name becomes a directory under the stage-input bind and a
+            # component of its container path, so it is an identifier, not text.
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} has an invalid or duplicate port name")
+        if not isinstance(data_type, str) or not data_type:
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} port {name!r} requires a type")
+        path = port.get("path")
+        if not input_port and path is None:
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} output port {name!r} requires a path")
+        if path is not None and (not isinstance(path, str) or not path or Path(path).is_absolute() or ".." in Path(path).parts):
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} port {name!r} has an invalid path")
+        required = port.get("required", True)
+        if not isinstance(required, bool):
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} port {name!r} required must be a boolean")
+        source = port.get("from") if input_port else None
+        if input_port and (not isinstance(source, str) or not source):
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} input {name!r} requires a binding")
+        ports.append(StagePortSpec(name=name, type=data_type, path=path, required=required, source=source))
+        seen.add(name)
+    return tuple(ports)
 
-    A composed task replaces its TaskType with a stage-local one that exposes
-    only that stage's declared markers, so the Runner's emitted marker set is
-    exactly the union of what the stages declare.  The workflow stage markers
-    must therefore form an exact ordered partition of the task-level markers:
-    ``concatenate(workflow[i].stage_markers in order) == list(stage_markers)``.
-    That single invariant gives every declared marker exactly one workflow
-    owner, in the task's user-visible order, and fails closed — discovery is the
-    only correct place to reject an ambiguous ownership, because the runtime
-    cannot know which stage a marker the manifest omitted was meant to belong to.
-    """
+
+def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> tuple[WorkflowStage, ...]:
+    """Load workflow stages and assign every task marker to exactly one stage."""
     if raw is None:
         return ()
     if not isinstance(raw, list) or len(raw) < 2:
@@ -1189,6 +1295,9 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
             "runner_args",
             "stage_markers",
             "accelerator_requirement",
+            "family",
+            "inputs",
+            "outputs",
         }:
             raise ValueError(f"Task type {task_name!r} has an invalid workflow stage")
         name = entry.get("name")
@@ -1205,10 +1314,16 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
             )
         requires_gpu = entry["requires_gpu"]
         requires_network = entry["requires_network"]
-        runner_args = entry.get("runner_args", ())
-        raw_markers = entry.get("stage_markers", ())
+        # An omitted optional list means "none", not a type error: the graph
+        # documentation's own example omits runner_args on a stage that runs its
+        # image entrypoint unchanged.
+        runner_args = entry.get("runner_args", [])
+        raw_markers = entry.get("stage_markers", [])
         if not isinstance(name, str) or not name.replace("_", "").isalnum() or name in seen:
             raise ValueError(f"Task type {task_name!r} has an invalid or duplicate workflow stage name")
+        family = entry.get("family")
+        if family is not None and not _valid_identifier(family):
+            raise ValueError(f"Workflow stage {task_name}.{name} has an invalid runtime family")
         if not isinstance(requires_gpu, bool):
             raise ValueError(f"Workflow stage {task_name}.{name} requires_gpu must be a boolean")
         if not isinstance(requires_network, bool):
@@ -1239,6 +1354,9 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
                 requires_network=requires_network,
                 runner_args=tuple(runner_args),
                 stage_markers=markers,
+                family=family,
+                inputs=_load_stage_ports(entry.get("inputs", []), task_name, name, input_port=True),
+                outputs=_load_stage_ports(entry.get("outputs", []), task_name, name, input_port=False),
                 accelerator_requirement=accelerator_requirement,
             )
         )
@@ -1257,11 +1375,6 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
         raise ValueError(
             f"Task type {task_name!r} workflow must assign every declared stage marker: "
             f"{', '.join(omitted)} is unassigned"
-        )
-    if declared != task_level:
-        raise ValueError(
-            f"Task type {task_name!r} workflow stage markers must partition the declared stage markers in order: "
-            f"expected {task_level}, got {declared}"
         )
     return tuple(stages)
 

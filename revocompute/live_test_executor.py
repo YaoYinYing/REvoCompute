@@ -19,8 +19,11 @@ from typing import Any
 
 from revocompute import task_runtime
 from revocompute import resource_ledger as rloan
+from revocompute import runtime_bundle, runtime_image
+from revocompute.execution_graph import execution_graph_payload
 from revocompute.live_tests import atomic_write_json, sha256_file
 from revocompute.resource_observations import observations_for_guidance
+from revocompute.task_types import get_family
 
 
 _LIVE_TEST_GPU_USER_ID = 1
@@ -37,7 +40,13 @@ _SACCT_ACCELERATOR_FIELDS = ("JobIDRaw", "TRESUsageInMax", "TRESUsageInAve")
 
 
 def _task_input_form(
-    entities: list[dict], snapshot_root: Path, storage_key: str, resources: dict, runtime_bundle_sha256: str | None
+    entities: list[dict],
+    snapshot_root: Path,
+    storage_key: str,
+    resources: dict,
+    runtime_bundles: dict[str, str | None],
+    runtime_images: dict[str, str],
+    execution_graph: dict[str, Any] | None,
 ) -> str:
     """Serialize the live-test task row's ``input_form``.
 
@@ -45,19 +54,23 @@ def _task_input_form(
     workspace from ``snapshot_root``/``workspace_key``.  A fileless task (for
     example unconditional generation) has no file entity to carry that
     identity, so it must be present at the top level or the job cannot resolve
-    its workspace.  ``runtime_bundle_sha256`` is recorded here because the task
-    row is the only durable index of "a launchable Task references this bundle".
+    its workspace.  ``runtime_bundles`` is recorded here because the task
+    row is the only durable index of "a launchable Task references this bundle",
+    ``runtime_images`` carries the same candidate pins the snapshot does, and
+    ``execution_graph`` is the same frozen graph a production workflow
+    submission writes.
     """
-    return json.dumps(
-        {
-            "entities": entities,
-            "snapshot_root": str(snapshot_root),
-            "workspace_key": storage_key,
-            "runtime_bundle_sha256": runtime_bundle_sha256,
-            **resources,
-        },
-        sort_keys=True,
-    )
+    form = {
+        "entities": entities,
+        "snapshot_root": str(snapshot_root),
+        "workspace_key": storage_key,
+        "runtime_bundles": runtime_bundles,
+        "runtime_images": runtime_images,
+        **resources,
+    }
+    if execution_graph is not None:
+        form["execution_graph"] = execution_graph
+    return json.dumps(form, sort_keys=True)
 
 
 def _live_task_manifest(
@@ -66,14 +79,15 @@ def _live_task_manifest(
     task_type_def: Any,
     parameters: dict[str, Any],
     manifest_inputs: dict[str, list[dict[str, Any]]],
-    runtime_bundle_sha256: str | None,
+    runtime_bundles: dict[str, str | None],
+    runtime_images: dict[str, str],
 ) -> dict[str, Any]:
     """Build the runner manifest exactly as the submission handler does.
 
     The live test must exercise the production protocol, so it projects the same
     runner-protocol v4 keys from the same owning manifest rather than a reduced
-    hand-built shape.  ``runtime_bundle_sha256`` is resolved by the caller: it is
-    the candidate digest the controller materialized, not the published binding,
+    hand-built shape.  ``runtime_bundles`` is resolved by the caller: it is the
+    candidate digest the controller materialized, not the published binding,
     so a live test validates exactly what it is about to activate.
     """
     return {
@@ -88,7 +102,8 @@ def _live_task_manifest(
         "resource_guidance": observations_for_guidance(
             task_type_def.runtime.name, task_type_def.resource_adaptation, store=task_runtime.task_store
         ),
-        "runtime_bundle_sha256": runtime_bundle_sha256,
+        "runtime_bundles": runtime_bundles,
+        "runtime_images": runtime_images,
     }
 
 
@@ -257,9 +272,80 @@ def _evidence(task: dict[str, Any], output_root: Path | None = None) -> dict[str
     }
 
 
+def _live_storage_key() -> str:
+    """The isolated per-run user directory name for the enabled family scope.
+
+    A composed run enables several families, so the scope is joined with ``-``:
+    a comma is not a legal storage-key character, and the resolver rejects it
+    before any task row exists.
+    """
+    names = [part.strip() for part in os.environ.get("ENABLED_TASKRUNNERS", "runner").split(",") if part.strip()]
+    return "live-test-" + "-".join(names or ["runner"])
+
+
+def _pinned_runtime_images(task_type_def: Any) -> dict[str, str]:
+    """Pin the exact SIF bytes this live-test graph is about to execute.
+
+    Every referenced family resolves its selected artifact (the staged
+    candidate in this worker).  The live test is the run that produces each
+    candidate's receipt, so it pins those bytes; a production submission
+    separately requires the deployment's accepted receipt for them.
+    """
+    families = {task_type_def.runtime.name: task_type_def.runtime}
+    for stage in task_type_def.workflow:
+        family_id = stage.family or task_type_def.runtime.name
+        if family_id in families:
+            continue
+        try:
+            families[family_id] = get_family(family_id)[0]
+        except KeyError as exc:
+            raise ValueError(f"live-test references unknown runtime family: {family_id}") from exc
+    try:
+        return {
+            family.name: runtime_image.runtime_image_for_submission(family).digest
+            for family in families.values()
+        }
+    except runtime_image.RuntimeImageError as exc:
+        raise ValueError(f"live-test runtime image is unavailable: {exc}") from exc
+
+
+def _pinned_runtime_bundles(task_type_def: Any, candidate_digest: str | None) -> dict[str, str | None]:
+    """Pin every runtime family the live-test graph will execute.
+
+    The family under test uses the candidate digest the controller materialized;
+    every other referenced family uses its published binding. A family that
+    declares an overlay but has no resolvable bundle fails the live test before
+    launch, matching production submission.
+    """
+    families = {task_type_def.runtime.name: task_type_def.runtime}
+    for stage in task_type_def.workflow:
+        family_id = stage.family or task_type_def.runtime.name
+        if family_id in families:
+            continue
+        try:
+            families[family_id] = get_family(family_id)[0]
+        except KeyError as exc:
+            raise ValueError(f"live-test references unknown runtime family: {family_id}") from exc
+    bundle_root = task_runtime.CONFIG.runtime_bundle_root
+    index = runtime_bundle.load_index(bundle_root)
+    try:
+        return {
+            family.name: runtime_bundle.resolve_for_submission(
+                bundle_root,
+                index,
+                family.name,
+                declares_overlay=bool(family.runtime_overlay),
+                digest=candidate_digest if family.name == task_type_def.runtime.name else None,
+            )
+            for family in families.values()
+        }
+    except runtime_bundle.RuntimeBundleError as exc:
+        raise ValueError(f"live-test runtime bundle is unavailable: {exc}") from exc
+
+
 def _prepare_gpu_accounting(task_type_def: Any) -> dict[str, Any] | None:
     """Seed isolated authorization and balance state for a GPU live case."""
-    if not task_type_def.gpus:
+    if not (task_type_def.gpus or any(stage.requires_gpu for stage in task_type_def.workflow)):
         return None
     policy = task_type_def.runtime.access_policy
     entitlements = {name: None for name in (policy.requires if policy else ())}
@@ -380,7 +466,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
 
     submission = TaskSubmissionRequest.model_validate({"task_type": task_type, "params": request["parameters"]})
     parameters = submission.coerce_params()
-    storage_key = f"live-test-{os.environ.get('ENABLED_TASKRUNNERS', 'runner')}"
+    storage_key = _live_storage_key()
     resolver = StorageResolver(str(scratch / "results"), str(scratch / "workspaces"), task_runtime.task_store)
     identity = {"md5sum": task_id, "storage_key": storage_key}
     snapshot_root = Path(resolver.get_input_root(identity)) / "inputs"
@@ -478,26 +564,24 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
             }
         )
     atomic = snapshot_root / "task.json"
-    # The candidate digest travels in the request, and the snapshot records it
-    # as the production submission path does.  A declared-but-unresolvable
-    # candidate fails the run rather than silently executing without a bundle.
-    from revocompute import runtime_bundle
-
-    bundle_root = task_runtime.CONFIG.runtime_bundle_root
-    try:
-        pinned = runtime_bundle.resolve_for_submission(
-            bundle_root,
-            runtime_bundle.load_index(bundle_root),
-            task_type_def.runtime.name,
-            declares_overlay=bool(task_type_def.runtime.runtime_overlay),
-            digest=request.get("runtime_bundle_sha256") or None,
-        )
-    except runtime_bundle.RuntimeBundleError as exc:
-        raise ValueError(f"live-test runtime bundle is unavailable: {exc}") from exc
-    input_form = _task_input_form(entities, snapshot_root, storage_key, request["resources"], pinned)
+    # The candidate digest travels in the request; every other referenced family
+    # resolves its published pin, exactly as a production submission does.
+    runtime_bundles = _pinned_runtime_bundles(task_type_def, request.get("runtime_bundle_sha256") or None)
+    runtime_images = _pinned_runtime_images(task_type_def)
+    input_form = _task_input_form(
+        entities,
+        snapshot_root,
+        storage_key,
+        request["resources"],
+        runtime_bundles,
+        runtime_images,
+        execution_graph_payload(task_type_def),
+    )
     atomic.write_text(
         json.dumps(
-            _live_task_manifest(task_id, task_type, task_type_def, parameters, manifest_inputs, pinned),
+            _live_task_manifest(
+                task_id, task_type, task_type_def, parameters, manifest_inputs, runtime_bundles, runtime_images
+            ),
             sort_keys=True,
         )
         + "\n",

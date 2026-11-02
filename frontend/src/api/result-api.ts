@@ -1,5 +1,5 @@
 import type { components } from './schema.generated';
-import type { ArtifactRole, LogicalResultFile, PreviewCapability, ResultArtifact, ResultFile, ResultManifest, ResultStoryboardDeclaration, ResultView, TaskStatus } from './result-types';
+import type { ArtifactRole, LogicalResultFile, PreviewCapability, ResultArtifact, ResultFile, ResultManifest, ResultStoryboardDeclaration, ResultView, TaskStage, TaskStatus } from './result-types';
 import { resultFileName } from './result-types';
 import { ApiError, authorizedJson } from '../app/session';
 import { t } from '../app/i18n';
@@ -20,6 +20,10 @@ const CAPABILITIES = new Set<PreviewCapability>([
 ]);
 const VIEW_PLUGINS = new Set<ResultView['plugin']>(['structure', 'candidate-collection', 'entity-table', 'evidence-bundle', 'alignment', 'trajectory', 'metric-series', 'matrix', 'scalar-summary']);
 const VIEW_ROLES = new Set<ResultView['role']>(['primary', 'evidence']);
+type ApiStage = components['schemas']['TaskStageItem'];
+const STAGE_STATUSES = new Set<ApiStage['status']>(['NOT_STARTED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED']);
+const STAGE_SOURCES = new Set<ApiStage['source']>(['record', 'legacy', 'definition']);
+const STAGE_DEPENDENCIES = new Set<ApiStage['dependency']>(['completed', 'blocked', 'ready', 'waiting']);
 const VALIDATION_KEY = 'results.invalid.manifest';
 /*
  * Every parse fault the Result manifest projection can raise, as a catalog key.
@@ -119,6 +123,44 @@ function resultFiles(value: unknown): ResultManifest['result'] {
   return { files };
 }
 
+function nullableString(value: unknown): string | null { return value == null ? null : string(value); }
+
+type ParsedStages = components['schemas']['TaskStages'];
+function taskStages(value: unknown): ParsedStages {
+  const stages = record(value);
+  const source = string(stages.source);
+  if (source !== 'record' && source !== 'legacy') throw malformed();
+  const total = Number(stages.total); const completed = Number(stages.completed);
+  if (!Number.isInteger(total) || total < 0 || !Number.isInteger(completed) || completed < 0) throw malformed();
+  const stage = (entry: unknown): TaskStage => {
+    const item = record(entry);
+    const index = Number(item.index); const attempt = item.attempt == null ? null : Number(item.attempt);
+    const status = string(item.status) as ApiStage['status']; const stageSource = string(item.source) as ApiStage['source'];
+    // A projection without dependency (an older status payload) keeps its
+    // scheduler status and shows no dependency phrase; absence is never filled
+    // with a guess. Once present, the value must be the documented state.
+    const dependency = optionalString(item.dependency) as ApiStage['dependency'] | undefined;
+    if (!Number.isInteger(index) || index < 0 || (attempt !== null && (!Number.isInteger(attempt) || attempt < 1))) throw malformed();
+    if (!STAGE_STATUSES.has(status) || !STAGE_SOURCES.has(stageSource)) throw malformed();
+    if (dependency !== undefined && !STAGE_DEPENDENCIES.has(dependency)) throw malformed();
+    return {
+      index, name: string(item.name), display_name: string(item.display_name), status, source: stageSource, attempt,
+      started_at: nullableString(item.started_at), ended_at: nullableString(item.ended_at),
+      reason_code: nullableString(item.reason_code),
+      planned_resources: item.planned_resources == null ? null : record(item.planned_resources),
+      // The declared type requires the field; a degraded payload may lack it at
+      // runtime, which renderStages treats as "show scheduler status only".
+      dependency: dependency as ApiStage['dependency'],
+    };
+  };
+  if (!Array.isArray(stages.items)) throw malformed();
+  return {
+    source, total, completed,
+    current: stages.current == null ? null : stage(stages.current),
+    items: stages.items.map(stage),
+  };
+}
+
 export function parseResultManifest(value: unknown): ResultManifest | TaskStatus {
   const payload = record(value);
   const status = string(payload.status);
@@ -127,7 +169,8 @@ export function parseResultManifest(value: unknown): ResultManifest | TaskStatus
       task_type: string(payload.task_type), display_name: string(payload.display_name), status_url: string(payload.status_url),
       results_url: string(payload.results_url), result_available: payload.result_available === true,
       md5sum: optionalString(payload.md5sum), error: optionalString(payload.error),
-      message: optionalString(payload.message) };
+      message: optionalString(payload.message),
+      stages: payload.stages == null ? undefined : taskStages(payload.stages) };
   }
   if (payload.schema_version !== 3 || (status !== 'finished' && status !== 'failed') || payload.terminal !== true ||
       !Object.hasOwn(payload, 'error') || !Object.hasOwn(payload, 'storyboard') || !Object.hasOwn(payload, 'outcome')) {

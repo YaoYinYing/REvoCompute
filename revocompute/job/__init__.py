@@ -19,6 +19,32 @@ import os
 from typing import Any
 
 
+#: Container path of a workflow stage's verified produced-input directory.
+#: It parallels ``Job.virtual_workspace_root``; a stage that consumes an
+#: upstream node's artifact reads it here and nowhere else.
+STAGE_INPUTS_CONTAINER_DIR = "/workspace/stage_inputs"
+
+#: File inside that directory naming each role's verified artifact.
+STAGE_INPUTS_DOCUMENT_NAME = "stage_inputs.json"
+
+
+def execution_workspace_root(entities: Sequence[Mapping[str, Any]]) -> str:
+    """Host root of a task's disposable execution workspace.
+
+    The workspace entity carries it; a snapshot-only description falls back to
+    the parent of the first file's snapshot, which is the same directory.  A
+    description with neither has no workspace a job could be bound to, so a
+    caller that needs one fails rather than inventing a second location.
+    """
+    for entity in entities:
+        if entity.get("type") == "workspace":
+            return str(entity["workspace_root"])
+    for entity in entities:
+        if entity.get("type") == "file" and entity.get("snapshot_root"):
+            return os.path.dirname(str(entity["snapshot_root"]))
+    raise RuntimeError("A compute job requires an execution workspace")
+
+
 def _validate_workspace_path(value: str, field_name: str) -> None:
     """Reject paths that could escape the task workspace."""
     from pathlib import PurePosixPath
@@ -149,6 +175,27 @@ class Job(ABC):
     # -- helpers -------------------------------------------------------------
 
     @property
+    def scheduler_request_started(self) -> bool:
+        """Whether ``submit`` may have created a scheduler request.
+
+        Core settles an attempt whose submission failed only when the backend
+        proves no request exists; a backend that reports ``True`` without a
+        recorded job id holds the launch gate instead, because an allocation it
+        accepted may still be running.
+        """
+        return False
+
+    def runtime_image_observation(self) -> Any:
+        """The wrapper-observed runtime image digest for this attempt, if any.
+
+        A backend that cannot observe the image Apptainer opens returns
+        ``None``.  The store refuses a COMPLETED transition without an
+        attributable observation, so this absence fails closed rather than
+        completing on evidence the backend never produced.
+        """
+        return None
+
+    @property
     def job_id(self) -> str | None:
         return self._job_id
 
@@ -185,10 +232,7 @@ class Job(ABC):
     @property
     def task_workspace_root(self) -> str:
         """Host-side root for this task's disposable execution workspace."""
-        workspace = next((entity for entity in self.entities if entity["type"] == "workspace"), None)
-        if workspace:
-            return str(workspace["workspace_root"])
-        return os.path.dirname(self.input_snapshot_root)
+        return execution_workspace_root(self.entities)
 
     @property
     def scratch_dir(self) -> str:

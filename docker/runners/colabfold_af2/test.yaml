@@ -6,3 +6,11 @@ collections:
       task: colabfold_af2
       input: {roles: {sequence: [tests/data/msa/2KL8.fasta]}}
       parameters: {model_type: alphafold2_ptm, msa_mode: single_sequence, num_recycle: 0, num_models: 1, num_relax: 1}
+    - id: minimal-colabfold-multirecord
+      task: colabfold_af2
+      input: {roles: {sequence: [tests/data/msa/colabfold_multirecord.fasta]}}
+      parameters: {model_type: auto, msa_mode: single_sequence, num_recycle: 0, num_models: 1, num_relax: 0}
+    - id: minimal-colabfold-prefix-collision
+      task: colabfold_af2
+      input: {roles: {sequence: [tests/data/msa/colabfold_prefix_collision.fasta]}}
+      parameters: {model_type: auto, msa_mode: single_sequence, num_recycle: 0, num_models: 1, num_relax: 0}

@@ -22,6 +22,23 @@ REASONS = {
     "allocation_failed": "The scheduler reported an allocation failure.",
     "nonzero_exit": "The execution process exited unsuccessfully.",
     "missing_result": "Execution exited successfully but produced no non-empty result artifact.",
+    "stage_output_missing": "A required stage output is missing, empty, or outside the task output directory.",
+    "stage_output_invalid": "A completed stage output changed, disappeared, or escaped the task output directory.",
+    "stage_output_unverified": "A completed stage's output identity was never recorded and cannot be reused safely.",
+    "execution_graph_unverified": "The submission-frozen execution graph is missing or cannot be verified.",
+    "execution_graph_changed": "The execution graph changed after submission.",
+    "stage_blocked_by_failed_dependency": "A stage could not run because an upstream stage failed or was blocked.",
+    "stage_attempt_unavailable": "A stage attempt could not be opened durably, so no allocation was submitted.",
+    "stage_settlement_failed": (
+        "A completed stage could not be recorded durably, so its results were not published "
+        "and no dependents were dispatched."
+    ),
+    "image_identity_missing": (
+        "A completed allocation left no runtime-image observation equal to the Task's pin, "
+        "so its results were not published."
+    ),
+    "stage_input_unavailable": "An upstream artifact this stage consumes was never published durably.",
+    "stage_input_invalid": "An upstream artifact this stage consumes could not be verified for it.",
     "submission_failed": "The allocation request could not be submitted.",
     "job_id_unavailable": "The allocation request returned no usable scheduler job identity.",
     "allocation_unrecorded": "Execution was stopped because its allocation could not be recorded safely.",

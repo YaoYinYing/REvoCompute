@@ -289,6 +289,10 @@ def test_a_multistage_submission_dispatches_each_stage_with_its_own_snapshot(mon
         def poll(self):
             return module.task_runtime.JobState.COMPLETED
 
+        def runtime_image_observation(self):
+            digest = "sha256:" + "a" * 64
+            return SimpleNamespace(expected=digest, observed=digest)
+
     def _capture(_task_id, tt, runner, entities, output_dir, stage_callback=None, username="", **kwargs):
         dispatched.append((tt.name, kwargs.get("resource_policy")))
         return _CompletedJob()

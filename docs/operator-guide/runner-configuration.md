@@ -132,8 +132,13 @@ AlphaFold2 and ColabFold/AlphaFold2 are independent composed tasks. `alphafold`
 uses the mounted local databases for feature construction; `colabfold_af2`
 uses the public ColabFold MMseqs2 service and mounted
 `/mnt/db/weights/alphafold/colabfold` parameters. Each persists its CPU-stage
-output before local GPU inference and optional Amber relaxation. Restarts
-cancel only the active allocation and resume at the first incomplete stage.
+output before local GPU inference and optional Amber relaxation. A restart
+cancels the active allocation and executes every stage again: a completion from
+an earlier execution is not evidence for this execution, because the Composer
+and the result consumer only trust attempts that settle in this execution. A
+`COMPLETED` attempt does record the runtime-image digest the compute-node wrapper
+observed immediately before Apptainer, but that observation proves the
+pre-execution pin, not the bytes Apptainer actually opened.
 
 AlphaFold 3 is a third, independent runtime family. It accepts the current
 upstream AlphaFold 3 JSON contract and runs a CPU-only data pipeline followed

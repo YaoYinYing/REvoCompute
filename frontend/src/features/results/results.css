@@ -30,6 +30,16 @@
 .result-app :focus-visible { outline: 2px solid var(--app-focus); outline-offset: 2px; }
 .result-status { display: flex; gap: .8rem; padding: .7rem 0; align-items: baseline; border-bottom: 1px solid var(--result-line); font-size: .875rem; }
 .result-status strong { text-transform: capitalize; }
+/* The declared stages: one compact row each, in manifest order. Status and
+   dependency stay separate columns; dependency is text, never a tone alone. */
+.result-stages { padding: .9rem 0 1rem; border-bottom: 1px solid var(--result-line); }
+.result-stages h2 { margin: 0 0 .35rem; font-family: var(--font-display); font-size: 1rem; font-weight: 600; }
+.result-stage-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.result-stage { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: baseline; gap: .6rem; padding: .42rem 0; border-top: 1px solid var(--result-line); }
+.result-stage:first-child { border-top: 0; }
+.result-stage-name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.result-stage-dependency { color: var(--result-muted); font-size: .8rem; white-space: nowrap; }
+.result-stage[data-dependency="blocked"] .result-stage-dependency { color: var(--app-danger); }
 .result-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(19rem, 24rem); min-height: 38rem; border-bottom: 1px solid var(--result-line); }
 .result-main { min-width: 0; padding: 1.5rem 1.6rem 1.6rem 0; }
 .result-rail { min-width: 0; padding: 1.25rem 0 1.25rem 1.35rem; border-left: 1px solid var(--result-line); }

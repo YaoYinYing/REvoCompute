@@ -164,6 +164,26 @@ def test_a_released_publication_anchor_gains_the_charge_columns_as_pending(tmp_p
     assert row["charge_state"] == "pending"
 
 
+def test_existing_stage_runs_gain_a_nullable_output_identity(tmp_path):
+    path = tmp_path / "tasks.sqlite3"
+    database = TaskDatabase(str(path))
+    database.upsert_task(
+        "b" * 32, filename="input.fasta", file_path="/tmp/input.fasta", uploaded_at=1.0,
+        status="pending", is_binary=0, task_type="demo", storage_key="alice", submitted_by_user_id=7,
+        artifact_provenance="[]",
+    )
+    database.begin_stage_attempt(task_id="b" * 32, stage_index=0, stage_name="demo.features")
+    with database.engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE stage_runs DROP COLUMN output_identity")
+    database.engine.dispose()
+
+    reopened = TaskDatabase(str(path))
+    runs = reopened.list_stage_runs("b" * 32)
+    assert len(runs) == 1
+    assert runs[0]["stage_name"] == "demo.features"
+    assert runs[0]["output_identity"] is None
+
+
 def test_project_era_task_schema_fails_without_altering_rows(tmp_path):
     path = tmp_path / "tasks.sqlite3"
     current = TaskDatabase(str(path))

@@ -30,6 +30,10 @@ workflow:
   stage_markers:
   - data_pipeline
   - feature_validation
+  outputs:
+  - name: processed_input
+    type: alphafold3_processed_input
+    path: features/*/*_data.json
 - name: model
   display_name: Structure inference
   requires_gpu: true
@@ -37,6 +41,10 @@ workflow:
   runner_args:
   - -s
   - model
+  inputs:
+  - name: features
+    type: alphafold3_processed_input
+    from: alphafold3.features:processed_input
   stage_markers:
   - inference
   - output_validation

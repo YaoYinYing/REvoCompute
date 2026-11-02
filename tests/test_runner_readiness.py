@@ -88,6 +88,7 @@ def evidence(tmp_path: Path, monkeypatch):
     plan = SimpleNamespace(
         digest="sha256:test-current",
         select=lambda collection: (SimpleNamespace(id="minimal"),) if collection == "smoke" else (),
+        omitted=(),
     )
     monkeypatch.setattr("revocompute.runner_readiness.diagnose", lambda *_args, **_kwargs: DoctorReport(()))
     monkeypatch.setattr("revocompute.runner_readiness._build_provenance", lambda *_args: current)
@@ -255,6 +256,56 @@ def test_staged_candidate_lifecycle_preserves_active_and_unrelated_evidence(evid
     assert promoted.sif_sha256 == candidate_sha
     assert resolve_runner_readiness(state, other).sif_sha256 == other_sha
     assert other_receipt_path.read_bytes() == other_receipt
+
+
+def test_a_plan_that_omitted_a_declared_case_names_the_task_it_cannot_admit(evidence, monkeypatch):
+    state, family, active = evidence
+    _write_receipt(family, active)
+    plan = SimpleNamespace(
+        digest="sha256:test-current",
+        select=lambda collection: (SimpleNamespace(id="minimal"),) if collection == "smoke" else (),
+        omitted=(("composed-case", "composed_task"),),
+    )
+    monkeypatch.setattr(
+        "revocompute.runner_readiness.load_validation_identity",
+        lambda *_args, **_kwargs: ValidationIdentity(
+            plan, "sha256:config-current", (TaskResourceSnapshot("predict", None, ()),)
+        ),
+    )
+
+    result = resolve_runner_readiness(state, family)
+
+    # The cases the scope ran are still evidence for their own Tasks, so the
+    # family stays ready; the Task whose case was skipped is published so its
+    # own submission can be refused.
+    assert result.status is RunnerReadinessStatus.READY
+    assert result.omitted_tasks == ("composed_task",)
+    assert json.loads(format_readiness_json([result]))["runners"][0]["omitted_tasks"] == ["composed_task"]
+
+
+def test_submission_evidence_refuses_only_the_task_whose_case_was_omitted(tmp_path):
+    from revocompute.admission import resolve_submission_readiness
+
+    directory = tmp_path / "readiness"
+    directory.mkdir()
+    (directory / "demo.json").write_text(
+        json.dumps(
+            {
+                "runner_family": "demo",
+                "status": "READY",
+                "ready": True,
+                "omitted_tasks": ["composed_task"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = resolve_submission_readiness(tmp_path, "demo")
+
+    # A narrowed live test still validated the cases it ran; only the Task whose
+    # own case it skipped is refused.
+    assert evidence.accepts("plain_task")
+    assert not evidence.accepts("composed_task")
 
 
 def test_wrong_scheduler_identity_is_validation_stale_even_with_correct_uid_gid(evidence):
@@ -607,11 +658,13 @@ def test_each_effective_resource_field_changes_validation_identity(tmp_path, sta
     assert changed.configuration_digest != baseline.configuration_digest
 
 
-def _copied_family(tmp_path, family="restricted_runner"):
+def _copied_family(tmp_path, family="restricted_runner", extra_families=()):
     repo = tmp_path / "repo"
     runners = repo / "docker" / "runners"
     shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / family, runners / family)
     shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "common", runners / "common")
+    for extra in extra_families:
+        shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / extra, runners / extra)
     plan = yaml.safe_load((runners / family / "test.yaml").read_text(encoding="utf-8"))
     for collection in plan["collections"].values():
         for case in collection["cases"]:
@@ -681,6 +734,88 @@ def test_workflow_marker_ownership_changes_validation_identity(tmp_path):
     task.write_text(reassigned, encoding="utf-8")
     reassigned_identity = load_validation_identity(family, resource_provider=providers, repo_root=repo)
     assert reassigned_identity.configuration_digest != baseline.configuration_digest
+
+
+def _workflow_ports(text: str) -> str:
+    """Declare a typed edge between the fixture's two workflow stages."""
+    features = (
+        "  stage_markers:\n  - data_pipeline\n  - feature_validation\n"
+        "  family: restricted_runner\n"
+        "  inputs:\n"
+        "  - {name: sequence, type: protein_sequence, from: \"graph:sequence\"}\n"
+        "  outputs:\n"
+        "  - {name: prepared, type: protein_structure, path: work/prepared.fasta}\n"
+        "  - {name: prepared_copy, type: protein_structure, path: work/prepared_copy.fasta}\n"
+    )
+    model = (
+        "  stage_markers:\n  - inference\n  - output_validation\n"
+        "  inputs:\n"
+        "  - {name: prepared, type: protein_structure, "
+        "from: \"restricted_runner.features:prepared\"}\n"
+        "  outputs:\n"
+        "  - {name: score, type: protein_structure, path: score.json}\n"
+    )
+    return text.replace(
+        "  stage_markers:\n  - data_pipeline\n  - feature_validation\n", features, 1
+    ).replace(
+        "  stage_markers:\n  - inference\n  - output_validation\n", model, 1
+    )
+
+
+def _workflow_family(tmp_path, **kwargs):
+    repo, runners, _family = _copied_family(tmp_path, **kwargs)
+    family = next(item for item in load_plugin_families(runners) if item.name == "restricted_runner")
+    return repo, replace(family, root=runners / "restricted_runner")
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        (
+            'from: "restricted_runner.features:prepared"',
+            'from: "restricted_runner.features:prepared_copy"',
+        ),
+        ("path: work/prepared.fasta", "path: work/prepared_v2.fasta"),
+        ("family: restricted_runner", "family: cpu_runner"),
+        (
+            "{name: prepared, type: protein_structure, path: work/prepared.fasta}",
+            "{name: prepared, type: protein_sequence, path: work/prepared.fasta}",
+        ),
+    ],
+    ids=["input-binding", "output-path", "stage-family", "output-type"],
+)
+def test_workflow_stage_contract_changes_validation_identity(tmp_path, before, after):
+    repo, family = _workflow_family(tmp_path, extra_families=("cpu_runner",))
+    task = family.root / "tasks" / "predict" / "task.yaml"
+    declared = _workflow_ports(task.read_text(encoding="utf-8"))
+    task.write_text(declared, encoding="utf-8")
+    providers = ResourcePolicyValues({}, {})
+
+    baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+    mutated = declared.replace(before, after, 1)
+    assert mutated != declared
+    task.write_text(mutated, encoding="utf-8")
+
+    changed = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+    assert changed.configuration_digest != baseline.configuration_digest
+
+
+def test_workflow_stage_display_name_does_not_change_validation_identity(tmp_path):
+    repo, family = _workflow_family(tmp_path)
+    task = family.root / "tasks" / "predict" / "task.yaml"
+    declared = _workflow_ports(task.read_text(encoding="utf-8"))
+    task.write_text(declared, encoding="utf-8")
+    providers = ResourcePolicyValues({}, {})
+
+    baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+    relabelled = declared.replace("display_name: Preparation", "display_name: Input preparation", 1)
+    assert relabelled != declared
+    task.write_text(relabelled, encoding="utf-8")
+
+    assert (
+        load_validation_identity(family, resource_provider=providers, repo_root=repo).configuration_digest
+        == baseline.configuration_digest
+    )
 
 
 def test_access_policy_and_workspace_assets_change_validation_identity(tmp_path):

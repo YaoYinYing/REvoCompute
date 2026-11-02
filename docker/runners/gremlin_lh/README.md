@@ -108,6 +108,61 @@ stops on any failed stage and writes its completion sentinel only after every
 declared artifact is present and non-empty, so a nominally successful fit that
 produced nothing never publishes a result.
 
+## Composed stage input (produced artifact)
+
+A composed Task Type may bind this stage's `alignment` input to another stage's
+output (`from: <producer>.<stage>:<port>`). The Runner reads that artifact only
+through a server-written document selected by `TASK_STAGE_INPUTS`; neither the
+Task nor the user supplies a path or filename. It never falls back to a shared
+writable output tree.
+
+The document is versioned JSON:
+
+```json
+{
+  "version": 1,
+  "stage": "<task>.<stage>",
+  "inputs": {
+    "alignment": {
+      "path": "/workspace/stage_inputs/alignment/<name>",
+      "files": [
+        {
+          "path": "/workspace/stage_inputs/alignment/<name>",
+          "source_path": "<producer-relative path>",
+          "sha256": "<64 lowercase hex>",
+          "size": 1234
+        }
+      ],
+      "producer": "<producer node id>",
+      "producer_attempt": 1
+    }
+  }
+}
+```
+
+A role is a set of files. `path` is the file itself when the producer port
+published exactly one, and the role's directory when it published several; the
+`files` list always names each verified file. This Runner's `alignment` role is
+one artifact, so `path` is a file it can fit directly.
+
+`run.sh` resolves `alignment` and re-hashes the file before fitting
+(`stage_inputs.py`); a missing role, a non-regular or symlinked path, or a
+digest mismatch fails the run before any model output exists.
+
+**Server contract this path uses.** Before dispatching the stage, the Server
+resolves the producer node's latest attempt and requires `COMPLETED` with a
+recorded output identity, verifies every file of the declared producer port
+against that identity, copies them into a server-owned stage input directory
+outside the shared output tree, writes this document, and binds that directory
+read-only at `/workspace/stage_inputs` with `TASK_STAGE_INPUTS` exported for
+that stage only. Any failure refuses the stage before an allocation exists. A
+composed Task Type that binds a produced alignment into this stage therefore
+needs no path from the Task or the user.
+
+Without the document, `run.sh` keeps its single-stage guard
+(`TASK_TYPE=gremlin_lh_fit`) and reads the uploaded `alignment` role from
+`task.json`.
+
 ### The durable model artifact
 
 `model/gremlin_mrf.npz` is the preserved model state: a compressed `.npz` (not a
@@ -197,9 +252,10 @@ result surface.
 
 ## Databases, mounts, and network
 
-None. This family consumes a user-supplied alignment, has no pretrained weights,
-no managed sequence database, and no runtime mounts; normal execution performs no
-downloads, so there is no database-preparation or cache procedure. The upstream
+None. This family consumes an alignment — uploaded, or a verified produced
+artifact from a composed stage — has no pretrained weights, no managed sequence
+database, and no runtime mounts; normal execution performs no downloads, so there
+is no database-preparation or cache procedure. The upstream
 experimental DMS table and the paper benchmark archives are not required to fit a
 user MSA and are not copied into the image.
 
@@ -226,6 +282,9 @@ run.
 | Condition | Detected by | Message |
 | --- | --- | --- |
 | Missing/unknown input role | `task_input` | `unknown input role` |
+| Stage input role absent from the document | `stage_inputs.py` | `does not declare role` |
+| Stage input role names more than one file | `stage_inputs.py` | `must name exactly one file` |
+| Stage input content changed after admission | `stage_inputs.py` | `digest does not match` |
 | Fewer than two rows | `parse_alignment` | `at least two sequences` |
 | Unequal row widths | `parse_alignment` | `unequal widths` |
 | Unsupported residue | `parse_alignment` | `unsupported residues` |

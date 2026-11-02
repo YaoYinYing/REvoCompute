@@ -13,6 +13,9 @@ execution boundaries, extension contracts, and the test policy.
   execution and parsed outputs.
 - [Execution Stage State](execution-stage-state.md) — the `stage_runs` attempt
   record that owns stage status, transitions, and Task-status projection.
+- [Composable Execution Architecture](composable-execution-architecture.md) —
+  the single scientific execution graph shared by curated Task Types and
+  editable Pipelines, and its deployment-selected execution backends.
 
 ## Extension contracts
 

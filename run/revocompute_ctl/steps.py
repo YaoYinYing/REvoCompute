@@ -126,23 +126,27 @@ def task_pinned_bundle_digests(state) -> set[str]:
                     continue
                 if not isinstance(payload, dict):
                     continue
-                # The submission path records the pinned *identity* alongside the
-                # entities; a task predating Runtime Bundles simply has none.
-                digest = payload.get("runtime_bundle_sha256")
-                if not isinstance(digest, str) or not digest:
+                # The submission path records the pinned *identity* of every
+                # referenced family alongside the entities; a task predating
+                # Runtime Bundles simply has none.
+                bundles = payload.get("runtime_bundles")
+                pinned = {
+                    digest for digest in bundles.values() if isinstance(digest, str) and digest
+                } if isinstance(bundles, dict) else set()
+                if not pinned:
                     continue
                 if status in ("pending", "queued", "running"):
                     # Not yet started or mid-flight: no scheduler answer is
                     # needed, and for a jobless row there is nothing to ask.
-                    digests.add(digest)
+                    digests.update(pinned)
                     continue
                 job_id = str(job_id or "").strip()
                 if job_id.isdigit():
-                    handles.append((job_id, digest))
+                    handles.extend((job_id, digest) for digest in pinned)
                 else:
                     # A terminal row with a non-numeric handle (a legacy
                     # ``srun-`` id) cannot be queried, so it is assumed live.
-                    digests.add(digest)
+                    digests.update(pinned)
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc):
             return set()

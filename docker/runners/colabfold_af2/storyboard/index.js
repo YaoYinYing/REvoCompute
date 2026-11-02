@@ -31,7 +31,48 @@ const STYLE = `
 
 function list(value) { return Array.isArray(value) ? value : value ? [value] : []; }
 function name(artifact) { return artifact.name || String(artifact.path || "").split("/").pop(); }
-function rank(artifact) { const match = name(artifact).match(/_rank_(\d+)_/); return match ? Number(match[1]) : null; }
+// ColabFold writes one job per FASTA record. Each role has a complete,
+// end-anchored suffix, and the greedy job group keeps the longest prefix that
+// still leaves that suffix, so a FASTA header that itself contains
+// `_relaxed_rank_` or `_scores_rank_` is not mistaken for the suffix. A name
+// with no recognized suffix has no identity and is never paired.
+const STRUCTURE_FILE = /^(.*)_(unrelaxed|relaxed)_rank_(\d+)_[^/]+\.pdb$/;
+const SCORES_FILE = /^(.*)_scores_rank_(\d+)_[^/]+\.json$/;
+const ALIGNMENT_FILE = /^(.*)\.a3m$/;
+function identity(artifact) {
+  const base = name(artifact);
+  const structure = base.match(STRUCTURE_FILE);
+  if (structure) return { job: structure[1], rank: Number(structure[3]), relaxed: structure[2] === "relaxed" };
+  const scores = base.match(SCORES_FILE);
+  if (scores) return { job: scores[1], rank: Number(scores[2]), relaxed: null };
+  const alignment = base.match(ALIGNMENT_FILE);
+  if (alignment) return { job: alignment[1], rank: null, relaxed: null };
+  return null;
+}
+function modelKey(parsed) { return parsed.job + "\u0000" + parsed.rank; }
+// Pinned ColabFold assigns a distinct rank to every prediction, so one score
+// file exists per job+rank. A duplicate name is unreachable upstream; the first
+// by filename is a deterministic defensive tie-break rather than list order.
+function scoreFiles(artifacts) {
+  const scores = new Map();
+  artifacts.forEach((artifact) => {
+    const parsed = identity(artifact); if (!parsed || parsed.rank == null) return;
+    const key = modelKey(parsed); const current = scores.get(key);
+    if (!current || name(artifact) < name(current)) scores.set(key, artifact);
+  });
+  return scores;
+}
+// A duplicate alignment job cannot be disambiguated from filenames, so the
+// evidence is dropped rather than silently overwriting another artifact.
+function uniqueAlignments(artifacts) {
+  const alignments = new Map(); const ambiguous = new Set();
+  artifacts.forEach((artifact) => {
+    const parsed = identity(artifact); if (!parsed) return;
+    if (alignments.has(parsed.job)) ambiguous.add(parsed.job); else alignments.set(parsed.job, artifact);
+  });
+  ambiguous.forEach((jobName) => alignments.delete(jobName));
+  return alignments;
+}
 function element(tag, className, text) { const node = document.createElement(tag); node.className = className; if (text != null) node.textContent = text; return node; }
 function section(title, note) {
   const node = element("section", "colabfold-section");
@@ -57,13 +98,14 @@ function declaredFields(views, id) { const fields = viewMapping(views, id).field
 function directionWording(direction) { return direction === "higher" ? "Higher is better" : direction === "lower" ? "Lower is better" : ""; }
 function seriesWording(direction) { return direction === "higher" ? "higher is better" : direction === "lower" ? "lower is better" : ""; }
 function preferredStructures(artifacts) {
-  const byRank = new Map();
+  const byModel = new Map();
   artifacts.forEach((artifact) => {
-    const key = rank(artifact); if (key == null) return;
-    const current = byRank.get(key);
-    if (!current || (/_relaxed_rank_/.test(name(artifact)) && !/_relaxed_rank_/.test(name(current)))) byRank.set(key, artifact);
+    const parsed = identity(artifact); if (!parsed || parsed.rank == null) return;
+    const key = modelKey(parsed);
+    const current = byModel.get(key);
+    if (!current || (parsed.relaxed && !identity(current).relaxed)) byModel.set(key, artifact);
   });
-  return Array.from(byRank.entries()).sort((a, b) => a[0] - b[0]).map((entry) => entry[1]);
+  return Array.from(byModel.values()).sort((a, b) => { const left = identity(a), right = identity(b); return left.job.localeCompare(right.job) || left.rank - right.rank; });
 }
 function entityRows(a3m) {
   const first = String(a3m).split(/\r?\n/, 1)[0];
@@ -78,10 +120,9 @@ export default {
     if (!Scientific) throw new Error("Scientific result components are unavailable.");
     const services = context.services || {};
     const structures = preferredStructures(list(context.files.get("structures")));
-    const scores = list(context.files.get("scores"));
-    const alignment = list(context.files.get("alignment"))[0];
+    const alignments = uniqueAlignments(list(context.files.get("alignment")));
     const interfaceArtifact = list(context.files.get("interface_scores"))[0];
-    const scoreByRank = new Map(scores.map((artifact) => [rank(artifact), artifact]));
+    const scoresByModel = scoreFiles(list(context.files.get("scores")));
     const abort = new AbortController(); let generation = 0; let stageGeneration = 0; let localSeries = null; let matrix = null;
 
     const root = element("div", "colabfold-result");
@@ -123,19 +164,12 @@ export default {
     const globalFields = declaredFields(views, "global_confidence");
     const interfaceFields = declaredFields(views, "interface_confidence");
     matrix = new Scientific.PairMatrix({ figure, canvas, readout, minimum: paeMapping.scale_min, maximum: paeMapping.scale_max, unit: paeMapping.unit || "Å", xTitle: paeMapping.x_label || "Aligned residue", yTitle: paeMapping.y_label || "Scored residue", legendTitle: "PAE (Å)", decimals: 1, onSelect: ({ x }) => { const residue = x + 1; context.selection.set({ token: residue }, matrix); if (residueFocusAvailable) context.services.focusStructure?.({ residue, numbering: "label_seq_id" }); } });
-    const [a3m, interfacePayload] = await Promise.all([
-      fetchText(alignment, abort.signal),
-      interfaceArtifact ? fetchJson(interfaceArtifact, abort.signal).catch(() => null) : Promise.resolve(null),
-    ]);
+    const interfacePayload = interfaceArtifact ? await fetchJson(interfaceArtifact, abort.signal).catch(() => null) : null;
     if (abort.signal.aborted) return { destroy() {} };
-    new Scientific.AlignmentCoverage(coverageHost, a3m, { title: "ColabFold alignment coverage", maxRows: 5000 });
-    const rows = entityRows(a3m);
-    residueFocusAvailable = rows.length === 1 && Number(rows[0][2]) === 1;
-    if (rows.length) new Scientific.EntitySummaryTable(entityHost, { columns: ["Entity", "Length", "Copies"], rows });
-    else entityHost.replaceChildren(message("This A3M does not publish a ColabFold entity header."));
 
     function clearCandidate(text) {
       actions.replaceChildren(); metricHost.replaceChildren(message(text)); localHost.replaceChildren(); figure.hidden = true; readout.textContent = "";
+      coverageHost.replaceChildren(); entityHost.replaceChildren(); residueFocusAvailable = false;
       if (localSeries) { localSeries.destroy(); localSeries = null; }
     }
     // A mount from a superseded candidate is skipped rather than replacing the
@@ -153,7 +187,9 @@ export default {
       }
     }
     async function select(structure, _index, request) {
-      const current = ++generation; const selectedRank = rank(structure); const scoreArtifact = scoreByRank.get(selectedRank);
+      const current = ++generation; const selected = identity(structure);
+      const scoreArtifact = selected && scoresByModel.get(modelKey(selected));
+      const alignmentArtifact = selected && alignments.get(selected.job);
       clearCandidate("Loading candidate confidence...");
       void showStructure(structure, request);
       if (!scoreArtifact || !scoreArtifact.ndarray_url) { clearCandidate("No bounded score record matches this ranked model."); return; }
@@ -162,10 +198,13 @@ export default {
           Scientific.loadNumericProjection(scoreArtifact, { key: "plddt", signal: request.signal }),
           Scientific.loadNumericProjection(scoreArtifact, { key: "pae", signal: request.signal }),
           ...globalFields.map((field) => Scientific.loadNumericProjection(scoreArtifact, { key: field.path, signal: request.signal })),
+          alignmentArtifact ? fetchText(alignmentArtifact, request.signal) : Promise.resolve(null),
         ]);
         if (current !== generation || !request.current()) return;
         const available = results.map((result) => result.status === "fulfilled" ? result.value : null);
-        const [plddtProjection, paeProjection, ...globalValues] = available;
+        const [plddtProjection, paeProjection] = available;
+        const globalValues = available.slice(2, 2 + globalFields.length);
+        const a3m = available[2 + globalFields.length];
         const plddt = plddtProjection && plddtProjection.shape.length === 1 ? plddtProjection.values : [];
         const finite = plddt.filter(Number.isFinite);
         const publishedInterface = interfacePayload && interfacePayload.scores_file === name(scoreArtifact) ? interfacePayload : null;
@@ -183,6 +222,15 @@ export default {
         const values = matrixRows(paeProjection);
         if (values) { figure.hidden = false; matrix.setData({ values, xLabels: values.map((_, index) => String(index + 1)), yLabels: values.map((_, index) => String(index + 1)) }); }
         else { figure.hidden = true; readout.textContent = "This model did not publish PAE."; }
+        // The alignment, its coverage, and its entity rows belong to the
+        // selected job, so they follow the selected structure rather than mount.
+        if (a3m != null) {
+          new Scientific.AlignmentCoverage(coverageHost, a3m, { title: "ColabFold alignment coverage", maxRows: 5000 });
+          const rows = entityRows(a3m);
+          residueFocusAvailable = rows.length === 1 && Number(rows[0][2]) === 1;
+          if (rows.length) new Scientific.EntitySummaryTable(entityHost, { columns: ["Entity", "Length", "Copies"], rows });
+          else entityHost.replaceChildren(message("This A3M does not publish a ColabFold entity header."));
+        } else { coverageHost.replaceChildren(); entityHost.replaceChildren(message("No alignment was published for this ranked model.")); }
         const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft btn-small"; open.textContent = "Open selected structure"; open.addEventListener("click", () => context.services.openFile(structure)); actions.replaceChildren(open);
         return true;
       } catch (error) { if (error.name !== "AbortError" && request.current()) clearCandidate(error.message || "Candidate confidence could not be loaded."); }
@@ -192,7 +240,8 @@ export default {
       if (source !== matrix) matrix.setSelection(state.token - 1);
       if (localSeries && source !== localSeries) localSeries.setSelection(state.token);
     }) || (() => {});
-    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, store: context.selection, label: (item) => "Rank " + rank(item), onSelect: select });
+    const multipleJobs = new Set(structures.map((item) => identity(item).job)).size > 1;
+    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, store: context.selection, label: (item) => { const parsed = identity(item); return (multipleJobs ? parsed.job + " · " : "") + "Rank " + parsed.rank; }, onSelect: select });
     if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No ranked model was published."));
     return { destroy() { generation += 1; stageGeneration += 1; abort.abort(); unsubscribe(); selector.destroy(); if (localSeries) localSeries.destroy(); if (matrix) matrix.destroy(); } };
   },

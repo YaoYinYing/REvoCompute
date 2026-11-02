@@ -13,17 +13,29 @@ through the server API. This page does not restate those values.
 
 ## Workflow stages
 
-```text
-query FASTA
-     ↘ hhblits            search UniRef30, emit an A3M alignment
-     ↘ hhfilter           redundancy filter at 90% id / 75% coverage
-     ↘ remove insertions  strip lowercase insertion columns
-     ↘ gremlin            fit fields + pairwise couplings
-     ↘ blast (PSI-BLAST)  search UniRef90, emit a PSSM checkpoint and ASCII matrix
-```
+`tasks/gremlin/task.yaml` declares three real execution stages. `run.sh -s`
+selects one, or `all` for the historical complete run:
 
-`run.sh` emits `REVODESIGN_STAGE:{hhblits,hhfilter,gremlin,blast}` around the
-stages and writes `log/task_finished` only after both searches complete.
+| Stage | Command | Input | Output | Database |
+| --- | --- | --- | --- | --- |
+| `msa` | `hhblits`, `hhfilter`, insertion removal | the sequence | `gremlin_msa/*.i90c75_aln.fas` | UniRef30 |
+| `fit` | `GREMLIN_TFv1.py` | the `msa` alignment | `gremlin_res/*.GREMLIN.mrf.pkl`, `*_GREMLIN_mtx.png` | none |
+| `pssm` | `psiblast` | the sequence | `pssm_msa/*_ascii_mtx_file` | UniRef90 |
+
+The `msa` and `pssm` stages are separate roots over the same sequence; `fit`
+consumes the `msa` alignment, so it cannot run before `msa`. `-s all` runs
+`msa`, `fit`, `pssm` in that order, preserving the original monolithic run.
+Every selected stage deletes its declared outputs and recomputes on every
+invocation. None of them can bind the runtime image that executes, so an output
+left in the shared tree by an earlier attempt cannot be attributed to the
+current one.
+`-s fit` needs no sequence database. A stage that finds its input
+missing fails with the path it expected and a named precondition; it never
+silently produces an empty result.
+
+`run.sh` emits `REVODESIGN_STAGE:{hhblits,hhfilter,gremlin,blast}` as
+non-authoritative progress observations and writes `log/task_finished` only
+after the selected stages succeed.
 
 ## Result artifact tree
 
@@ -211,9 +223,10 @@ Each command must exit `0` and print a result. The image's `%environment`
 already puts the Conda environment on `PATH`, so bare `blastdbcmd`, `psiblast`,
 and `hhblits` resolve inside the image as well.
 
-The Runner itself also fail-closes on a missing database: `run.sh` exits with
-`<prefix>.fasta not found, exit.` when the UniRef90 FASTA and index are absent,
-and `hhblits`/`psiblast` report their own errors for an unreadable UniRef30.
+The Runner itself also fail-closes on a missing database: the `pssm` stage exits
+with `<prefix>.fasta not found: the pssm stage needs a UniRef90 BLAST database.`
+when the UniRef90 FASTA and index are absent, and `hhblits` reports its own
+errors for an unreadable UniRef30.
 
 ## Runtime and resource envelope
 
