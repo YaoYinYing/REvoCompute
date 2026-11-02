@@ -154,7 +154,8 @@ def bundle_digest(state, family: RuntimeFamily) -> str | None:
     Raises ``RuntimeBundleError`` when the family declares an overlay but has no
     resolvable published binding.  Substituting the source digest here would let
     readiness report READY from a receipt for code no submission can pin; the
-    index is the only authority for what is active.
+    verified rollback hold (when one stands) or the index is the only authority
+    for what is active.
     """
     if not family.runtime_overlay:
         return None
@@ -317,6 +318,19 @@ def _staged_candidate_readiness(
         try:
             bundle_digest(state, family)
         except runtime_bundle.RuntimeBundleError:
+            if runtime_bundle.load_rollback_holds(_bundle_root(state)).get(family.name):
+                # A deliberate rollback whose snapshot disappeared is a
+                # configuration defect, not a first enablement.
+                return _result(
+                    family,
+                    RunnerReadinessStatus.NOT_CONFIGURED,
+                    "CONFIGURATION_INVALID",
+                    "The Runtime Bundle held by rollback is unavailable; restore it or rerun the live test",
+                    doctor_ok=True,
+                    sif_exists=active_exists,
+                    build_provenance_current=False,
+                    build_provenance_digest=build_digest,
+                )
             # First enablement: the candidate is staged and recorded, but no
             # deployment has published a binding yet.  That is not a
             # configuration defect -- the live test validates this candidate
@@ -498,6 +512,24 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
         # back to the source: a new submission would pin nothing.
         from revocompute import runtime_bundle
 
+        bundle_root = _bundle_root(state)
+        try:
+            held_bundle = runtime_bundle.verified_hold(bundle_root, family.name)
+        except runtime_bundle.RuntimeBundleError:
+            # A deliberate rollback whose snapshot disappeared must never fall
+            # through to the checkout (or to READY): restore the snapshot or run
+            # the live test again.
+            return _result(
+                family,
+                RunnerReadinessStatus.NOT_CONFIGURED,
+                "CONFIGURATION_INVALID",
+                "The Runtime Bundle held by rollback is unavailable; restore it or rerun the live test",
+                doctor_ok=True,
+                sif_exists=active_exists,
+                sif_sha256=sif_sha256,
+                build_provenance_current=True,
+                build_provenance_digest=build_digest,
+            )
         try:
             published_bundle = bundle_digest(state, family)
         except runtime_bundle.RuntimeBundleError:
@@ -516,7 +548,10 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
                 build_provenance_current=True,
                 build_provenance_digest=build_digest,
             )
-        if published_bundle is None or published_bundle != source_bundle:
+        # A rollback hold deliberately selects a digest the checkout no longer
+        # matches.  Comparing it with the source would report the operator's own
+        # choice as RUNTIME_BUNDLE_CHANGED; the receipt below decides instead.
+        if held_bundle is None and (published_bundle is None or published_bundle != source_bundle):
             # Report the source digest: it is the identity that must be
             # materialized, live-tested, and activated.
             return _result(

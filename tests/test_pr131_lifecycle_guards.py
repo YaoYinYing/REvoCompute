@@ -319,6 +319,39 @@ def test_overlay_source_edit_reads_stale_before_activation(
     assert unpublished.reason_code == "RUNTIME_BUNDLE_CHANGED"
 
 
+def test_a_rollback_hold_reads_ready_instead_of_bundle_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, family, _sif_path, active = _readiness_evidence(tmp_path, monkeypatch)
+    store = str(state.get("RUNTIME_BUNDLE_DIR"))
+    (family.root / "run.sh").write_text("#!/bin/sh\necho edited\n", encoding="utf-8")
+    assert resolve_runner_readiness(state, family).reason_code == "RUNTIME_BUNDLE_CHANGED"
+
+    # A rollback deliberately keeps the older accepted digest while the
+    # checkout carries newer sources.  That choice is READY on its held receipt,
+    # not RUNTIME_BUNDLE_CHANGED.
+    rb.write_rollback_holds(store, {"demo": active})
+    result = resolve_runner_readiness(state, family)
+
+    assert result.status is RunnerReadinessStatus.READY
+    assert result.runtime_bundle_sha256 == active
+    assert result.receipt_runtime_bundle_sha256 == active
+
+
+def test_a_held_snapshot_that_disappears_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, family, _sif_path, _active = _readiness_evidence(tmp_path, monkeypatch)
+    rb.write_rollback_holds(
+        str(state.get("RUNTIME_BUNDLE_DIR")), {"demo": "sha256:" + "f" * 64}
+    )
+
+    result = resolve_runner_readiness(state, family)
+
+    assert result.status is RunnerReadinessStatus.NOT_CONFIGURED
+    assert result.reason_code == "CONFIGURATION_INVALID"
+
+
 def test_activation_publishes_only_the_receipt_validated_digest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

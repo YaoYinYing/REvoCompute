@@ -403,3 +403,72 @@ def test_index_round_trips_and_rejects_a_binding_to_a_missing_bundle(tmp_path: P
     # declaration is what tells them apart.
     with pytest.raises(rb.RuntimeBundleError, match="no published bundle"):
         rb.resolve_for_submission(store, {}, "fam", declares_overlay=True)
+
+
+def test_a_family_that_dropped_its_overlay_ignores_a_stale_index_entry(tmp_path: Path) -> None:
+    """A leftover binding must not make readiness and submission disagree."""
+    store = tmp_path / "runtime-bundles"
+    root = tmp_path / "runners"
+    _overlay(root, {"fam/run.sh": ("#!/bin/sh\n", True)})
+    digest, _path = rb.materialize(root, ["fam/run.sh"], store)
+    rb.write_index(store, {"fam": digest})
+
+    assert (
+        rb.resolve_for_submission(store, rb.load_index(store), "fam", declares_overlay=False) is None
+    )
+
+
+def _entry(tmp_path: Path, relative: str) -> rb.OverlayEntry:
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n", encoding="utf-8")
+    return rb.OverlayEntry(relative, path, True)
+
+
+def test_a_single_element_legacy_entrypoint_is_refused_when_the_overlay_delivers_it(tmp_path: Path) -> None:
+    entry = _entry(tmp_path, "demo/run.sh")
+
+    error = rb.overlay_entrypoint_error(["/app/revocompute/run.sh"], [entry])
+
+    assert error is not None and "must resolve under" in error
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        ["bash", "-c", "exec /app/revocompute/run.sh"],
+        ["bash", "-c", "exec '/app/revocompute/demo/run.sh'"],
+        ["sh", "-c", "/app/revocompute/run.sh --flag"],
+    ],
+)
+def test_a_shell_entrypoint_cannot_hide_a_legacy_path(tmp_path: Path, entrypoint: list[str]) -> None:
+    entry = _entry(tmp_path, "demo/run.sh")
+
+    assert rb.overlay_entrypoint_error(entrypoint, [entry]) is not None
+
+
+def test_an_entrypoint_under_the_reserved_mount_must_be_declared(tmp_path: Path) -> None:
+    entry = _entry(tmp_path, "demo/run.sh")
+
+    assert (
+        rb.overlay_entrypoint_error(["bash", "/opt/revocompute/runtime/demo/run.sh"], [entry])
+        is None
+    )
+    assert (
+        rb.overlay_entrypoint_error(["bash", "/opt/revocompute/runtime/demo/other.sh"], [entry])
+        is not None
+    )
+    # Every element is inspected, not only the executable.
+    assert (
+        rb.overlay_entrypoint_error(
+            ["/opt/revocompute/runtime/demo/run.sh", "--config", "/opt/revocompute/runtime/demo/other.sh"],
+            [entry],
+        )
+        is not None
+    )
+
+
+def test_an_unmigrated_family_keeps_its_legacy_entrypoint(tmp_path: Path) -> None:
+    entry = _entry(tmp_path, "common/runtime/task_context.sh")
+
+    assert rb.overlay_entrypoint_error(["bash", "/app/revocompute/run.sh"], [entry]) is None

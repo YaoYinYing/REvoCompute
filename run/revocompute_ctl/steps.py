@@ -186,6 +186,7 @@ def prune_runtime_bundles(state, keep: dict[str, str]) -> None:
     kept = (
         set(keep.values())
         | runtime_bundle.index_digests(store_root)
+        | runtime_bundle.rollback_digests(store_root)
         | task_pinned_bundle_digests(state)
     )
     removed = runtime_bundle.garbage_collect(store_root, kept, min_age_seconds=window_seconds)
@@ -198,9 +199,11 @@ def cmd_rollback_bundle(state, runner: str, digest: str) -> None:
 
     Rollback is an identity switch, never a rebuild: the target must be a
     materialized snapshot that still verifies, and a live-test receipt must
-    authorize that exact family + digest for the current artifact, build
-    provenance, configuration, and test definition.  Every refusal leaves
-    ``index.json`` byte-identical.  Snapshots are never rewritten or pruned.
+    authorize that exact family + digest for the active artifact, build
+    provenance, configuration, and test definition.  The choice is recorded as a
+    durable hold so ``setup``/``restart`` cannot silently publish the newer
+    checkout again.  Every refusal leaves the index byte-identical.  Snapshots
+    are never rewritten or pruned.
     """
     from revocompute import runtime_bundle
     from revocompute.runner_live_test import receipt_valid_for_bundle
@@ -220,7 +223,11 @@ def cmd_rollback_bundle(state, runner: str, digest: str) -> None:
     if not family.runtime_overlay:
         print(f"Runner Family {runner} declares no runtime overlay; there is no bundle to roll back.", file=sys.stderr)
         raise SystemExit(1)
-    if not receipt_valid_for_bundle(state, family, digest, candidate_bundles=None):
+    # The receipt must cover the artifact execution loads, never a staged
+    # candidate that a later promotion would replace anyway.
+    if not receipt_valid_for_bundle(
+        state, family, digest, artifact=family.slurm_image, candidate_bundles=None
+    ):
         print(
             f"Runtime bundle {digest} has no valid live-test receipt for Runner Family {runner}; "
             "refusing rollback.",
@@ -230,7 +237,10 @@ def cmd_rollback_bundle(state, runner: str, digest: str) -> None:
     index = runtime_bundle.load_index(store_root)
     previous = index.get(family.name)
     index[family.name] = digest
+    holds = runtime_bundle.load_rollback_holds(store_root)
+    holds[family.name] = digest
     runtime_bundle.write_index(store_root, index)
+    runtime_bundle.write_rollback_holds(store_root, holds)
     print(f"Runtime bundle {family.name}: {previous or '-'} -> {digest}")
 
 

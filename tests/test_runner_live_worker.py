@@ -26,7 +26,7 @@ from revocompute.runner_live_test import (
     run_live_tests,
 )
 from revocompute.runner_readiness import bundle_digest
-from revocompute.live_tests import LiveTestConfigurationError, LiveTestReport, sha256_file
+from revocompute.live_tests import LiveTestConfigurationError, LiveTestReport, LIVE_TEST_RECEIPT_VERSION, sha256_file
 from revocompute.artifact_evidence import write_artifact_evidence
 from revocompute.runner_registry import RuntimeFamily
 
@@ -921,6 +921,91 @@ def test_live_test_refreshes_submission_attestations_after_receipt_update(tmp_pa
     assert prepared == [["--build-arg", "HTTP_PROXY=http://proxy.invalid"]]
     assert published == [(worker.state, worker.family)]
     assert worker_build_flags == [True]
+
+
+def test_a_one_task_live_test_does_not_claim_the_bundle_was_activated(
+    tmp_path, monkeypatch, capsys
+):
+    """A ``--task`` receipt covers a subset of the smoke cases.
+
+    Activation refuses it, so the command must report failure and say what to
+    run instead of exiting zero while the new bundle stays unpublished.
+    """
+    root = tmp_path / "runners" / "demo"
+    root.mkdir(parents=True)
+    (root / "run.sh").write_text("#!/bin/sh\necho one\n", encoding="utf-8")
+    (root / "tasks" / "task_one").mkdir(parents=True)
+    (root / "tasks" / "task_one" / "task.yaml").write_text(
+        yaml.safe_dump({"id": "task_one"}), encoding="utf-8"
+    )
+    (root / "plugin.yaml").write_text(
+        yaml.safe_dump({"tasks": ["tasks/task_one/task.yaml"]}), encoding="utf-8"
+    )
+    image = tmp_path / "images" / "demo.sif"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"sif")
+    family = RuntimeFamily(
+        "demo", "1", "demo.def", "demo.sif", str(image), root=root, runtime_overlay=("demo/run.sh",)
+    )
+    state = _State(tmp_path)
+    values = {"RUNTIME_BUNDLE_DIR": str(tmp_path / "runtime-bundles")}
+    state.get = lambda key: values.get(key)
+    store = values["RUNTIME_BUNDLE_DIR"]
+    candidate = runtime_bundle.materialize(root.parent, family.runtime_overlay, store)[0]
+    first = SimpleNamespace(id="case-one", task="task_one", parameters={})
+    second = SimpleNamespace(id="case-two", task="task_two", parameters={})
+    plan = SimpleNamespace(
+        digest="test",
+        select=lambda collection, task=None: (second,) if task else (first, second),
+        omitted=(),
+    )
+    identity = ValidationIdentity(plan, "config", ())
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.load_validation_identity", lambda *_args, **_kwargs: identity
+    )
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance",
+        lambda *_args: {"build_provenance_digest": "build"},
+    )
+    monkeypatch.setattr("revocompute.runner_live_test.load_plugin_families", lambda _root: [family])
+    write_artifact_evidence(
+        family,
+        sha256_file(image),
+        "receipt",
+        {
+            "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
+            "runner_family": "demo",
+            "collection": "smoke",
+            "passed": True,
+            "sif_sha256": sha256_file(image),
+            "build_provenance_digest": "build",
+            "runtime_bundle_sha256": candidate,
+            "test_definition_digest": "test",
+            "configuration_digest": "config",
+            "execution_uid": None,
+            "execution_gid": None,
+            "scheduler_user": None,
+            "cases": [{"case_id": "case-one", "passed": True}],
+        },
+    )
+    monkeypatch.setattr("revocompute.runner_live_test.prepare_live_test_server_image", lambda *_a: None)
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.RunnerLiveTestWorker.run",
+        lambda *_args, **_kwargs: SimpleNamespace(passed=True),
+    )
+    published = []
+    monkeypatch.setattr(
+        "revocompute_ctl.attestation.write_runner_attestation",
+        lambda _state, selected: published.append(selected.name),
+    )
+
+    assert not run_live_tests(
+        state, runner="demo", task="task_one", collection="smoke", all_runners=False
+    )
+
+    assert runtime_bundle.load_index(store) == {}
+    assert published == []
+    assert "full smoke collection" in capsys.readouterr().err
 
 
 def test_live_test_skips_attestation_refresh_after_failure(tmp_path, monkeypatch):

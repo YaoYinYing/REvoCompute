@@ -165,11 +165,22 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh rollback-bundle \
 ```
 
 The target must still verify as a materialized snapshot and a valid live-test
-receipt must authorize that family and digest for the current artifact, build
+receipt must authorize that family and digest for the active SIF, build
 provenance, configuration, and test definition. Any refusal leaves the index
 byte-identical and has no side effects; both the superseded and restored
 snapshots remain available. See
 [Deployment Control commands](../operator-guide/deployment-control.md#commands).
+
+Rollback is durable. The controller records the choice as a per-family rollback
+hold in the bundle store (`rollback.json`), so a later `setup` or `restart`
+keeps the held digest active instead of re-materializing the newer checkout and
+silently undoing the rollback. A successful full live-test PASS is the explicit
+forward move: it clears the hold and activates the validated digest. A failed
+live test leaves the hold untouched. A held digest whose snapshot is missing or
+no longer verifies fails closed; a hold never bypasses snapshot or receipt
+checks. Readiness validates the held pair and reports READY or stale from its
+receipt rather than `RUNTIME_BUNDLE_CHANGED` merely because the checkout has
+newer sources.
 
 ## SIF builds, worker images, and promotion
 

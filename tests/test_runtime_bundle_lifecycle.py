@@ -18,6 +18,7 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +27,7 @@ sys.path.insert(0, str(ROOT / "run"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 from revocompute import runtime_bundle as rb  # noqa: E402
+from revocompute import runner_live_test  # noqa: E402
 from revocompute_ctl import steps as steps_mod  # noqa: E402
 from revocompute.runner_registry import RuntimeFamily  # noqa: E402
 
@@ -228,7 +230,9 @@ def test_rollback_switches_to_a_prior_accepted_bundle(
     steps_mod.cmd_rollback_bundle(state, "demo", previous)
 
     assert rb.load_index(store) == {"demo": previous}
-    assert seen == [("demo", previous, {"candidate_bundles": None})]
+    assert seen == [
+        ("demo", previous, {"artifact": family.slurm_image, "candidate_bundles": None})
+    ]
     # The superseded snapshot is still materialized and verified: rollback is
     # an index switch, never a rewrite or prune.
     assert rb.resolve_pinned(store, current) is not None
@@ -282,6 +286,113 @@ def test_rollback_refuses_an_unknown_family(
 
     _refuse_rollback(store, state, previous)
     assert "Unknown Runner Family" in capsys.readouterr().err
+
+
+def _live_pass(monkeypatch: pytest.MonkeyPatch, family: RuntimeFamily, *, passed: bool = True) -> None:
+    """Run the activation path without hardware, keeping the real receipt gate."""
+    monkeypatch.setattr("revocompute.runner_live_test.load_plugin_families", lambda _root: [family])
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.prepare_live_test_server_image", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.RunnerLiveTestWorker.run",
+        lambda *_args, **_kwargs: SimpleNamespace(passed=passed),
+    )
+    monkeypatch.setattr("revocompute_ctl.attestation.write_runner_attestation", lambda *_args: None)
+
+
+def test_rollback_survives_a_subsequent_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, state, family, previous, current = _rollback_setup(tmp_path, monkeypatch)
+
+    steps_mod.cmd_rollback_bundle(state, "demo", previous)
+    assert rb.load_rollback_holds(store) == {"demo": previous}
+
+    # The checkout still carries the newer sources; a restart must not undo the
+    # operator's choice by re-materializing and re-publishing them.
+    steps_mod.materialize_runner_bundles(state, [family])
+
+    assert rb.load_index(store) == {"demo": previous}
+    assert rb.load_rollback_holds(store) == {"demo": previous}
+    assert rb.resolve_for_submission(store, rb.load_index(store), "demo", declares_overlay=True) == previous
+    # The superseded snapshot is untouched, not pruned by the restart.
+    assert rb.resolve_pinned(store, current) is not None
+
+
+def test_a_passing_live_test_clears_the_hold_and_activates_the_validated_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, state, family, previous, current = _rollback_setup(tmp_path, monkeypatch)
+    steps_mod.cmd_rollback_bundle(state, "demo", previous)
+    _live_pass(monkeypatch, family)
+
+    assert runner_live_test.run_live_tests(
+        state, runner="demo", task=None, collection="smoke", all_runners=False
+    )
+
+    assert rb.load_rollback_holds(store) == {}
+    assert rb.load_index(store) == {"demo": current}
+    assert rb.resolve_for_submission(store, rb.load_index(store), "demo", declares_overlay=True) == current
+
+
+def test_a_failed_live_test_preserves_the_hold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, state, family, previous, _current = _rollback_setup(tmp_path, monkeypatch)
+    steps_mod.cmd_rollback_bundle(state, "demo", previous)
+    _live_pass(monkeypatch, family, passed=False)
+
+    assert not runner_live_test.run_live_tests(
+        state, runner="demo", task=None, collection="smoke", all_runners=False
+    )
+
+    assert rb.load_rollback_holds(store) == {"demo": previous}
+    assert rb.load_index(store) == {"demo": previous}
+
+
+def test_a_missing_held_snapshot_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, state, family, previous, _current = _rollback_setup(tmp_path, monkeypatch)
+    steps_mod.cmd_rollback_bundle(state, "demo", previous)
+    rb._remove_tree(rb.bundle_directory(store, previous))
+
+    with pytest.raises(rb.RuntimeBundleError, match="held"):
+        rb.resolve_for_submission(store, rb.load_index(store), "demo", declares_overlay=True)
+    with pytest.raises(rb.RuntimeBundleError, match="held"):
+        steps_mod.materialize_runner_bundles(state, [family])
+
+
+def test_a_staged_receipt_does_not_authorize_a_plain_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, state, family, _previous, current = _rollback_setup(tmp_path, monkeypatch)
+    (family.root / "run.sh").write_text("#!/bin/sh\necho three\n", encoding="utf-8")
+    staged = Path(f"{family.slurm_image}.next")
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_bytes(b"candidate")
+    seen: list[str] = []
+
+    def _staged_only(_state, _family, _digest, *, artifact=None, candidate_bundles=None):
+        seen.append(Path(artifact).name)
+        return Path(artifact).name.endswith(".next")
+
+    monkeypatch.setattr("revocompute.runner_live_test.receipt_valid_for_bundle", _staged_only)
+
+    # A restart activates the artifact execution loads, the active SIF; a
+    # receipt for the staged candidate cannot authorize it.
+    steps_mod.materialize_runner_bundles(state, [family])
+    assert rb.load_index(store) == {"demo": current}
+
+    # The live-test PASS activates the exact pair it ran, the candidate.
+    _live_pass(monkeypatch, family)
+    assert runner_live_test.run_live_tests(
+        state, runner="demo", task=None, collection="smoke", all_runners=False
+    )
+    candidate = rb.overlay_digest(family.root.parent, family.runtime_overlay)
+    assert rb.load_index(store) == {"demo": candidate}
+    assert seen[-1] == "demo.sif.next"
 
 
 def test_rollback_bundle_cli_contract() -> None:

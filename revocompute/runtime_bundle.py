@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import stat
 import time
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ LEGACY_RUNTIME_ROOT = "/app/revocompute"
 #: Directory name for one materialized snapshot: ``sha256-<hex>``.
 _BUNDLE_PREFIX = "sha256-"
 _INDEX_NAME = "index.json"
+_ROLLBACK_NAME = "rollback.json"
 
 _DIR_MODE = 0o555
 _FILE_MODE = 0o444
@@ -194,41 +196,58 @@ def _entrypoint_relative(path: str) -> str | None:
     return None
 
 
+def _entrypoint_tokens(value: str) -> tuple[str, ...]:
+    """Every path-bearing word in one entrypoint element.
+
+    An entrypoint may be argv, a single script path, or a shell command such as
+    ``bash -c "exec /app/revocompute/run.sh"``.  The shell string is tokenized
+    so a legacy path cannot hide behind quoting or extra words.
+    """
+    try:
+        return tuple(shlex.split(value, posix=True))
+    except ValueError:
+        return tuple(value.split())
+
+
 def overlay_entrypoint_error(entrypoint: Iterable[str], entries: Iterable[OverlayEntry]) -> str | None:
     """The contract violation for an entrypoint that names an overlay-declared file.
 
     An executable the bundle delivers resolves only under the reserved mount.
     A manifest that still spells the legacy image path (or any other location)
     would start baked code, or nothing, while its bundle identity says it runs
-    the snapshot.  Families whose entrypoint is not overlay-declared are outside
-    this contract: they have not migrated and keep their image entrypoint.
+    the snapshot.  Every argv element and every shell word is inspected, not
+    just the last one, so ``bash -c "exec /app/revocompute/run.sh"`` cannot
+    bypass the rule.  Families whose entrypoint is not overlay-declared are
+    outside this contract: they have not migrated and keep their image
+    entrypoint.
     """
     declared_entries = tuple(entries)
     if not declared_entries:
         return None
-    steps = tuple(entrypoint) if entrypoint is not None else ()
-    if len(steps) < 2 or not isinstance(steps[-1], str) or not steps[-1]:
-        return None
-    path = steps[-1]
-    relative = _entrypoint_relative(path)
-    if relative is None:
-        return None
     declared = {entry.relative for entry in declared_entries}
-    under_mount = path.startswith(RUNTIME_MOUNT_TARGET + "/")
-    if under_mount:
-        return None if relative in declared else f"Runtime entrypoint is not in the declared overlay: {path}"
-    # Legacy images flattened each family's declared files into
-    # ``/app/revocompute``, so a legacy ``/app/revocompute/run.sh`` and an
-    # overlay entry ``example/run.sh`` name the same executable.  Refuse the
-    # legacy spelling when the overlay delivers that file; an entrypoint the
-    # overlay does not deliver belongs to an unmigrated family and stays baked.
-    if path.startswith(LEGACY_RUNTIME_ROOT + "/") and (
-        relative in declared or Path(relative).name in {Path(entry.relative).name for entry in declared_entries}
-    ):
-        return (
-            f"Runtime entrypoint for an overlay-declared file must resolve under "
-            f"{RUNTIME_MOUNT_TARGET}: {path}"
-        )
+    declared_names = {Path(entry.relative).name for entry in declared_entries}
+    for step in entrypoint or ():
+        if not isinstance(step, str):
+            continue
+        for path in _entrypoint_tokens(step):
+            relative = _entrypoint_relative(path)
+            if relative is None:
+                continue
+            if path.startswith(RUNTIME_MOUNT_TARGET + "/"):
+                if relative not in declared:
+                    return f"Runtime entrypoint is not in the declared overlay: {path}"
+                continue
+            # Legacy images flattened each family's declared files into
+            # ``/app/revocompute``, so a legacy ``/app/revocompute/run.sh`` and an
+            # overlay entry ``example/run.sh`` name the same executable.  Refuse
+            # the legacy spelling when the overlay delivers that file; an
+            # entrypoint the overlay does not deliver belongs to an unmigrated
+            # family and stays baked.
+            if relative in declared or Path(relative).name in declared_names:
+                return (
+                    f"Runtime entrypoint for an overlay-declared file must resolve under "
+                    f"{RUNTIME_MOUNT_TARGET}: {path}"
+                )
     return None
 
 
@@ -435,6 +454,10 @@ def index_path(store_root: str | os.PathLike[str]) -> Path:
     return Path(store_root) / _INDEX_NAME
 
 
+def rollback_path(store_root: str | os.PathLike[str]) -> Path:
+    return Path(store_root) / _ROLLBACK_NAME
+
+
 def load_index(store_root: str | os.PathLike[str]) -> dict[str, str]:
     """The published ``family -> bundle digest`` binding.
 
@@ -468,6 +491,64 @@ def write_index(store_root: str | os.PathLike[str], index: Mapping[str, str]) ->
 def index_digests(store_root: str | os.PathLike[str]) -> set[str]:
     """Every digest the published binding currently references."""
     return set(load_index(store_root).values())
+
+
+def load_rollback_holds(store_root: str | os.PathLike[str]) -> dict[str, str]:
+    """The per-family rollback intent: do not re-activate the checkout yet.
+
+    A rollback is an operator decision, so it outlives the invocation that made
+    it.  Without this durable record the next ``setup``/``restart`` would
+    re-materialize the newer checkout, find an old PASS receipt for it, and
+    silently undo the rollback.  A malformed file is treated as absent so an
+    unreadable record can never select an unverified snapshot.
+    """
+    try:
+        raw = json.loads(rollback_path(store_root).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, Mapping):
+        return {}
+    return {
+        family: str(digest)
+        for family, digest in raw.items()
+        if isinstance(family, str) and isinstance(digest, str) and digest
+    }
+
+
+def write_rollback_holds(store_root: str | os.PathLike[str], holds: Mapping[str, str]) -> None:
+    """Atomically publish the per-family rollback intent."""
+    payload = {family: digest for family, digest in sorted(holds.items())}
+    destination = rollback_path(store_root)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{_ROLLBACK_NAME}.{os.getpid()}")
+    temporary.write_text(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o444)
+    os.replace(temporary, destination)
+
+
+def verified_hold(
+    store_root: str | os.PathLike[str], family: str, holds: Mapping[str, str] | None = None
+) -> str | None:
+    """The verified digest a rollback holds for ``family``, or ``None``.
+
+    The hold is a preference, never a licence: a digest whose snapshot is
+    missing or no longer hashes to its name raises, so admission and readiness
+    fail closed instead of falling back to the checkout or to a stale index.
+    """
+    holds = load_rollback_holds(store_root) if holds is None else holds
+    digest = holds.get(family)
+    if not digest:
+        return None
+    if resolve_pinned(store_root, digest) is None:
+        raise RuntimeBundleError(
+            f"Runtime bundle {digest!r} held for {family!r} is unavailable in {store_root!r}"
+        )
+    return digest
+
+
+def rollback_digests(store_root: str | os.PathLike[str]) -> set[str]:
+    """Every digest a rollback intent holds active."""
+    return set(load_rollback_holds(store_root).values())
 
 
 def resolve_pinned(store_root: str | os.PathLike[str], digest: Any) -> Path | None:
@@ -512,19 +593,24 @@ def resolve_for_submission(
 
     ``digest`` overrides the published binding for candidate validation: a live
     test must exercise the exact snapshot it just materialized, which is not yet
-    eligible for new submissions.
+    eligible for new submissions.  A valid rollback hold otherwise takes
+    precedence over the index, so admission follows the operator's rollback even
+    when the index has not been reconciled yet.
 
-    Returns ``None`` only when the family declares no overlay, so a task without
-    a runtime overlay is exactly the task it was before this mechanism existed.
-    A family that *does* declare one but has no resolvable snapshot raises.
+    Returns ``None`` when the family declares no overlay, even if a stale index
+    entry remains, so readiness and submission agree after a family drops its
+    overlay.  A family that *does* declare one but has no resolvable snapshot
+    raises.
     """
-    chosen = digest if digest is not None else index.get(family)
-    if chosen is None:
-        if declares_overlay:
-            raise RuntimeBundleError(
-                f"Runner family {family!r} declares a runtime overlay but has no published bundle"
-            )
+    if not declares_overlay:
         return None
+    chosen = digest if digest is not None else verified_hold(store_root, family)
+    if chosen is None:
+        chosen = index.get(family)
+    if chosen is None:
+        raise RuntimeBundleError(
+            f"Runner family {family!r} declares a runtime overlay but has no published bundle"
+        )
     if resolve_pinned(store_root, chosen) is None:
         raise RuntimeBundleError(
             f"Runtime bundle {chosen!r} for {family!r} is unavailable in {store_root!r}"
@@ -586,12 +672,17 @@ __all__ = [
     "garbage_collect",
     "index_path",
     "load_index",
+    "load_rollback_holds",
     "materialize",
     "normalize_overlay_paths",
     "overlay_build_overlap",
     "overlay_digest",
     "overlay_entrypoint_error",
     "resolve_pinned",
+    "rollback_digests",
+    "rollback_path",
+    "verified_hold",
     "verify_bundle",
     "write_index",
+    "write_rollback_holds",
 ]

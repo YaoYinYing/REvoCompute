@@ -140,6 +140,13 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh mcp-status
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepared
 ```
 
+A Runtime Bundle rollback is durable: the controller records a per-family hold
+in the bundle store, so a later `setup` or `restart` keeps the held digest
+active instead of publishing the newer checkout. A full live-test PASS clears
+the hold and activates the validated digest; a failed test leaves it in place.
+A held snapshot that is missing or no longer verifies fails closed. See
+[Runtime Bundles](../runner-guide/runtime-bundles.md#rolling-back).
+
 `api-receipt` is read-only against the deployment: it reads the task store,
 result store, and deploy stamp and writes one machine-readable receipt under
 `<CONFIG_DIR>/api-receipts/`. It exits non-zero on incomplete evidence. See

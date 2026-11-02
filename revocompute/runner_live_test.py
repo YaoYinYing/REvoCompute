@@ -12,6 +12,7 @@ import math
 import os
 import sqlite3
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
@@ -1207,13 +1208,59 @@ def run_live_tests(
         # Publish the digests that were actually validated rather than
         # recomputing them, so a source edit in between cannot activate a bundle
         # the receipt never covered.
-        from revocompute.runner_bundles import materialize_runner_bundles
+        from revocompute import runtime_bundle
+        from revocompute.runner_bundles import materialize_runner_bundles, runner_bundle_root
         from revocompute_ctl.steps import prune_runtime_bundles
 
-        keep = materialize_runner_bundles(state, selected, digests=candidate_bundles)
-        prune_runtime_bundles(state, keep)
+        artifacts = {family.name: str(_selected_artifact(family)) for family in selected}
+        store_root = runner_bundle_root(state)
+        # A full PASS is the operator's explicit forward move after a rollback:
+        # clear the hold only for a family whose receipt covers the candidate it
+        # just ran.  A narrowed ``--task`` pass leaves the hold (and the prior
+        # binding) in place.
+        holds = runtime_bundle.load_rollback_holds(store_root)
+        cleared = False
         for family in selected:
+            candidate = candidate_bundles.get(family.name)
+            if candidate is None or holds.get(family.name) is None:
+                continue
+            if receipt_valid_for_bundle(
+                state,
+                family,
+                candidate,
+                artifact=artifacts[family.name],
+                candidate_bundles=candidate_bundles,
+            ):
+                holds.pop(family.name, None)
+                cleared = True
+        if cleared:
+            runtime_bundle.write_rollback_holds(store_root, holds)
+        keep = materialize_runner_bundles(
+            state, selected, digests=candidate_bundles, activate_artifacts=artifacts
+        )
+        prune_runtime_bundles(state, keep)
+        # A receipt can validate only the subset of smoke cases a ``--task``
+        # selection ran.  Activation refuses it, so the command must not report
+        # success: the operator has to run the full smoke collection.
+        index = runtime_bundle.load_index(store_root)
+        activation_failed: list[str] = []
+        for family in selected:
+            candidate = candidate_bundles.get(family.name)
+            if (
+                candidate is not None
+                and runner_enabled(state, family.name)
+                and index.get(family.name) != candidate
+            ):
+                activation_failed.append(family.name)
+                print(
+                    f"Runtime bundle for {family.name} was validated by a receipt that covers only the "
+                    "selected live-test cases; the new bundle was not activated. "
+                    "Run the full smoke collection to activate it.",
+                    file=sys.stderr,
+                )
+                continue
             write_runner_attestation(state, family)
+        passed = not activation_failed
     return passed
 
 
@@ -1508,19 +1555,23 @@ def receipt_valid_for_bundle(
     family: RuntimeFamily,
     runtime_bundle_sha256: str,
     *,
+    artifact: str | Path | None = None,
     candidate_bundles: Mapping[str, str] | None = None,
 ) -> bool:
     """Whether a passing receipt covers this exact SIF + bundle pair.
 
-    The artifact is the one a live test would exercise right now: a staged
-    candidate when present, else the active SIF.  ``candidate_bundles`` lets an
-    activation validate the composed pair a simultaneous live-test pass just
-    accepted, rather than the still-published companion bindings.
+    ``artifact`` defaults to the one a live test would exercise right now (a
+    staged candidate when present).  A caller activating for execution passes
+    the active SIF explicitly, so a receipt for ``.next`` cannot authorize a
+    plain restart of the bytes that will actually run.  ``candidate_bundles``
+    lets an activation validate the composed pair a simultaneous live-test pass
+    just accepted, rather than the still-published companion bindings.
     """
+    selected = _selected_artifact(family) if artifact is None else artifact
     return receipt_valid_for_artifact(
         state,
         family,
-        _selected_artifact(family),
+        selected,
         expected_runtime_bundle=runtime_bundle_sha256,
         candidate_bundles=candidate_bundles,
     )
