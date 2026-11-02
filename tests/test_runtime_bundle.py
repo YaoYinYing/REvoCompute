@@ -176,6 +176,25 @@ def test_materialized_bundle_is_read_only_and_content_addressed(tmp_path: Path) 
     assert rb.materialize(root, declared, store) == (digest, path)
 
 
+def test_bytecode_byproducts_are_not_overlay_content(tmp_path: Path) -> None:
+    """Declaration, identity, and materialization agree on ignoring bytecode."""
+    root = tmp_path / "runners"
+    store = tmp_path / "runtime-bundles"
+    _overlay(root, {"fam/run.sh": ("#!/bin/sh\n", True), "fam/pkg/a.py": ("A = 1\n", False)})
+    cache = root / "fam/pkg/__pycache__"
+    cache.mkdir()
+    (cache / "a.cpython-313.pyc").write_bytes(b"bytecode")
+    declared = ["fam"]
+
+    entries = rb.collect_overlay_entries(root, declared)
+    digest, path = rb.materialize(root, declared, store)
+
+    assert [entry.relative for entry in entries] == ["fam/pkg/a.py", "fam/run.sh"]
+    assert digest == rb.overlay_digest(root, declared)
+    stored = sorted(item.relative_to(path).as_posix() for item in path.rglob("*") if item.is_file())
+    assert stored == ["fam/pkg/a.py", "fam/run.sh"]
+
+
 def test_a_partially_removed_bundle_is_rebuilt_rather_than_reused(tmp_path: Path) -> None:
     """A digest name is only trusted after the bytes under it are confirmed."""
     root = tmp_path / "runners"

@@ -144,6 +144,10 @@ def _walk_declaration(root: Path, relative: str) -> list[tuple[str, Path]]:
     for directory, dirnames, filenames in os.walk(source, followlinks=False):
         dirnames.sort()
         filenames.sort()
+        # Identity, materialization, and declaration enumeration must agree:
+        # bytecode byproducts are not overlay content.  Symlink checks still
+        # run below, so pruning cannot hide an unsupported object.
+        ignored = {name for name in dirnames if name in _IGNORED_DIRS}
         for name in dirnames + filenames:
             child = Path(directory) / name
             child_mode = os.lstat(child).st_mode
@@ -156,6 +160,7 @@ def _walk_declaration(root: Path, relative: str) -> list[tuple[str, Path]]:
             if stat.S_ISREG(child_mode):
                 inner = child.relative_to(root).as_posix()
                 candidates.append((inner, child.resolve()))
+        dirnames[:] = [name for name in dirnames if name not in ignored]
     return candidates
 
 
