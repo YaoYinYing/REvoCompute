@@ -142,6 +142,12 @@ content: they are loaded from the Runner tree at request time and are absent
 from the SIF. They therefore follow the execution-contract row, while only
 files copied into the image belong in Build Identity.
 
+`common/runtime/` is shared code: 41 of the 43 shipped families declare it in
+`runtime_overlay`. Editing any file under `common/runtime/` changes the Runtime
+Bundle digest of all 41 families and invalidates their receipts, far beyond the
+family the edit appears to touch. Plan a shared-helper change as a fleet
+revalidation, not a single-family update.
+
 `family.version` identifies the family release for display and audit. It is not
 an automatic build or validation input. If image construction consumes a
 version value, the file or recipe that supplies that value must participate in

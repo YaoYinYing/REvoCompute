@@ -177,11 +177,12 @@ new submission binds, and it is maintainer-authorized.
 - **Runtime Bundle**: the PASS publishes exactly the digest it validated. A
   changed binding is published by `setup` or `restart` only with a receipt for
   that family, digest, SIF provenance, configuration, and test definition.
-- **Rollback**: return a family to an earlier accepted immutable identity. Bundle
-  rollback uses `rollback-bundle`, is receipt-gated, and leaves a durable hold;
-  the replacement artifact is never rebuilt, rewritten, or pruned. A full
-  live-test PASS is the explicit forward move. See
-  [Runtime Bundles](runtime-bundles.md#rolling-back) and
+- **Rollback**: return a family to an earlier accepted immutable identity. Only
+  Runtime Bundle rollback has a documented operator command, `rollback-bundle`;
+  it is receipt-gated and leaves a durable hold. SIF rollback is not a
+  documented operator command; restoring a prior SIF is a maintainer-controlled
+  decision, never a rebuild or a file copy. A full live-test PASS is the explicit
+  forward move. See [Runtime Bundles](runtime-bundles.md#rolling-back) and
   [Deployment Control](../operator-guide/deployment-control.md#commands).
 
 Neither activation nor rollback touches an already queued or running Task.
