@@ -183,6 +183,60 @@ def test_adapter_grant_gate_releases_the_wrapper_for_an_accepted_task(tmp_path, 
     assert {row["denial_code"] for row in allocations} == {None}
 
 
+def test_production_dispatch_grants_an_accepted_task_after_readiness_drift(tmp_path, monkeypatch):
+    """The production dispatch entry supplies the family; later drift must not deny.
+
+    ``_run_compute_job`` is the caller that renders the allocation callbacks for
+    a real Task.  The pre-fix code passed the family into the callback and
+    denied here, so this test fails against that exact source even though the
+    direct-callback tests above can avoid the guard by not naming a family.
+    """
+    database, task_id, policy = _accepted_task(tmp_path, monkeypatch, job_id="e4")
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    created: dict[str, SlurmJob] = {}
+
+    def create(*args, **kwargs):
+        job = SlurmJob(*args, **kwargs)
+        created["job"] = job
+
+        def submit():
+            job._slurm_job_id = "9104"
+            job._accounting_enabled = True
+            job._notify_allocation_live()
+            return "9104"
+
+        job.submit = submit
+        job.poll = lambda: task_runtime.JobState.COMPLETED
+        job.runtime_image_observation = lambda: SimpleNamespace(
+            expected=_IMAGE, observed=_IMAGE
+        )
+        return job
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+
+    state = task_runtime._run_compute_job(
+        task_id,
+        _task_type(),
+        RunnerConfig(),
+        [],
+        str(output_dir),
+        resource_policy=policy,
+    )
+
+    job = created["job"]
+    assert state == task_runtime.JobState.COMPLETED
+    assert job.allocation_started is True
+    # The wrapper is released past its admission-grant gate only by this file.
+    assert Path(job._allocation_grant_path).is_file()
+    allocations = database.list_task_allocations(task_id)
+    assert {row["denial_code"] for row in allocations} == {None}
+    assert all(row["adjudicated_at"] is not None for row in allocations)
+    reservation = database.list_reservations(user_id=67)[0]
+    assert reservation["state"] == ReservationState.RELEASED.value
+    assert reservation["reason_code"] == ReservationReason.ALLOCATION_STARTED.value
+
+
 def test_a_cpu_only_accounted_allocation_records_and_settles(tmp_path, monkeypatch):
     """CPU-only allocations are still facts: recorded, granted, and settled."""
     server_dir = tmp_path / "server"
