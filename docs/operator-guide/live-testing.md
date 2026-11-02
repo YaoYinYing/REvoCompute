@@ -57,7 +57,15 @@ A composed case binds the companion identities it actually ran: candidate
 bundle digests for families selected in the same pass, and published digests
 for unselected companions (with their SIF and build provenance). A later
 companion identity change invalidates the composed receipt, and a missing
-companion record refuses before submission.
+companion record refuses before submission. Stage every participating
+family's candidate before a composed `live-test --all` pass (for example with
+`prepare --build-sif`), or run the companion's live test first; a companion
+`.next` staged only during the same pass can make the post-PASS gate refuse
+activation even though every case passed.
+
+A narrowed `--task` pass validates only the cases it selected. If its receipt
+does not cover every required smoke case, activation is refused and the
+command reports failure; rerun the full smoke collection.
 
 ## Bundle-only update
 

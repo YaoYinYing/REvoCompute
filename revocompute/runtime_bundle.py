@@ -184,27 +184,19 @@ def collect_overlay_entries(runner_root: str | os.PathLike[str], declared: Itera
     return tuple(entries)
 
 
-def _entrypoint_relative(path: str) -> str | None:
-    """The runner-tree-relative spelling of a container entrypoint path.
-
-    Only the reserved mount and the legacy baked root map into the overlay
-    namespace; any other absolute path is not an overlay reference.
-    """
-    for root in (RUNTIME_MOUNT_TARGET, LEGACY_RUNTIME_ROOT):
-        if path.startswith(root + "/"):
-            return path[len(root) + 1 :]
-    return None
-
-
 def _entrypoint_tokens(value: str) -> tuple[str, ...]:
     """Every path-bearing word in one entrypoint element.
 
     An entrypoint may be argv, a single script path, or a shell command such as
     ``bash -c "exec /app/revocompute/run.sh"``.  The shell string is tokenized
-    so a legacy path cannot hide behind quoting or extra words.
+    with punctuation so a legacy path cannot hide behind quoting, operators, or
+    extra words.
     """
     try:
-        return tuple(shlex.split(value, posix=True))
+        lexer = shlex.shlex(value, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return tuple(lexer)
     except ValueError:
         return tuple(value.split())
 
@@ -229,25 +221,42 @@ def overlay_entrypoint_error(entrypoint: Iterable[str], entries: Iterable[Overla
     for step in entrypoint or ():
         if not isinstance(step, str):
             continue
-        for path in _entrypoint_tokens(step):
-            relative = _entrypoint_relative(path)
-            if relative is None:
-                continue
-            if path.startswith(RUNTIME_MOUNT_TARGET + "/"):
-                if relative not in declared:
-                    return f"Runtime entrypoint is not in the declared overlay: {path}"
-                continue
-            # Legacy images flattened each family's declared files into
-            # ``/app/revocompute``, so a legacy ``/app/revocompute/run.sh`` and an
-            # overlay entry ``example/run.sh`` name the same executable.  Refuse
-            # the legacy spelling when the overlay delivers that file; an
-            # entrypoint the overlay does not deliver belongs to an unmigrated
-            # family and stays baked.
-            if relative in declared or Path(relative).name in declared_names:
-                return (
-                    f"Runtime entrypoint for an overlay-declared file must resolve under "
-                    f"{RUNTIME_MOUNT_TARGET}: {path}"
-                )
+        tokens = _entrypoint_tokens(step)
+        # A shell command may ``cd`` to the legacy root and run a relative
+        # script.  The relative name is only dangerous when the overlay
+        # delivers an entry with that basename.
+        token_names = {Path(token.lstrip("./")).name for token in tokens if token}
+        for token in tokens:
+            for root, legacy in ((RUNTIME_MOUNT_TARGET, False), (LEGACY_RUNTIME_ROOT, True)):
+                start = token.find(root)
+                if start < 0:
+                    continue
+                path = token[start:]
+                if path == root:
+                    if legacy and declared_names & token_names:
+                        return (
+                            f"Runtime entrypoint for an overlay-declared file must resolve under "
+                            f"{RUNTIME_MOUNT_TARGET}: {path}"
+                        )
+                    continue
+                if not path.startswith(root + "/"):
+                    continue
+                relative = path[len(root) + 1 :]
+                if not legacy:
+                    if relative not in declared:
+                        return f"Runtime entrypoint is not in the declared overlay: {path}"
+                    continue
+                # Legacy images flattened each family's declared files into
+                # ``/app/revocompute``, so a legacy ``/app/revocompute/run.sh``
+                # and an overlay entry ``example/run.sh`` name the same
+                # executable.  Refuse the legacy spelling when the overlay
+                # delivers that file; an entrypoint the overlay does not deliver
+                # belongs to an unmigrated family and stays baked.
+                if relative in declared or Path(relative).name in declared_names:
+                    return (
+                        f"Runtime entrypoint for an overlay-declared file must resolve under "
+                        f"{RUNTIME_MOUNT_TARGET}: {path}"
+                    )
     return None
 
 
@@ -499,20 +508,30 @@ def load_rollback_holds(store_root: str | os.PathLike[str]) -> dict[str, str]:
     A rollback is an operator decision, so it outlives the invocation that made
     it.  Without this durable record the next ``setup``/``restart`` would
     re-materialize the newer checkout, find an old PASS receipt for it, and
-    silently undo the rollback.  A malformed file is treated as absent so an
-    unreadable record can never select an unverified snapshot.
+    silently undo the rollback.  An absent file means no rollback; an
+    unreadable or malformed one raises rather than silently reverting to the
+    checkout, because dropping the intent is exactly the failure this record
+    prevents.
     """
+    path = rollback_path(store_root)
     try:
-        raw = json.loads(rollback_path(store_root).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return {}
+    except OSError as exc:
+        raise RuntimeBundleError(f"Runtime rollback intent is unreadable: {path!r}") from exc
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeBundleError(f"Runtime rollback intent is malformed: {path!r}") from exc
     if not isinstance(raw, Mapping):
-        return {}
-    return {
-        family: str(digest)
-        for family, digest in raw.items()
-        if isinstance(family, str) and isinstance(digest, str) and digest
-    }
+        raise RuntimeBundleError(f"Runtime rollback intent is malformed: {path!r}")
+    holds: dict[str, str] = {}
+    for family, digest in raw.items():
+        if not isinstance(family, str) or not family or not isinstance(digest, str) or not digest:
+            raise RuntimeBundleError(f"Runtime rollback intent has an invalid entry: {path!r}")
+        holds[family] = digest
+    return holds
 
 
 def write_rollback_holds(store_root: str | os.PathLike[str], holds: Mapping[str, str]) -> None:

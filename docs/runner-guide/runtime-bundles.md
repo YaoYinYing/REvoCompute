@@ -178,9 +178,10 @@ silently undoing the rollback. A successful full live-test PASS is the explicit
 forward move: it clears the hold and activates the validated digest. A failed
 live test leaves the hold untouched. A held digest whose snapshot is missing or
 no longer verifies fails closed; a hold never bypasses snapshot or receipt
-checks. Readiness validates the held pair and reports READY or stale from its
-receipt rather than `RUNTIME_BUNDLE_CHANGED` merely because the checkout has
-newer sources.
+checks. An unreadable or malformed `rollback.json` also fails deployment closed
+rather than silently dropping the operator's intent. Readiness validates the
+held pair and reports READY or stale from its receipt rather than
+`RUNTIME_BUNDLE_CHANGED` merely because the checkout has newer sources.
 
 ## SIF builds, worker images, and promotion
 

@@ -239,8 +239,11 @@ def cmd_rollback_bundle(state, runner: str, digest: str) -> None:
     index[family.name] = digest
     holds = runtime_bundle.load_rollback_holds(store_root)
     holds[family.name] = digest
-    runtime_bundle.write_index(store_root, index)
+    # Publish the intent first: if the process dies before the index write, the
+    # next deployment reconciles the index to this hold instead of treating a
+    # half-finished rollback as an appeal to the checkout.
     runtime_bundle.write_rollback_holds(store_root, holds)
+    runtime_bundle.write_index(store_root, index)
     print(f"Runtime bundle {family.name}: {previous or '-'} -> {digest}")
 
 

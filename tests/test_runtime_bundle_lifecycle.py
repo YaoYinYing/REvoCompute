@@ -241,6 +241,25 @@ def test_rollback_switches_to_a_prior_accepted_bundle(
     assert f"demo: {current} -> {previous}" in out
 
 
+def test_rollback_persists_its_intent_before_the_index_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash after the intent write must not revert to the checkout."""
+    store, state, _family, previous, _current = _rollback_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.receipt_valid_for_bundle", lambda *_args, **_kwargs: True
+    )
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("simulated index write failure")
+
+    monkeypatch.setattr(rb, "write_index", fail_write)
+    with pytest.raises(OSError):
+        steps_mod.cmd_rollback_bundle(state, "demo", previous)
+
+    assert rb.load_rollback_holds(store) == {"demo": previous}
+
+
 @pytest.mark.parametrize("failure", ["unknown", "missing", "corrupt", "no-receipt"])
 def test_rollback_refusal_leaves_the_index_byte_identical(
     tmp_path: Path,

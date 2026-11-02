@@ -418,6 +418,19 @@ def test_a_family_that_dropped_its_overlay_ignores_a_stale_index_entry(tmp_path:
     )
 
 
+def test_an_absent_rollback_intent_means_no_hold(tmp_path: Path) -> None:
+    assert rb.load_rollback_holds(tmp_path) == {}
+
+
+@pytest.mark.parametrize("document", ["{not json", '{"fam": 3}', '["fam"]'])
+def test_an_unreadable_rollback_intent_fails_closed(tmp_path: Path, document: str) -> None:
+    """Dropping the intent would silently undo the operator's rollback."""
+    (tmp_path / "rollback.json").write_text(document, encoding="utf-8")
+
+    with pytest.raises(rb.RuntimeBundleError):
+        rb.load_rollback_holds(tmp_path)
+
+
 def _entry(tmp_path: Path, relative: str) -> rb.OverlayEntry:
     path = tmp_path / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -442,6 +455,24 @@ def test_a_single_element_legacy_entrypoint_is_refused_when_the_overlay_delivers
     ],
 )
 def test_a_shell_entrypoint_cannot_hide_a_legacy_path(tmp_path: Path, entrypoint: list[str]) -> None:
+    entry = _entry(tmp_path, "demo/run.sh")
+
+    assert rb.overlay_entrypoint_error(entrypoint, [entry]) is not None
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        ["bash", "-c", "exec /app/revocompute/run.sh;"],
+        ["bash", "-c", "/app/revocompute/run.sh|cat"],
+        ["bash", "-c", "(/app/revocompute/run.sh)"],
+        ["bash", "-c", "cd /app/revocompute && ./run.sh"],
+        ["env", "X=/app/revocompute/run.sh", "bash", "-c", 'exec "$X"'],
+    ],
+)
+def test_shell_punctuation_cannot_hide_a_legacy_path(
+    tmp_path: Path, entrypoint: list[str]
+) -> None:
     entry = _entry(tmp_path, "demo/run.sh")
 
     assert rb.overlay_entrypoint_error(entrypoint, [entry]) is not None
