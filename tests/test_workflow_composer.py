@@ -1542,5 +1542,3 @@ def test_restricted_runner_running_trace_represents_every_phase_in_order(monkeyp
         assert lines[index].endswith("[running]")
         assert all(line.endswith("[done]") for line in lines[:index])
         assert all(line.endswith("[pending]") for line in lines[index + 1 :])
-
-
