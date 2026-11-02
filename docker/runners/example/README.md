@@ -19,17 +19,10 @@ reserved mount point; everything this family executes arrives as a Runtime
 Bundle. That is the architecture every family should follow — see
 [Runtime Bundles](../../../docs/runner-guide/runtime-bundles.md).
 
-It also demonstrates the four change-impact paths:
-
-| Change | Example files | Required freshness action |
-| --- | --- | --- |
-| Build identity | `example.def`, a dependency lock, or a file in `runtime.build_inputs` | Rebuild the SIF, then repeat the live test |
-| Runtime Bundle identity | any path in `runtime.runtime_overlay` | **Keep the SIF** and repeat the live test |
-| Execution contract identity | execution fields in `task.yaml`, `runner.yaml`, `expected_files.yaml`, `test.yaml`, or its fixtures | Keep the SIF and repeat the live test |
-| Presentation identity | display/help/citation fields in `task.yaml` or `storyboard/` | Keep both the SIF and live-test receipt |
-
-The canonical matrix with the full field list is in the
-[Runner change-impact model](../../../docs/runner-guide/adding-a-runner.md#runner-change-impact-model).
+It also demonstrates the four identity paths owned by
+[Runner Family Protocol](../../../docs/runner-guide/runner-family-protocol.md#identity-classes).
+The detailed change list, with the full field-level matrix for this family, is
+in [Runtime Bundles](../../../docs/runner-guide/runtime-bundles.md#change-impact).
 
 ## Task-scoped result contracts
 

@@ -67,5 +67,6 @@ uv run python -m revocompute doctor --config-root docker/runners --runner mock_g
 ```
 
 The family follows the [Example Runner](../example/README.md) layout and the
-[Adding a Runner](../../../docs/runner-guide/adding-a-runner.md) change-impact
-model. It declares no build inputs and delivers its code as a Runtime Bundle.
+[Runtime Bundles](../../../docs/runner-guide/runtime-bundles.md#change-impact)
+change-impact model. It declares no build inputs and delivers its code as a
+Runtime Bundle.
