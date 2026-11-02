@@ -4,16 +4,15 @@ version: '1'
 runtime:
   image_artifact: alphafold3_v1.sif
   definition: alphafold3.def
-  build_inputs:
-  - alphafold3/run.sh
-  # Family adapter code is still baked here; migration to runtime_overlay is deferred (docs/runner-guide/runtime-bundles.md).
+  build_inputs: []
   runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
+  - alphafold3/run.sh
   access_policy: alphafold3_noncommercial
   entrypoint:
   - bash
-  - /app/revocompute/run.sh
+  - /opt/revocompute/runtime/alphafold3/run.sh
 tasks:
 - tasks/predict/task.yaml
 access_policies:

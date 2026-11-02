@@ -35,7 +35,7 @@ fi
 mkdir -p "$output_dir"
 output_dir=$(readlink -f "$output_dir")
 echo "REVODESIGN_STAGE:gremlin_lh_fit"
-"${GREMLIN_LH_PYTHON:-python3}" "${GREMLIN_LH_FIT_MODEL:-/app/revocompute/fit_model.py}" \
+"${GREMLIN_LH_PYTHON:-python3}" "${GREMLIN_LH_FIT_MODEL:-$runner_dir/fit_model.py}" \
   --input "$input_file" \
   --output-dir "$output_dir" \
   --regularization "$(_parse_param regularization)" \
