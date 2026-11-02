@@ -132,6 +132,74 @@ def test_readiness_change_between_preflight_and_post_has_no_side_effects(monkeyp
     assert queued == []
 
 
+@pytest.mark.parametrize(
+    ("mutation", "status", "reason", "next_action"),
+    [
+        ("stale", "VALIDATION_STALE", "RECEIPT_STALE", "live-test"),
+        ("deleted", "NOT_CONFIGURED", "RUNNER_UNAVAILABLE", "doctor"),
+    ],
+)
+def test_preflight_refusal_projects_the_same_admission_reason_as_post(
+    monkeypatch, tmp_path, mutation, status, reason, next_action
+):
+    """Preflight states the server's reason and recovery, not just "unavailable".
+
+    The catalog, detail and POST refusal all name the readiness status, reason
+    code and next action.  A preflight that only said ``allowed: false`` would
+    make the Create Task surface fall back to generic copy for a refusal the
+    server can describe exactly.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    module.app.config["infrastructure_readiness"] = _AvailableInfrastructure()
+    queued: list[bool] = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_args, **_kwargs: queued.append(True))
+
+    attestation = _write_attestation(
+        module, status="READY", ready=True, reason="READY", next_action="none"
+    )
+    if mutation == "stale":
+        _write_attestation(module, status=status, ready=False, reason=reason, next_action=next_action)
+    else:
+        attestation.unlink()
+
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    preflight = client.post(
+        "/compute/api/preflight/cpu_runner",
+        headers=headers,
+        data=_payload(),
+        content_type="multipart/form-data",
+    )
+
+    assert preflight.status_code == 503, preflight.get_data(as_text=True)
+    body = preflight.get_json()
+    assert body["valid"] is False
+    assert body["admission"] == {
+        "allowed": False,
+        "status": status,
+        "reason_code": reason,
+        "next_action": next_action,
+    }
+
+    # POST reads the same evidence and refuses with the same decision.
+    post = client.post("/compute/api/post", headers=headers, data=_payload(), content_type="multipart/form-data")
+    assert post.status_code == 503, post.get_data(as_text=True)
+    refusal = post.get_json()
+    assert refusal["status"] == body["admission"]["status"]
+    assert refusal["reason"] == body["admission"]["reason_code"]
+    assert refusal["next_action"] == body["admission"]["next_action"]
+
+    assert module.task_store.list_tasks() == []
+    assert module.task_store.list_live_reservations() == []
+    assert _durable_uploads(module) == []
+    assert queued == []
+
+
 def test_direct_post_without_readiness_evidence_is_refused_before_any_side_effect(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,

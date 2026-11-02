@@ -2878,6 +2878,9 @@
         "required": ["allowed"],
         "properties": {
           "allowed": {"type": "boolean"},
+          "status": {"type": "string", "description": "The Runner readiness verdict a refusal reports, when one was published."},
+          "reason_code": {"type": "string", "description": "Stable machine-readable reason for the refusal; clients localize the copy."},
+          "next_action": {"type": "string", "description": "Recovery step the deployment recommends."},
           "runner_ready": {"type": "boolean"},
           "infrastructure_ready": {"type": "boolean"},
           "infrastructure_status": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE"]},

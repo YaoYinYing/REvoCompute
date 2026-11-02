@@ -2134,11 +2134,20 @@ def preflight_task(task_type: str):
         message=str(payload.get("error") or payload.get("message") or "Preflight failed"),
         **{key: detail[key] for key in ("field", "role", "format", "path") if isinstance(detail.get(key), str)},
     )
+    # A Runner admission refusal already names its verdict, reason and recovery
+    # in the POST body.  Carry them through rather than flattening the decision
+    # to a bare "unavailable" the Create Task surface cannot explain.
+    admission = PreflightAdmission(
+        allowed=False,
+        status=payload.get("status") if isinstance(payload.get("status"), str) else None,
+        reason_code=payload.get("reason") if isinstance(payload.get("reason"), str) else None,
+        next_action=payload.get("next_action") if isinstance(payload.get("next_action"), str) else None,
+    )
     result = TaskPreflightResult(
         valid=False,
         security=PreflightPhase(status="failed" if phase == "security" else "not_checked"),
         contract=PreflightPhase(status="failed" if phase == "contract" else "not_checked"),
-        admission=PreflightAdmission(allowed=False),
+        admission=admission,
         errors=[finding],
     )
     failed = jsonify(result.model_dump(exclude_none=True))
