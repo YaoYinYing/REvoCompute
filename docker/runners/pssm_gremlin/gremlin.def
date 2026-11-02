@@ -32,6 +32,10 @@ From: condaforge/mambaforge:24.9.2-0
 
 %test
     test -x /opt/conda/envs/GREMLIN/bin/python
+    # GREMLIN_PYTHON: the stage-input resolver compiles from __future__
+    # import annotations and list[str], so the base interpreter needs >= 3.7.
+    test -x /opt/conda/bin/python
+    /opt/conda/bin/python -c 'import sys; assert sys.version_info >= (3, 7), sys.version'
     test -x /opt/conda/envs/GREMLIN/bin/hhblits
     test -x /opt/conda/envs/GREMLIN/bin/psiblast
     /opt/conda/envs/GREMLIN/bin/python -c "import Bio, numpy, pandas, scipy, tensorflow"
