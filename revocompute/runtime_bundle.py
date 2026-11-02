@@ -36,6 +36,11 @@ from typing import Any, Iterable, Mapping
 #: never user-configurable, never a per-family mount destination.
 RUNTIME_MOUNT_TARGET = "/opt/revocompute/runtime"
 
+#: Roots that used to hold baked REvoCompute code.  They do not name overlay
+#: content: an executable delivered by the overlay must resolve under the
+#: reserved mount, never from a legacy image path.
+LEGACY_RUNTIME_ROOTS = ("/app/revocompute",)
+
 #: Directory name for one materialized snapshot: ``sha256-<hex>``.
 _BUNDLE_PREFIX = "sha256-"
 _INDEX_NAME = "index.json"
@@ -170,6 +175,46 @@ def collect_overlay_entries(runner_root: str | os.PathLike[str], declared: Itera
     if not entries:
         raise RuntimeBundleError("Runtime overlay declares no files")
     return tuple(entries)
+
+
+def _entrypoint_relative(path: str) -> str | None:
+    """The runner-tree-relative spelling of a container entrypoint path.
+
+    Only the reserved mount and the legacy baked root map into the overlay
+    namespace; any other absolute path is not an overlay reference.
+    """
+    for root in (RUNTIME_MOUNT_TARGET, *LEGACY_RUNTIME_ROOTS):
+        if path.startswith(root + "/"):
+            return path[len(root) + 1 :]
+    return None
+
+
+def overlay_entrypoint_error(entrypoint: Iterable[str], entries: Iterable[OverlayEntry]) -> str | None:
+    """The contract violation for an entrypoint that names an overlay-declared file.
+
+    An executable the bundle delivers resolves only under the reserved mount.
+    A manifest that still spells the legacy image path (or any other location)
+    would start baked code, or nothing, while its bundle identity says it runs
+    the snapshot.  Families whose entrypoint is not overlay-declared are outside
+    this contract: they have not migrated and keep their image entrypoint.
+    """
+    steps = tuple(entrypoint) if entrypoint is not None else ()
+    if len(steps) < 2 or not isinstance(steps[-1], str) or not steps[-1]:
+        return None
+    path = steps[-1]
+    relative = _entrypoint_relative(path)
+    if relative is None:
+        return None
+    declared = {entry.relative for entry in entries}
+    under_mount = path.startswith(RUNTIME_MOUNT_TARGET + "/")
+    if relative not in declared:
+        return f"Runtime entrypoint is not in the declared overlay: {path}" if under_mount else None
+    if not under_mount:
+        return (
+            f"Runtime entrypoint for an overlay-declared file must resolve under "
+            f"{RUNTIME_MOUNT_TARGET}: {path}"
+        )
+    return None
 
 
 #: Build byproducts that are not part of a declaration's identity.  A ``.pyc``
@@ -530,6 +575,7 @@ __all__ = [
     "normalize_overlay_paths",
     "overlay_build_overlap",
     "overlay_digest",
+    "overlay_entrypoint_error",
     "resolve_pinned",
     "verify_bundle",
     "write_index",

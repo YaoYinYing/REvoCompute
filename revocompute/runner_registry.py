@@ -102,7 +102,7 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
         overlay = manifest.runtime_overlay
         try:
             runtime_overlay = runtime_bundle.normalize_overlay_paths(overlay)
-            runtime_bundle.collect_overlay_entries(runner_root, runtime_overlay)
+            overlay_entries = runtime_bundle.collect_overlay_entries(runner_root, runtime_overlay)
         except runtime_bundle.RuntimeBundleError as exc:
             print(f"Runner plugin {manifest.id} has an invalid runtime overlay: {exc}", file=sys.stderr)
             raise RegistryError from exc
@@ -110,6 +110,13 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
         if overlap:
             print(
                 f"Runner plugin {manifest.id} declares a path as both build input and runtime overlay: {list(overlap)}",
+                file=sys.stderr,
+            )
+            raise RegistryError
+        entrypoint_error = runtime_bundle.overlay_entrypoint_error(entrypoint, overlay_entries)
+        if entrypoint_error:
+            print(
+                f"Runner plugin {manifest.id} has an invalid runtime entrypoint: {entrypoint_error}",
                 file=sys.stderr,
             )
             raise RegistryError

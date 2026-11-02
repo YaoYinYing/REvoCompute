@@ -69,6 +69,13 @@ def _pin_task(
         )
 
 
+def _authorize(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the live-test receipt these activation-mechanics tests aren't about."""
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.receipt_valid_for_bundle", lambda *_args, **_kwargs: True
+    )
+
+
 def _scheduler_reports(monkeypatch: pytest.MonkeyPatch, job_ids: set[str]) -> None:
     """Make ``squeue`` list exactly ``job_ids`` and resolve on PATH."""
     monkeypatch.setattr(steps_mod.shutil, "which", lambda name: f"/usr/bin/{name}")
@@ -85,10 +92,13 @@ def _scheduler_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(steps_mod.shutil, "which", lambda _name: None)
 
 
-def test_candidate_materialization_does_not_publish_and_activation_makes_it_eligible(tmp_path: Path) -> None:
+def test_candidate_materialization_does_not_publish_and_activation_makes_it_eligible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = tmp_path / "runtime-bundles"
     state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store)})
     family = _family(tmp_path)
+    _authorize(monkeypatch)
 
     candidate = steps_mod.materialize_runner_bundles(state, [family], activate=False)
     digest_x = candidate["demo"]
@@ -105,10 +115,13 @@ def test_candidate_materialization_does_not_publish_and_activation_makes_it_elig
     assert rb.resolve_for_submission(store, rb.load_index(store), "demo", declares_overlay=True) == digest_x
 
 
-def test_a_task_pinned_to_x_still_launches_x_after_y_activates(tmp_path: Path) -> None:
+def test_a_task_pinned_to_x_still_launches_x_after_y_activates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = tmp_path / "runtime-bundles"
     state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store)})
     family = _family(tmp_path)
+    _authorize(monkeypatch)
 
     digest_x = steps_mod.materialize_runner_bundles(state, [family])["demo"]
     _pin_task(state, "task-a", digest_x)
@@ -134,10 +147,13 @@ def test_a_task_pinned_to_x_still_launches_x_after_y_activates(tmp_path: Path) -
     assert rb.resolve_pinned(store, digest_y) is not None
 
 
-def test_failed_candidate_validation_leaves_the_active_bundle_untouched(tmp_path: Path) -> None:
+def test_failed_candidate_validation_leaves_the_active_bundle_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = tmp_path / "runtime-bundles"
     state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store)})
     family = _family(tmp_path)
+    _authorize(monkeypatch)
     active = steps_mod.materialize_runner_bundles(state, [family])["demo"]
 
     # A source edit that fails validation still materializes a snapshot (that is
@@ -149,12 +165,15 @@ def test_failed_candidate_validation_leaves_the_active_bundle_untouched(tmp_path
     assert rb.resolve_for_submission(store, rb.load_index(store), "demo", declares_overlay=True) == active
 
 
-def test_gc_keeps_every_family_the_active_index_binds(tmp_path: Path) -> None:
+def test_gc_keeps_every_family_the_active_index_binds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Pruning on behalf of one family must not delete another family's code."""
     store = tmp_path / "runtime-bundles"
     state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store)})
     alpha = _family(tmp_path, "alpha")
     beta = _family(tmp_path, "beta")
+    _authorize(monkeypatch)
 
     steps_mod.materialize_runner_bundles(state, [alpha, beta])
     bound = rb.load_index(store)

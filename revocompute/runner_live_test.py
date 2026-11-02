@@ -204,6 +204,7 @@ def load_validation_identity(
     repo_root: str | Path = SERVER_ROOT,
     families: Mapping[str, RuntimeFamily] | None = None,
     discover: bool = True,
+    candidate_bundles: Mapping[str, str] | None = None,
 ) -> ValidationIdentity:
     """Resolve the family contract and effective resources into one replayable identity.
 
@@ -211,6 +212,11 @@ def load_validation_identity(
     tree (the web service).  Discovery otherwise installs a process-wide
     snapshot, which a concurrent request must not trigger; callers that opt out
     have already established the tree and enabled scope.
+
+    ``candidate_bundles`` names the not-yet-activated bundle digests selected in
+    this same live-test pass.  A composed acceptance binds those candidates
+    instead of the published companion digest, so the exact pair that ran is the
+    pair the receipt names.
     """
     if family.root is None:
         raise LiveTestConfigurationError("Runner family source root is unavailable")
@@ -277,10 +283,14 @@ def load_validation_identity(
     # a later change to a companion SIF is invalidated rather than inherited.
     known_families = _identity_families(family, plugin_root, families, state)
     composed_artifacts = (
-        _composed_artifacts(state, family, known_families, required_tasks) if state is not None and known_families else []
+        _composed_artifacts(
+            state, family, known_families, required_tasks, candidate_bundles=candidate_bundles
+        )
+        if state is not None and known_families
+        else []
     )
     if composed_artifacts:
-        _verify_composed_artifacts(state, composed_artifacts, known_families)
+        _verify_composed_artifacts(state, composed_artifacts, known_families, candidate_bundles=candidate_bundles)
 
     def result_contract(view) -> dict[str, Any]:
         # Keep every mapping key except the label/scale-only ones, so a new
@@ -386,6 +396,7 @@ class RunnerLiveTestWorker:
         candidate_bundle: str | None = None,
         families: Sequence[RuntimeFamily] = (),
         discover: bool = True,
+        candidate_bundles: Mapping[str, str] | None = None,
     ):
         self.state = state
         self.family = family
@@ -401,6 +412,12 @@ class RunnerLiveTestWorker:
         #: materializes it before the run; the worker binds this digest rather
         #: than the published binding.
         self._candidate_bundle = candidate_bundle
+        #: Candidate digests for every family selected in this pass.  A composed
+        #: acceptance binds companion candidates here; families not selected keep
+        #: their published digest.
+        self._candidate_bundles = dict(candidate_bundles or {})
+        if candidate_bundle is not None:
+            self._candidate_bundles.setdefault(family.name, candidate_bundle)
         self.repo_root = Path(SERVER_ROOT)
         self.reports_dir = Path(family.slurm_image).parent / "live-tests" / family.name
         # Nanosecond precision keeps independent cases/runs isolated even when
@@ -469,7 +486,9 @@ class RunnerLiveTestWorker:
             # submit those exact records, never a fresher selection, and
             # re-verify their bytes at each launch.
             composed = list(identity.composed_artifacts)
-            _verify_composed_artifacts(self.state, composed, self._families)
+            _verify_composed_artifacts(
+                self.state, composed, self._families, candidate_bundles=self._candidate_bundles or None
+            )
             for case in selected:
                 self._transition(report, "SEEDING")
                 case_started = time.monotonic()
@@ -533,6 +552,7 @@ class RunnerLiveTestWorker:
             repo_root=self.repo_root,
             families=self._families,
             discover=self._discover,
+            candidate_bundles=self._candidate_bundles or None,
         )
 
     def _validate_candidate(self) -> None:
@@ -581,7 +601,9 @@ class RunnerLiveTestWorker:
         # The frozen companion artifacts are re-verified here, immediately before
         # submission: bytes that moved since the identity cannot launch.
         try:
-            _verify_composed_artifacts(self.state, composed, self._families)
+            _verify_composed_artifacts(
+                self.state, composed, self._families, candidate_bundles=self._candidate_bundles or None
+            )
         except LiveTestConfigurationError as exc:
             raise RunnerLiveTestError("TEST_CONFIGURATION_FAILURE", str(exc)) from exc
         atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": str(self.artifact.resolve()), "artifact_sha256": sha256_file(self.artifact), "runtime_bundle_sha256": self._candidate_bundle})
@@ -1127,6 +1149,7 @@ def run_live_tests(
             task=task,
             candidate_bundle=candidate_bundles.get(family.name),
             families=families,
+            candidate_bundles=candidate_bundles,
         ).run(build=build)
         passed = passed and report.passed
     # A successful case writes a new receipt, so the immutable admission
@@ -1244,18 +1267,27 @@ def _identity_families(
 
 
 def _composed_artifacts(
-    state, owner: RuntimeFamily, families: Mapping[str, RuntimeFamily], tasks: Collection[str]
+    state,
+    owner: RuntimeFamily,
+    families: Mapping[str, RuntimeFamily],
+    tasks: Collection[str],
+    *,
+    candidate_bundles: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """The exact companion artifacts and bundles a composed acceptance would run.
 
     Recorded before launch and re-verified before every submission: a composed
     acceptance names the pair it accepted, and a companion whose bytes, build
-    provenance or bundle changed afterwards cannot reuse it.  Only content is
-    recorded, never a path: promoting a validated candidate moves its bytes to
-    the active path without changing the acceptance that covered them.
+    provenance or bundle changed afterwards cannot reuse it.  A companion
+    selected in the same live-test pass is still a candidate, so its *candidate*
+    digest is bound; a companion not selected keeps its published digest.  Only
+    content is recorded, never a path: promoting a validated candidate moves its
+    bytes to the active path without changing the acceptance that covered them.
     """
+    from revocompute import runtime_bundle
     from revocompute.runner_readiness import bundle_digest
 
+    candidates = dict(candidate_bundles or {})
     records: dict[str, dict[str, Any]] = {}
     for task_id in sorted(tasks):
         for family in _task_graph_families(owner, task_id, families):
@@ -1264,11 +1296,19 @@ def _composed_artifacts(
             artifact = _selected_artifact(family)
             digest = sha256_file(artifact) if artifact.is_file() else ""
             evidence = read_artifact_evidence(family, artifact, "build")[1] if artifact.is_file() else None
+            companion_bundle = candidates.get(family.name)
+            if companion_bundle is None:
+                try:
+                    companion_bundle = bundle_digest(state, family)
+                except runtime_bundle.RuntimeBundleError as exc:
+                    raise LiveTestConfigurationError(
+                        f"Composed stage family {family.name!r} has no published runtime bundle: {exc}"
+                    ) from exc
             records[family.name] = {
                 "family": family.name,
                 "sha256": digest,
                 "build_provenance_digest": (evidence or {}).get("build_provenance_digest"),
-                "runtime_bundle_sha256": bundle_digest(state, family),
+                "runtime_bundle_sha256": companion_bundle,
             }
     return [records[name] for name in sorted(records)]
 
@@ -1276,13 +1316,28 @@ def _composed_artifacts(
 def _composed_for(
     owner: RuntimeFamily, task_type: str, records: Sequence[Mapping[str, Any]], families: Mapping[str, RuntimeFamily]
 ) -> list[Mapping[str, Any]]:
-    """The frozen records that belong to one case's graph."""
+    """The frozen records that belong to one case's graph.
+
+    A stage family with no recorded artifact refuses before the case can submit:
+    a missing companion record is not "nothing to verify", it is an unproven
+    execution input.
+    """
     names = {family.name for family in _task_graph_families(owner, task_type, families)} - {owner.name}
-    return [record for record in records if str(record["family"]) in names]
+    by_name = {str(record["family"]): record for record in records}
+    missing = sorted(names - set(by_name))
+    if missing:
+        raise LiveTestConfigurationError(
+            f"Composed stage family {missing[0]!r} has no recorded artifact for {task_type!r}"
+        )
+    return [by_name[name] for name in sorted(names)]
 
 
 def _verify_composed_artifacts(
-    state, records: Sequence[Mapping[str, Any]], families: Mapping[str, RuntimeFamily]
+    state,
+    records: Sequence[Mapping[str, Any]],
+    families: Mapping[str, RuntimeFamily],
+    *,
+    candidate_bundles: Mapping[str, str] | None = None,
 ) -> None:
     """Refuse a composed run whose companion artifact is not the recorded one.
 
@@ -1290,11 +1345,21 @@ def _verify_composed_artifacts(
     readiness and attestation callers treat identity resolution as a bounded
     failure, so one family's companion cannot fail the whole deployment's view.
     """
+    from revocompute import runtime_bundle
     from revocompute.runner_readiness import bundle_digest
 
+    candidates = dict(candidate_bundles or {})
     for record in records:
         name = str(record["family"])
-        if record.get("runtime_bundle_sha256") != bundle_digest(state, families[name]):
+        expected_bundle = candidates.get(name)
+        if expected_bundle is None:
+            try:
+                expected_bundle = bundle_digest(state, families[name])
+            except runtime_bundle.RuntimeBundleError as exc:
+                raise LiveTestConfigurationError(
+                    f"Composed stage family {name!r} has no published runtime bundle: {exc}"
+                ) from exc
+        if record.get("runtime_bundle_sha256") != expected_bundle:
             raise LiveTestConfigurationError(
                 f"Composed stage runtime bundle for {name!r} changed after its identity was recorded"
             )
@@ -1320,6 +1385,7 @@ def receipt_valid_for_artifact(
     sif_sha256: str | None = None,
     discover: bool = True,
     expected_runtime_bundle: str | None,
+    candidate_bundles: Mapping[str, str] | None = None,
 ) -> bool:
     """Return whether required smoke tests passed for the exact artifact identity.
 
@@ -1345,6 +1411,7 @@ def receipt_valid_for_artifact(
             artifact_path=artifact_path,
             families=tuple(families.values()),
             discover=discover,
+            candidate_bundles=candidate_bundles,
         )
         artifact = worker.artifact
         if not artifact.is_file():
@@ -1391,6 +1458,29 @@ def receipt_valid_for_artifact(
         yaml.YAMLError,
     ):
         return False
+
+
+def receipt_valid_for_bundle(
+    state,
+    family: RuntimeFamily,
+    runtime_bundle_sha256: str,
+    *,
+    candidate_bundles: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether a passing receipt covers this exact SIF + bundle pair.
+
+    The artifact is the one a live test would exercise right now: a staged
+    candidate when present, else the active SIF.  ``candidate_bundles`` lets an
+    activation validate the composed pair a simultaneous live-test pass just
+    accepted, rather than the still-published companion bindings.
+    """
+    return receipt_valid_for_artifact(
+        state,
+        family,
+        _selected_artifact(family),
+        expected_runtime_bundle=runtime_bundle_sha256,
+        candidate_bundles=candidate_bundles,
+    )
 
 
 def candidate_receipt_valid(state, family: RuntimeFamily, *, sif_sha256: str | None = None) -> bool:

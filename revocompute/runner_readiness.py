@@ -149,24 +149,33 @@ def _bundle_root(state) -> str:
 
 
 def bundle_digest(state, family: RuntimeFamily) -> str | None:
-    """The Runtime Bundle digest a *new* submission for this family would pin."""
+    """The Runtime Bundle digest a *new* submission for this family would pin.
+
+    Raises ``RuntimeBundleError`` when the family declares an overlay but has no
+    resolvable published binding.  Substituting the source digest here would let
+    readiness report READY from a receipt for code no submission can pin; the
+    index is the only authority for what is active.
+    """
     if not family.runtime_overlay:
         return None
     from revocompute import runtime_bundle
 
     root = _bundle_root(state)
-    try:
-        # Ask the same question submission asks, so readiness cannot report
-        # READY for a binding that a new submission would 503 on (an index
-        # entry whose snapshot was pruned or removed).
-        return runtime_bundle.resolve_for_submission(
-            root, runtime_bundle.load_index(root), family.name, declares_overlay=True
-        )
-    except runtime_bundle.RuntimeBundleError:
-        # No published (or no resolvable) binding: the digest of the current
-        # source is what a live test would produce, so report that rather than
-        # "unknown" — it cannot match the receipt, which is the honest answer.
-        return runtime_bundle.overlay_digest(family.root.parent, family.runtime_overlay)
+    # Ask the same question submission asks, so readiness cannot report READY
+    # for a binding that a new submission would 503 on (an index entry whose
+    # snapshot was pruned or removed).
+    return runtime_bundle.resolve_for_submission(
+        root, runtime_bundle.load_index(root), family.name, declares_overlay=True
+    )
+
+
+def _overlay_source_digest(family: RuntimeFamily) -> str | None:
+    """The digest of the overlay sources currently checked out for this family."""
+    if not family.runtime_overlay:
+        return None
+    from revocompute import runtime_bundle
+
+    return runtime_bundle.overlay_digest(family.root.parent, family.runtime_overlay)
 
 
 @dataclass(frozen=True, slots=True)
@@ -456,6 +465,47 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
             sif_sha256=sif_sha256,
             build_provenance_digest=build_digest,
         )
+
+    if family.runtime_overlay:
+        # The SIF is current; the mounted code is a second identity.  An edited
+        # overlay source that was never live-tested must not inherit the SIF's
+        # READY verdict, and an unpublished binding is not a licence to fall
+        # back to the source: a new submission would pin nothing.
+        from revocompute import runtime_bundle
+
+        try:
+            published_bundle = bundle_digest(state, family)
+        except runtime_bundle.RuntimeBundleError:
+            published_bundle = None
+        try:
+            source_bundle = _overlay_source_digest(family)
+        except (OSError, KeyError, TypeError, ValueError, RegistryError):
+            return _result(
+                family,
+                RunnerReadinessStatus.NOT_CONFIGURED,
+                "CONFIGURATION_INVALID",
+                "Runner Runtime Bundle sources cannot be resolved",
+                doctor_ok=True,
+                sif_exists=active_exists,
+                sif_sha256=sif_sha256,
+                build_provenance_current=True,
+                build_provenance_digest=build_digest,
+            )
+        if published_bundle is None or published_bundle != source_bundle:
+            # Report the source digest: it is the identity that must be
+            # materialized, live-tested, and activated.
+            return _result(
+                family,
+                RunnerReadinessStatus.VALIDATION_STALE,
+                "RUNTIME_BUNDLE_CHANGED",
+                "Runtime bundle changed; reuse the current SIF and rerun the live test",
+                doctor_ok=True,
+                sif_exists=active_exists,
+                sif_sha256=sif_sha256,
+                build_provenance_current=True,
+                build_provenance_digest=build_digest,
+                runtime_bundle_sha256=source_bundle,
+            )
 
     evidence = _receipt_evidence(state, family, build_digest, sif_sha256)
     if evidence.failure is not None:

@@ -31,6 +31,23 @@ def runner_bundle_root(state) -> str:
     return os.path.join(os.path.dirname(os.path.abspath(state.server_dir())), "runtime-bundles")
 
 
+def _receipt_authorizes(
+    state, family: RuntimeFamily, digest: str, candidate_bundles: dict[str, str] | None
+) -> bool:
+    """Whether a passing live-test receipt covers this exact SIF + bundle pair.
+
+    Reuses the live-test receipt validator, including its build provenance,
+    test-definition, configuration, and composed-companion identity.  A missing
+    or mismatched receipt is a refusal, never an inferred activation.
+    """
+    from revocompute.runner_live_test import receipt_valid_for_bundle
+
+    try:
+        return receipt_valid_for_bundle(state, family, digest, candidate_bundles=candidate_bundles)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def materialize_runner_bundles(
     state, families: list[RuntimeFamily], *, activate: bool = True, digests: dict[str, str] | None = None
 ) -> dict[str, str]:
@@ -41,6 +58,12 @@ def materialize_runner_bundles(
     index, which is what makes a bundle eligible for a *new* submission — so
     candidate validation creates the snapshot without changing what a queued
     task or the running deployment resolves.
+
+    A *changed* binding is published only when a live-test receipt validates
+    that exact family, digest, artifact, build provenance, configuration, and
+    test definition.  Without one the previous binding stays in place and the
+    family reads stale, rather than an untested digest taking over because a
+    deployment restarted.
 
     ``digests`` publishes already-materialized candidates instead of recomputing
     them.  That is what activation must do: publishing a freshly recomputed
@@ -76,6 +99,17 @@ def materialize_runner_bundles(
                 family.root.parent, family.runtime_overlay, store_root
             )
         if activate:
+            previous = index.get(family.name)
+            if previous != candidate[family.name] and not _receipt_authorizes(
+                state, family, candidate[family.name], digests
+            ):
+                # Keep the prior binding: a deployment restart is not a
+                # scientific acceptance, and readiness reports the family stale.
+                print(
+                    f"[SLURM] Runtime bundle {family.name}: {candidate[family.name]} "
+                    f"not activated (no valid live-test receipt); active remains {previous or '-'}"
+                )
+                continue
             index[family.name] = candidate[family.name]
             print(f"[SLURM] Runtime bundle {family.name}: {candidate[family.name]}")
     if activate:

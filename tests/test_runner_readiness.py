@@ -497,6 +497,11 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
     # A receipt binds the exact (SIF, Runtime Bundle) pair, so the fixture must
     # record the bundle the family's overlay currently hashes to.
     bundle = runtime_bundle.overlay_digest(family.root.parent, family.runtime_overlay)
+    # Readiness binds to the activation index, never to a source digest: publish
+    # the snapshot this synthetic deployment would have activated.
+    store = tmp_path / "runtime-bundles"
+    assert runtime_bundle.materialize(family.root.parent, family.runtime_overlay, store)[0] == bundle
+    runtime_bundle.write_index(store, {family.name: bundle})
     write_artifact_evidence(
         family,
         sha256_file(image),
