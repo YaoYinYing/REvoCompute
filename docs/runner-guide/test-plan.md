@@ -1,15 +1,57 @@
-# `test.yaml`
+# Test Plan
 
-Each family owns `test.yaml`, which is the executable acceptance plan for its
-production TaskTypes. Pin immutable fixtures under `tests/data/`, name every
-required smoke case, and specify the TaskType, fixtures grouped by named input
-role, parameters,
-expected outputs, and resource profile. Keep cases small enough for routine
-target-host validation while exercising the real parser and artifact checks.
+Each family owns `test.yaml`, its executable acceptance declaration. The plan
+names the cases that a target-host `live-test` runs through the production Task
+definition, worker, Slurm, Apptainer, parser, and artifact contract. It does not
+declare output contracts, resource policy, weights, or defaults; the worker
+resolves those from the owning manifests and deployment configuration.
 
-The live-test command executes this plan through Slurm and Apptainer. A family
-is not READY until every required case passes. Changing the plan or fixture
-digest invalidates the prior receipt. The live-test loader validates plan shape;
-do not duplicate static `test.yaml` declarations in pytest. CI may test the
-generic loader and orchestration with synthetic plans, but only target-host
-execution produces a promotable receipt.
+## Declaration
+
+`test.yaml` accepts only `version: 1` and a non-empty `collections` mapping.
+Every collection contains only `cases`; every case declares exactly `id`, `task`,
+`input.roles`, and optional `parameters`:
+
+```yaml
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-sequence-statistics        # unique identifier across the family
+      task: sequence_statistics
+      input:
+        roles: {sequence: [tests/data/example/sequences.fasta]}
+      parameters: {mass_precision: 2}
+```
+
+- `input.roles` is required. Each key is a role declared by the owning
+  `task.yaml`, and each value is a non-empty list of repository fixtures. The
+  run refuses an undeclared role, an incompatible format, or a cardinality
+  violation.
+- Fixtures MUST be immutable regular files under `tests/data/`; paths outside it
+  are refused.
+- `parameters` is validated against the Task's canonical Draft 2020-12
+  parameter schema. It carries no defaults the schema already owns.
+- Case IDs and collection names are stable identifiers. Duplicate case IDs are
+  refused.
+
+## Collections
+
+`smoke` is mandatory and is the release collection. It must cover every
+TaskType the family accepts, and its required cases are what readiness and
+promotion evaluate. A narrowed `--task` pass validates only what it selected; a
+receipt that does not cover every required smoke case cannot activate.
+
+A family may add a `scientific` collection for pinned numerical reference cases.
+That collection documents scientific acceptance and is run explicitly; it is
+not a substitute for `smoke` and does not by itself satisfy the release gate.
+
+## Evidence
+
+Changing the plan, a case, or a fixture digest changes the test-definition
+digest and invalidates the prior receipt. The live-test loader validates plan
+shape; do not duplicate these declarations in pytest. CI may exercise the
+generic loader with synthetic plans, but only target-host execution produces a
+promotable receipt. The evidence levels and the release gate are owned by
+[Runner Family Protocol](runner-family-protocol.md); the live-test command is
+owned by [Live Testing and Receipts](../operator-guide/live-testing.md).

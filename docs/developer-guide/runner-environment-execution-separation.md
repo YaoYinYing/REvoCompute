@@ -1,7 +1,9 @@
 # Runner Environment–Execution Separation
 
 > Status: delivered architecture rationale for PR #131.
-> Normative contract: [Runtime Bundles](../runner-guide/runtime-bundles.md).
+> Normative contract: [Runner Family Protocol](../runner-guide/runner-family-protocol.md)
+> for identity classes and the release gate, and
+> [Runtime Bundles](../runner-guide/runtime-bundles.md) for mount and identity detail.
 > Base: the merged composable-execution foundation from PR #130.
 
 This page explains why a Runner is split into an environment image and a mounted
@@ -13,19 +15,11 @@ rules are owned by [Runtime Bundles](../runner-guide/runtime-bundles.md).
 
 Build the scientific environment; mount the scientific execution code.
 
-A reproducible Task has three independently versioned inputs:
-
-1. **SIF environment identity** — the Apptainer definition, base OS, scientific
-   dependencies and locks, native packages, pinned upstream software, and
-   generated installation artifacts. A change requires a SIF rebuild and
-   acceptance.
-2. **Runtime Bundle identity** — REvoCompute-owned adapters, scripts, algorithm
-   implementations, and stage-input resolvers. A change requires a new immutable
-   bundle and scientific acceptance, but not a SIF rebuild.
-3. **Execution and scientific-data identity** — the frozen graph, input and
-   artifact identities, parameter contract, model/database provenance, and
-   resource policy. Changes that affect acceptance must be revalidated;
-   presentation changes must not invalidate a scientific receipt.
+A reproducible Task separates the SIF environment from the mounted execution
+code. The four identity classes and their revalidation consequences are owned
+by [Runner Family Protocol](../runner-guide/runner-family-protocol.md#identity-classes);
+the SIF/bundle split and detailed change list are owned by
+[Runtime Bundles](../runner-guide/runtime-bundles.md#change-impact).
 
 A file must never silently participate in both the SIF and the Runtime Bundle
 identity. The split is not a second bundle manager, provenance ledger, admission

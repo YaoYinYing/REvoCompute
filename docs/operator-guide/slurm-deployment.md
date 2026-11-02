@@ -179,8 +179,8 @@ identity. Keep the current SIF and rerun the live-test for
 `VALIDATION_STALE`; changing `family.version` or presentation-only metadata
 alone requires neither action. `READY` requires strict
 family-contract validation, a current active SIF, and every required smoke case
-passing for that exact identity. See the canonical
-[change-impact matrix](../runner-guide/adding-a-runner.md#runner-change-impact-model).
+passing for that exact identity. See the detailed
+[change-impact list](../runner-guide/runtime-bundles.md#change-impact).
 
 Status inspection is read-only. It does not build, repair, submit work, or
 inspect a staged `.sif.next` as the active Runner. Readiness is also independent

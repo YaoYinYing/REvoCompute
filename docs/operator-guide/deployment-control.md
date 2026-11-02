@@ -29,8 +29,8 @@ definition and declared-input hashes, Apptainer version, its `apptainer_version_
 builder is part of the build identity. Build freshness uses only actual image inputs;
 changing
 `family.version` alone does not stale the SIF. Evidence contains no credentials
-and has no Docker image ID. See the canonical
-[Runner change-impact model](../runner-guide/adding-a-runner.md#runner-change-impact-model).
+and has no Docker image ID. See the detailed
+[change-impact list](../runner-guide/runtime-bundles.md#change-impact).
 
 ### The recorded Apptainer builder
 

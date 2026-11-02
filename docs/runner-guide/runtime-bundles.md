@@ -26,7 +26,7 @@ are operator-managed and declared in `runner.yaml` as ordinary mounts.
 runtime:
   image_artifact: example_v1.sif
   definition: example.def
-  build_inputs: [example/requirements.lock]   # SIF inputs: the environment
+  build_inputs: []                            # SIF inputs: the environment
   runtime_overlay:                            # mounted: the orchestration
     - common/runtime/
     - example/run.sh
@@ -109,14 +109,55 @@ bundle is missing or if a family that declares an overlay was submitted without
 one. A task queued under bundle A therefore keeps executing A even when a
 deployment activates B before Slurm starts it.
 
-## Freshness
+## Change impact
 
-| Change | Identity | Required action |
-| --- | --- | --- |
-| `.def`, a dependency lock, a `build_inputs` file | Build | Rebuild the SIF, then live-test |
-| A `runtime_overlay` file | Runtime Bundle | Keep the SIF; repeat the live test, then activate on PASS |
-| Task execution contract, `test.yaml`, resources | Execution Contract | Keep the SIF; repeat the live test |
-| Display name, summary, citation, UI hint | Presentation | Deploy only |
+The four identity classes are owned by
+[Runner Family Protocol](runner-family-protocol.md#identity-classes). This is
+the detailed change list:
+
+| Change | Rebuild SIF | Re-run live-test |
+| --- | ---: | ---: |
+| Apptainer `.def` | Yes | Yes |
+| Requirements or lockfile copied into the image | Yes | Yes |
+| Family code still copied into the image | Yes | Yes |
+| `runtime.runtime_overlay` path (shared helper or family adapter) | No | Yes |
+| Task argument forwarding or execution-affecting default | No | Yes |
+| Task input/output execution contract | No | Yes |
+| Result-view source selectors or acceptance-relevant mapping | No | Yes |
+| `expected_files.yaml` logical-output contract | No | Yes |
+| Which directory owns a Task's result contract (its `expected_files.yaml` and `storyboard/`) | No | Yes |
+| Runtime entrypoint declaration or `runner.yaml` mounts/env/limits | No | Yes |
+| Effective resource policy | No | Yes |
+| Access-policy identification or entitlement requirement | No | Yes |
+| Runner-owned input-workspace module, styles, schema, backend module, or backend role binding | No | Yes |
+| `test.yaml` case, fixture, or required coverage | No | Yes |
+| Display name, summary, `use_when`, or help text | No | No |
+| Citation or documentation link | No | No |
+| Result-view titles, labels, units, scales, or axis hints | No | No |
+| UI, layout, viewer, or category hint | No | No |
+| `family.version` release metadata alone | No | No |
+
+Runner-owned workspace assets are server-side executable code, not image
+content: they are loaded from the Runner tree at request time and are absent
+from the SIF. They therefore follow the execution-contract row, while only
+files copied into the image belong in Build Identity.
+
+`family.version` identifies the family release for display and audit. It is not
+an automatic build or validation input. If image construction consumes a
+version value, the file or recipe that supplies that value must participate in
+Build Identity; changing that actual input then drives the rebuild.
+
+For each new file or field, ask in order:
+
+1. Is it REvoCompute-owned executable code the container runs? Put it in
+   `runtime.runtime_overlay` — the SIF keeps the environment, the bundle
+   supplies the orchestration.
+2. Can changing it alter SIF contents or other code baked into the SIF? Put the
+   file in `runtime.build_inputs`.
+3. Can changing it alter how Core invokes, validates, resources, or accepts the
+   computation? It belongs to Execution Contract Identity.
+4. Can changing it only alter what a user sees? It belongs to Presentation
+   Identity.
 
 Freshness is evaluated before activation. Readiness compares the digest of the
 checked-out overlay sources with the digest the activation index publishes, so
