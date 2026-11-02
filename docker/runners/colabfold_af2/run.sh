@@ -79,33 +79,60 @@ mapfile -t job_names <<< "$job_list"
 # suffix token can itself be the beginning of another legal sanitized job name
 # (for example "query_scores_rank_foo"), and that sibling's files must not be
 # mistaken for this job's. Ownership therefore comes from the end-anchored
-# identity parse compared to the exact job. Usage: colabfold_ranked_files
-# <job> delete|present.
+# identity parse compared to the exact job. "require-scores" also rejects a
+# published rank whose score file is missing or unreadable, because the result
+# contract needs one score per structure. Usage: colabfold_ranked_files
+# <job> delete|present|require-scores.
 colabfold_ranked_files() {
   python3 - "$result_dir" "$1" "$2" <<'PY'
+import json
 import re
 import sys
 from pathlib import Path
 
 result_dir, job, action = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-structure = re.compile(r"^(.*)_(unrelaxed|relaxed)_rank_\d+_[^/]+\.pdb$")
-scores = re.compile(r"^(.*)_scores_rank_\d+_[^/]+\.json$")
-patterns = (structure, scores) if action == "delete" else (structure,)
+structure = re.compile(r"^(.*)_(unrelaxed|relaxed)_rank_(\d+)_[^/]+\.pdb$")
+scores = re.compile(r"^(.*)_scores_rank_(\d+)_[^/]+\.json$")
 if not result_dir.is_dir():
     sys.exit(0)
-for path in result_dir.iterdir():
-    if not path.is_file():
-        continue
-    for pattern in patterns:
-        match = pattern.match(path.name)
-        if not match or match.group(1) != job:
+if action == "delete":
+    for path in result_dir.iterdir():
+        if not path.is_file():
             continue
-        if action == "delete":
+        for pattern in (structure, scores):
+            match = pattern.match(path.name)
+            if not match or match.group(1) != job:
+                continue
             path.unlink()
             break
-        if path.stat().st_size > 0:
+    sys.exit(0)
+if action == "present":
+    for path in result_dir.iterdir():
+        match = structure.match(path.name)
+        if match and match.group(1) == job and path.is_file() and path.stat().st_size > 0:
             print(path.name)
             break
+    sys.exit(0)
+structure_ranks = set()
+score_ranks = set()
+for path in result_dir.iterdir():
+    if not path.is_file() or path.stat().st_size == 0:
+        continue
+    match = structure.match(path.name)
+    if match and match.group(1) == job:
+        structure_ranks.add(int(match.group(3)))
+        continue
+    match = scores.match(path.name)
+    if not match or match.group(1) != job:
+        continue
+    try:
+        json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        continue
+    score_ranks.add(int(match.group(2)))
+for rank in sorted(structure_ranks - score_ranks):
+    print(f"ColabFold produced no score for job {job!r} rank {rank}", file=sys.stderr)
+    sys.exit(1)
 PY
 }
 
@@ -195,6 +222,7 @@ fi
 for job_name in "${job_names[@]}"; do
   [[ -n "$(colabfold_ranked_files "$job_name" present)" ]] || {
     echo "ColabFold produced no structure for $job_name" >&2; exit 1; }
+  colabfold_ranked_files "$job_name" require-scores
 done
 # Interface confidence is optional upstream: it is emitted only for complexes.
 # Flatten the per-chain-pair values for the result protocol; absence is not a

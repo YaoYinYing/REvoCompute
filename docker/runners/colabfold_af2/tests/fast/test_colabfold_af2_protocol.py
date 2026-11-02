@@ -111,11 +111,18 @@ for job in "${jobs[@]}"; do
   else
     [[ -s "$output_dir/${job}.pickle" ]] || { echo "missing MSA cache for $job" >&2; exit 7; }
     if [[ -f "$output_dir/${job}_unrelaxed_rank_001_model_1.pdb" ]]; then src=REUSED; else src=FRESH; fi
-    printf "%s\n" "$src" > "$output_dir/${job}_unrelaxed_rank_001_model_1.pdb"
-    if [[ "${FAKE_INTERFACE_SCORES:-no}" == "yes" ]]; then
-      printf '{"ptm":0.8,"ipsae":{"A-B":0.61,"A-C":0.74},"pdockq2":{"A-B":0.71,"A-C":0.42}}\n' \
-        > "$output_dir/${job}_scores_rank_001_model_1.json"
-    fi
+    for ((rank = 1; rank <= ${FAKE_RANKS:-1}; rank++)); do
+      rank_name=$(printf "%03d" "$rank")
+      printf "%s\n" "$src" > "$output_dir/${job}_unrelaxed_rank_${rank_name}_model_1.pdb"
+      [[ "${FAKE_NO_SCORE_JOB:-}" == "$job" || "${FAKE_NO_SCORE_RANK:-}" == "$rank" ]] && continue
+      if [[ "${FAKE_INTERFACE_SCORES:-no}" == "yes" ]]; then
+        printf '{"plddt":[80.0],"pae":[[1.0]],"ptm":0.8,"max_pae":1.0,"ipsae":{"A-B":0.61,"A-C":0.74},"pdockq2":{"A-B":0.71,"A-C":0.42}}\n' \
+          > "$output_dir/${job}_scores_rank_${rank_name}_model_1.json"
+      else
+        printf '{"plddt":[80.0],"pae":[[1.0]],"ptm":0.8,"max_pae":1.0}\n' \
+          > "$output_dir/${job}_scores_rank_${rank_name}_model_1.json"
+      fi
+    done
     printf "done\n" > "$output_dir/${job}.done.txt"
   fi
 done
@@ -254,7 +261,11 @@ def test_colabfold_model_stage_omits_interface_summary_for_monomers(tmp_path):
     completed = _run_with_manifest(COLABFOLD_RUNNER_SCRIPT, input_file, output_dir, env, extra_args=("-s", "model"))
 
     assert completed.returncode == 0, completed.stderr
-    assert not (_result_dir(output_dir) / "interface_scores.json").exists()
+    result = _result_dir(output_dir)
+    assert not (result / "interface_scores.json").exists()
+    scores = json.loads((result / "query_scores_rank_001_model_1.json").read_text(encoding="utf-8"))
+    assert {"plddt", "pae", "ptm"} <= scores.keys()
+    assert "ipsae" not in scores
     assert (output_dir / "task_finished").is_file()
 
 
@@ -447,6 +458,7 @@ def test_colabfold_multirecord_recomputes_every_job(tmp_path):
     assert model.returncode == 0, model.stderr
     for job in jobs:
         assert (result / f"{job}_unrelaxed_rank_001_model_1.pdb").read_text(encoding="utf-8") == "FRESH\n"
+        assert (result / f"{job}_scores_rank_001_model_1.json").is_file()
         assert (result / f"{job}.done.txt").is_file()
     assert (output_dir / "task_finished").is_file()
     assert _calls(env) == ["features", "model"]
@@ -459,6 +471,48 @@ def test_colabfold_multirecord_recomputes_every_job(tmp_path):
     for job in jobs:
         assert (result / f"{job}_unrelaxed_rank_001_model_1.pdb").read_text(encoding="utf-8") == "FRESH\n"
     assert _calls(env) == ["features", "model", "model"]
+
+
+def test_colabfold_model_requires_a_score_for_every_job(tmp_path):
+    env, input_file, output_dir, jobs = _multirecord_env(tmp_path)
+    env["FAKE_NO_SCORE_JOB"] = "multirecord_1"
+    assert _run_stage(env, input_file, output_dir, "features").returncode == 0
+    result = _result_dir(output_dir)
+    features_before = {
+        name: (result / name).read_bytes()
+        for job in jobs
+        for name in (f"{job}.a3m", f"{job}.pickle")
+    }
+
+    model = _run_stage(env, input_file, output_dir, "model")
+
+    assert model.returncode != 0
+    assert "produced no score for job 'multirecord_1' rank 1" in model.stderr
+    assert not (output_dir / "task_finished").exists()
+    for name, content in features_before.items():
+        assert (result / name).read_bytes() == content
+    for job in jobs:
+        assert (result / f"{job}_unrelaxed_rank_001_model_1.pdb").is_file()
+    assert (result / "multirecord_2_scores_rank_001_model_1.json").is_file()
+    assert not (result / "multirecord_1_scores_rank_001_model_1.json").exists()
+
+
+def test_colabfold_model_requires_a_score_for_every_published_rank(tmp_path):
+    env, input_file, output_dir = _retry_env(tmp_path)
+    assert _run_stage(env, input_file, output_dir, "features").returncode == 0
+    env["FAKE_RANKS"] = "2"
+    env["FAKE_NO_SCORE_RANK"] = "2"
+
+    model = _run_stage(env, input_file, output_dir, "model")
+
+    assert model.returncode != 0
+    assert "produced no score for job 'query' rank 2" in model.stderr
+    result = _result_dir(output_dir)
+    assert (result / "query_unrelaxed_rank_001_model_1.pdb").is_file()
+    assert (result / "query_scores_rank_001_model_1.json").is_file()
+    assert (result / "query_unrelaxed_rank_002_model_1.pdb").is_file()
+    assert not (result / "query_scores_rank_002_model_1.json").exists()
+    assert not (output_dir / "task_finished").exists()
 
 
 def test_colabfold_multirecord_missing_second_job_output_fails(tmp_path):
