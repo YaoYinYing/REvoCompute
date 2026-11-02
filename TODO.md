@@ -1,7 +1,7 @@
 # PR #131 — Environment / Execution Separation
 
 **Campaign:** Runner Environment–Execution Separation
-**Status:** M0-M3 implemented; exact-head CI, independent review, and isolated target-host acceptance (M4) pending. NOT merge-ready.
+**Status:** M0-M4 complete at `ddcf4933`: exact-head CI green, independent reviews closed, and isolated Slurm/Apptainer acceptance green for AlphaFold 3, GREMLIN, GREMLIN_LH and the composed GREMLIN→GREMLIN_LH path, including the overlay-only no-rebuild experiment. Final Campaign Acceptance Auditor and maintainer merge authorization pending. NOT merge-ready.
 **Base:** `main` at `8704d8ecc4c5b52b428ff09e4f7736bf5acebb62` (merged #130).
 **Design:** [Runner Environment–Execution Separation](docs/developer-guide/runner-environment-execution-separation.md).
 **Canonical existing contract:** [Runtime Bundles](docs/runner-guide/runtime-bundles.md).
@@ -181,31 +181,31 @@ classification; no green-only superficial test accepted.
 
 ## M4 — Isolated real scientific acceptance (Owner: Scientific Acceptance)
 
-- [ ] Secure bounded operator clearance for candidate SIF builds and
+- [x] Secure bounded operator clearance for candidate SIF builds and
       isolated Slurm/Apptainer acceptance if needed. No production SIF
       promotion, restart or deployment implied.
-- [ ] Build the **new candidate SIF once per changed environment**; verify
+- [x] Build the **new candidate SIF once per changed environment**; verify
       `%test`, build provenance, environment capability and SIF digest.
       This one-time rebuild is expected because the migration changes
       `.def`. Do not claim zero rebuild for initial migration.
-- [ ] Execute AF3 minimal `features -> model` CPU/GPU composed workflow
+- [x] Execute AF3 minimal `features -> model` CPU/GPU composed workflow
       with verified feature input, model results, Slurm resource receipt and
       GPU ledger settlement.
-- [ ] Execute GREMLIN's `msa`, `fit` and `pssm` with distinct
+- [x] Execute GREMLIN's `msa`, `fit` and `pssm` with distinct
       StageRun/allocation IDs and validated declared artifacts.
-- [ ] Execute standalone GREMLIN_LH and real cross-family
+- [x] Execute standalone GREMLIN_LH and real cross-family
       `gremlin_msa_to_lh_fit`: validate MSA SHA-256 of producer and consumer
       role, actual GREMLIN_LH fit outputs, and per-family exact SIF + Runtime
       Bundle identities. No sample/stub scientific pass allowed here.
-- [ ] Perform the **post-migration overlay-only experiment** using controlled
+- [x] Perform the **post-migration overlay-only experiment** using controlled
       adapter-only edits without changing scientific output semantics;
       prove actual no-SIF-rebuild behavior and bundle re-acceptance. Restore
       intended code before final acceptance and repeat exact-head gates.
-- [ ] Capture case reports, stage attempts/status/identities, scientific
+- [x] Capture case reports, stage attempts/status/identities, scientific
       outputs/checks, scheduler IDs/resources, provenance, database isolation
       and distinct candidate/active state. Post canonical receipts in PR
       threads with exact head, not only filesystem paths.
-- [ ] Negative live-test attempts preserve active images/bundles; a
+- [x] Negative live-test attempts preserve active images/bundles; a
       subsequently validated candidate uses the existing governed activation
       path, without unauthorized production activation.
 
@@ -214,15 +214,19 @@ path; build/no-build decision proven, not just inferred from identity tests.
 
 ## M5 — Fleet audit, documentation and final gate (Owners: Adviser + Commander)
 
-- [ ] Audit all remaining Runner Family definitions for baked REvoCompute
+- [x] Audit all remaining Runner Family definitions for baked REvoCompute
       entrypoints, algorithm scripts, lock-file classification and hardcoded
       `/app/revocompute` execution. Produce a follow-up inventory, not a
-      blanket mutation of unrelated families.
+      blanket mutation of unrelated families. (Inventory posted in the PR
+      thread: 10 families bundle-driven, 31 keep baked adapters behind
+      shared-helper overlays, 2 declare no overlay. None of the unmigrated
+      families declares its entrypoint in `runtime_overlay`, so the new
+      entrypoint contract cannot reject them.)
 - [x] Reconcile `docs/runner-guide/runtime-bundles.md` with implemented
       behavior and link the architectural rationale. Make scope/limitations
       explicit: upstream libraries and compiled ABI artifacts can be image
       dependencies; pure REvoCompute adapters belong in bundles.
-- [ ] Exact-head independent R1/R2/R3, security/scientific review and Examiner
+- [x] Exact-head independent R1/R2/R3, security/scientific review and Examiner
       complete; all new findings resolved in PR threads with regression
       evidence. Independent Campaign Adviser independently checks no
       hidden scope expansion and gives a separate verdict.
