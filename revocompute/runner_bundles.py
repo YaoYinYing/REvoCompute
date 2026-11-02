@@ -14,6 +14,7 @@ which bundle a new submission would pin.
 from __future__ import annotations
 
 import os
+from typing import Mapping
 
 from revocompute.runner_registry import RuntimeFamily, runner_enabled
 
@@ -31,8 +32,48 @@ def runner_bundle_root(state) -> str:
     return os.path.join(os.path.dirname(os.path.abspath(state.server_dir())), "runtime-bundles")
 
 
+def _receipt_authorizes(
+    state,
+    family: RuntimeFamily,
+    digest: str,
+    candidate_bundles: dict[str, str] | None,
+    artifact: str | None,
+) -> bool:
+    """Whether a passing live-test receipt covers this exact SIF + bundle pair.
+
+    Reuses the live-test receipt validator, including its build provenance,
+    test-definition, configuration, and composed-companion identity.  A missing
+    or mismatched receipt is a refusal, never an inferred activation.
+    """
+    from revocompute.runner_live_test import receipt_valid_for_bundle
+
+    try:
+        return receipt_valid_for_bundle(
+            state, family, digest, artifact=artifact, candidate_bundles=candidate_bundles
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def _activation_artifact(family: RuntimeFamily, activate_artifacts: Mapping[str, str] | None) -> str:
+    """The exact artifact an activation receipt must cover.
+
+    A plain ``setup``/``restart`` activates what execution will load, the active
+    SIF.  Only the live-test's post-PASS activation names the candidate it
+    actually ran, because that is the artifact its receipt covers.
+    """
+    if activate_artifacts is None:
+        return family.slurm_image
+    return activate_artifacts.get(family.name, family.slurm_image)
+
+
 def materialize_runner_bundles(
-    state, families: list[RuntimeFamily], *, activate: bool = True, digests: dict[str, str] | None = None
+    state,
+    families: list[RuntimeFamily],
+    *,
+    activate: bool = True,
+    digests: dict[str, str] | None = None,
+    activate_artifacts: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Snapshot each enabled family's declared overlay; return family → digest.
 
@@ -41,6 +82,18 @@ def materialize_runner_bundles(
     index, which is what makes a bundle eligible for a *new* submission — so
     candidate validation creates the snapshot without changing what a queued
     task or the running deployment resolves.
+
+    A *changed* binding is published only when a live-test receipt validates
+    that exact family, digest, artifact, build provenance, configuration, and
+    test definition.  Without one the previous binding stays in place and the
+    family reads stale, rather than an untested digest taking over because a
+    deployment restarted.  The receipt must cover the artifact execution loads
+    (``activate_artifacts`` names the live-test candidates explicitly).
+
+    A rollback hold is durable operator intent: while it stands, the held digest
+    stays active and the newer checkout is never published.  A hold is
+    re-verified against the store, and a held digest whose snapshot is gone
+    fails the deployment rather than silently reverting to the checkout.
 
     ``digests`` publishes already-materialized candidates instead of recomputing
     them.  That is what activation must do: publishing a freshly recomputed
@@ -51,6 +104,7 @@ def materialize_runner_bundles(
 
     store_root = runner_bundle_root(state)
     index = runtime_bundle.load_index(store_root)
+    holds = runtime_bundle.load_rollback_holds(store_root)
     candidate: dict[str, str] = {}
     for family in families:
         # Activation is what makes a bundle eligible for a *new* submission, so
@@ -76,8 +130,45 @@ def materialize_runner_bundles(
                 family.root.parent, family.runtime_overlay, store_root
             )
         if activate:
+            artifact = _activation_artifact(family, activate_artifacts)
+            held = holds.get(family.name)
+            if held is not None and held != candidate[family.name]:
+                # The operator's rollback outranks the checkout until a full
+                # live-test PASS clears the hold.  Verify the snapshot first:
+                # a hold never licenses bytes the store cannot prove.
+                runtime_bundle.verified_hold(store_root, family.name, holds)
+                # The held digest is the active binding, not the candidate being
+                # validated: its receipt names the companions published when the
+                # rollback was accepted, never this pass's candidates.
+                if not _receipt_authorizes(state, family, held, None, artifact):
+                    print(
+                        f"[SLURM] Runtime bundle {family.name}: rollback hold {held} "
+                        f"not activated (no valid live-test receipt); active remains "
+                        f"{index.get(family.name) or '-'}"
+                    )
+                    continue
+                index[family.name] = held
+                print(
+                    f"[SLURM] Runtime bundle {family.name}: {held} held by rollback; "
+                    f"source {candidate[family.name]} not published"
+                )
+                continue
+            if held is not None:
+                holds.pop(family.name, None)
+            previous = index.get(family.name)
+            if previous != candidate[family.name] and not _receipt_authorizes(
+                state, family, candidate[family.name], digests, artifact
+            ):
+                # Keep the prior binding: a deployment restart is not a
+                # scientific acceptance, and readiness reports the family stale.
+                print(
+                    f"[SLURM] Runtime bundle {family.name}: {candidate[family.name]} "
+                    f"not activated (no valid live-test receipt); active remains {previous or '-'}"
+                )
+                continue
             index[family.name] = candidate[family.name]
             print(f"[SLURM] Runtime bundle {family.name}: {candidate[family.name]}")
     if activate:
         runtime_bundle.write_index(store_root, index)
+        runtime_bundle.write_rollback_holds(store_root, holds)
     return candidate

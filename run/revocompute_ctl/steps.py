@@ -29,6 +29,7 @@ import yaml
 from revocompute_ctl.compose import compose_args, remove_mcp_service, run_cmd, stack_services
 from revocompute_ctl.attestation import clear_deployment_attestations
 from revocompute.runner_bundles import materialize_runner_bundles, runner_bundle_root
+from revocompute.runner_readiness import load_instance_families
 from revocompute.runner_registry import (
     RuntimeFamily,
     build_slurm_images,
@@ -185,11 +186,65 @@ def prune_runtime_bundles(state, keep: dict[str, str]) -> None:
     kept = (
         set(keep.values())
         | runtime_bundle.index_digests(store_root)
+        | runtime_bundle.rollback_digests(store_root)
         | task_pinned_bundle_digests(state)
     )
     removed = runtime_bundle.garbage_collect(store_root, kept, min_age_seconds=window_seconds)
     if removed:
         print(f"[SLURM] Pruned {len(removed)} superseded runtime bundle(s).")
+
+
+def cmd_rollback_bundle(state, runner: str, digest: str) -> None:
+    """Switch one family's active Runtime Bundle to an already-accepted prior one.
+
+    Rollback is an identity switch, never a rebuild: the target must be a
+    materialized snapshot that still verifies, and a live-test receipt must
+    authorize that exact family + digest for the active artifact, build
+    provenance, configuration, and test definition.  The choice is recorded as a
+    durable hold so ``setup``/``restart`` cannot silently publish the newer
+    checkout again.  Every refusal leaves the index byte-identical.  Snapshots
+    are never rewritten or pruned.
+    """
+    from revocompute import runtime_bundle
+    from revocompute.runner_live_test import receipt_valid_for_bundle
+
+    store_root = runner_bundle_root(state)
+    if runtime_bundle.resolve_pinned(store_root, digest) is None:
+        print(
+            f"Runtime bundle {digest!r} is not a materialized, verifiable snapshot in {store_root}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    families = [family for family in load_instance_families(state) if family.name == runner]
+    if not families:
+        print(f"Unknown Runner Family: {runner}", file=sys.stderr)
+        raise SystemExit(1)
+    family = families[0]
+    if not family.runtime_overlay:
+        print(f"Runner Family {runner} declares no runtime overlay; there is no bundle to roll back.", file=sys.stderr)
+        raise SystemExit(1)
+    # The receipt must cover the artifact execution loads, never a staged
+    # candidate that a later promotion would replace anyway.
+    if not receipt_valid_for_bundle(
+        state, family, digest, artifact=family.slurm_image, candidate_bundles=None
+    ):
+        print(
+            f"Runtime bundle {digest} has no valid live-test receipt for Runner Family {runner}; "
+            "refusing rollback.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    index = runtime_bundle.load_index(store_root)
+    previous = index.get(family.name)
+    index[family.name] = digest
+    holds = runtime_bundle.load_rollback_holds(store_root)
+    holds[family.name] = digest
+    # Publish the intent first: if the process dies before the index write, the
+    # next deployment reconciles the index to this hold instead of treating a
+    # half-finished rollback as an appeal to the checkout.
+    runtime_bundle.write_rollback_holds(store_root, holds)
+    runtime_bundle.write_index(store_root, index)
+    print(f"Runtime bundle {family.name}: {previous or '-'} -> {digest}")
 
 
 def reserved_test_namespaces(source_root: Path, server_root: Path) -> tuple[Path, ...]:
@@ -577,6 +632,7 @@ class RestartFlags:
     collection: str = "smoke"
     all_runners: bool = False
     as_json: bool = False
+    digest: str = ""
 
 
 class StepRegistry:
@@ -712,7 +768,7 @@ def cmd_setup(state) -> None:
         materialize_demo_replays(state)
         if not state.demo_mode():
             os.makedirs(runner_bundle_root(state), exist_ok=True)
-            materialize_runner_bundles(state, load_plugin_families(deployment_plugin_root(state)))
+            materialize_runner_bundles(state, load_instance_families(state))
     print(f"Setup completed. Using env file: {state.env_file}")
     print(f"Review {state.env_file} before starting services.")
 

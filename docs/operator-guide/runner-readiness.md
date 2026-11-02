@@ -20,7 +20,11 @@ change reports `BUILD_STALE` even when the execution contract also changed.
 A `runtime_overlay` change reports `VALIDATION_STALE` with
 `reason=RUNTIME_BUNDLE_CHANGED`: the SIF is current, only the mounted runtime
 code moved, and the action is to rerun the live test against the same SIF
-(see [Runtime Bundles](../runner-guide/runtime-bundles.md)).
+(see [Runtime Bundles](../runner-guide/runtime-bundles.md#freshness)). Readiness
+compares the checked-out overlay source digest with the published index digest,
+so the edit is visible before any build, restart, or activation. A family that
+declares an overlay but has no published binding is never `READY`; it refuses
+new submissions until a receipt authorizes a binding.
 Execution-affecting Task/runtime fields, mounts, resource limits, service
 identity, `test.yaml`, fixtures, or required coverage produce
 `VALIDATION_STALE` without requiring a rebuild. Presentation-only fields such
@@ -77,6 +81,16 @@ the same readiness evaluator, so the two surfaces agree.
   platform is degraded" from "the family's evidence is stale".
 
 `READY` therefore means "eligible for a new submission", subject to all four.
+
+## Bundle-only update
+
+A `VALIDATION_STALE` family with `reason=RUNTIME_BUNDLE_CHANGED` needs no SIF
+rebuild. Run the family's live test against the current SIF; it materializes a
+candidate bundle snapshot, validates it, and on PASS activates exactly the
+digest it validated. A restart does not activate an untested digest, and a
+failed test leaves the prior binding in place while the family continues to
+read stale. The full procedure is in
+[Live Testing and Receipts](live-testing.md#bundle-only-update).
 
 ## Correcting a non-READY state
 

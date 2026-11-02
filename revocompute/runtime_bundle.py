@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import stat
 import time
 from dataclasses import dataclass
@@ -36,9 +37,15 @@ from typing import Any, Iterable, Mapping
 #: never user-configurable, never a per-family mount destination.
 RUNTIME_MOUNT_TARGET = "/opt/revocompute/runtime"
 
+#: Roots that used to hold baked REvoCompute code.  They do not name overlay
+#: content: an executable delivered by the overlay must resolve under the
+#: reserved mount, never from a legacy image path.
+LEGACY_RUNTIME_ROOT = "/app/revocompute"
+
 #: Directory name for one materialized snapshot: ``sha256-<hex>``.
 _BUNDLE_PREFIX = "sha256-"
 _INDEX_NAME = "index.json"
+_ROLLBACK_NAME = "rollback.json"
 
 _DIR_MODE = 0o555
 _FILE_MODE = 0o444
@@ -139,6 +146,10 @@ def _walk_declaration(root: Path, relative: str) -> list[tuple[str, Path]]:
     for directory, dirnames, filenames in os.walk(source, followlinks=False):
         dirnames.sort()
         filenames.sort()
+        # Identity, materialization, and declaration enumeration must agree:
+        # bytecode byproducts are not overlay content.  Symlink checks still
+        # run below, so pruning cannot hide an unsupported object.
+        ignored = {name for name in dirnames if name in _IGNORED_DIRS}
         for name in dirnames + filenames:
             child = Path(directory) / name
             child_mode = os.lstat(child).st_mode
@@ -151,6 +162,7 @@ def _walk_declaration(root: Path, relative: str) -> list[tuple[str, Path]]:
             if stat.S_ISREG(child_mode):
                 inner = child.relative_to(root).as_posix()
                 candidates.append((inner, child.resolve()))
+        dirnames[:] = [name for name in dirnames if name not in ignored]
     return candidates
 
 
@@ -170,6 +182,220 @@ def collect_overlay_entries(runner_root: str | os.PathLike[str], declared: Itera
     if not entries:
         raise RuntimeBundleError("Runtime overlay declares no files")
     return tuple(entries)
+
+
+def _entrypoint_tokens(value: str) -> tuple[str, ...]:
+    """Every path-bearing word in one entrypoint element.
+
+    An entrypoint may be argv, a single script path, or a shell command such as
+    ``bash -c "exec /app/revocompute/run.sh"``.  The shell string is tokenized
+    with punctuation so a legacy path cannot hide behind quoting, operators, or
+    extra words.
+    """
+    try:
+        lexer = shlex.shlex(value, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return tuple(lexer)
+    except ValueError:
+        return tuple(value.split())
+
+
+def _token_basename(token: str) -> str:
+    """A path word's basename after one layer of shell quoting.
+
+    ``shlex`` leaves backticks and inner quotes attached, so a backtick- or
+    quote-suffixed ``/tmp/run.sh`` and ``./run.sh`` all name ``run.sh``.
+    Comparing the quoted spelling would let a declared executable hide behind
+    it.
+    """
+    return Path(token.lstrip("./").strip("\"'`")).name
+
+
+def _anchored_root_index(token: str, root: str) -> int | None:
+    """Where ``root`` begins a path word, or ``None``.
+
+    A substring is not a path prefix: ``/tmp/opt/...`` and ``x/opt/...`` occur
+    only inside a larger arbitrary path.  The occurrence must start the word or
+    follow ``=`` (an env assignment or ``--flag=``), and must end the word or be
+    followed by ``/``.  A match like ``/opt/revocompute/runtime-extra`` is a
+    different path, not the reserved mount.
+    """
+    start = 0
+    while (index := token.find(root, start)) >= 0:
+        before = token[index - 1] if index else ""
+        end = index + len(root)
+        after = token[end] if end < len(token) else ""
+        if (not before or before == "=") and (not after or after == "/"):
+            return index
+        start = index + 1
+    return None
+
+
+def _is_assignment(token: str) -> bool:
+    """Whether a word is a ``NAME=value`` environment assignment."""
+    name, separator, _value = token.partition("=")
+    return bool(separator) and name.isidentifier()
+
+
+_SHELLS = {"bash", "sh", "dash", "zsh", "ksh"}
+_REFUSED_PREFIXES = {"command", "builtin", "time", "exec", "nohup"}
+
+
+def _code_script(code: tuple[str, ...]) -> str | None:
+    """The script a shell ``-c`` code word executes, or ``None``.
+
+    Only ``M ...`` and ``exec M ...`` shapes are accepted; an option after
+    ``exec`` or any other prefix is refused.
+    """
+    if not code or code[0].startswith("-"):
+        return None
+    word = _token_basename(code[0])
+    if word == "exec":
+        if len(code) < 2 or code[1].startswith("-"):
+            return None
+        return code[1]
+    if word in _REFUSED_PREFIXES:
+        return None
+    return code[0]
+
+
+def _shell_script(
+    flat: list[tuple[int, str]], groups: tuple[tuple[str, ...], ...], position: int
+) -> str | None:
+    """The script operand of a shell word, or ``None`` for an option."""
+    index = position + 1
+    if index >= len(flat):
+        return None
+    token = flat[index][1]
+    if token not in {"-c", "--command"}:
+        return None if token.startswith("-") else token
+    flag_group = flat[index][0]
+    same_group = tuple(item for group, item in flat[index + 1 :] if group == flag_group)
+    if same_group:
+        return _code_script(same_group)
+    following = groups[flag_group + 1] if flag_group + 1 < len(groups) else ()
+    return _code_script(following)
+
+
+def _executed_script(groups: tuple[tuple[str, ...], ...]) -> str | None:
+    """The script an accepted entrypoint shape executes, or ``None``.
+
+    Accepted shapes are ``[M, ...]``, ``env (NAME=value)* [shell] M ...``,
+    ``[shell, M, ...]``, and ``[shell, "-c", code]`` with code shaped ``M ...``
+    or ``exec M ...``.  Options on the interpreter or ``env`` are refused rather
+    than parsed, so ``bash -o errexit M`` and ``env -u X bash M`` are not
+    accepted forms; unknown shapes fail closed.
+    """
+    flat = [(index, token) for index, group in enumerate(groups) for token in group]
+    if not flat:
+        return None
+    first = flat[0][1]
+    if first == "env":
+        index = 1
+        while index < len(flat) and _is_assignment(flat[index][1]):
+            index += 1
+        if index >= len(flat):
+            return None
+        token = flat[index][1]
+        if _token_basename(token) in _SHELLS:
+            return _shell_script(flat, groups, index)
+        if token.startswith("-") or _token_basename(token) in _REFUSED_PREFIXES:
+            return None
+        return token
+    if first.startswith("-") or _is_assignment(first):
+        return None
+    word = _token_basename(first)
+    if word in _SHELLS:
+        return _shell_script(flat, groups, 0)
+    if word in _REFUSED_PREFIXES:
+        return None
+    return first
+
+
+def overlay_entrypoint_error(
+    entrypoint: Iterable[str],
+    entries: Iterable[OverlayEntry],
+    *,
+    source_directory: str | None = None,
+) -> str | None:
+    """The contract violation for an entrypoint that names an overlay-declared file.
+
+    An executable the bundle delivers resolves only under the reserved mount.
+    A manifest that spells it as a legacy image path, an arbitrary absolute
+    path, a relative path, or a shell-wrapped word would start baked code, or
+    nothing, while its bundle identity says it runs the snapshot.  Every argv
+    element and every shell word is inspected, not just the last one, so
+    ``bash -c "exec /app/revocompute/run.sh"`` cannot bypass the rule.  A path
+    under the reserved mount must be a declared entry.  A family whose source
+    directory declares ``run.sh`` must have it as the executed command, not
+    unrelated code or a later argument; ``source_directory`` names that
+    directory, and ``None`` keeps a helper-only family exempt.  Families whose
+    entrypoint is not overlay-declared are outside this contract: they have not
+    migrated and keep their image entrypoint.
+    """
+    declared_entries = tuple(entries)
+    if not declared_entries:
+        return None
+    steps = tuple(entrypoint or ())
+    declared = {entry.relative for entry in declared_entries}
+    declared_names = {Path(entry.relative).name for entry in declared_entries}
+    mounted = {f"{RUNTIME_MOUNT_TARGET}/{entry.relative}" for entry in declared_entries}
+    own = {f"{source_directory}/run.sh"} & declared if source_directory else set()
+    own_mounts = {f"{RUNTIME_MOUNT_TARGET}/{relative}" for relative in own}
+    violation = (
+        "Runtime entrypoint for an overlay-declared file must resolve under "
+        f"{RUNTIME_MOUNT_TARGET}"
+    )
+    step_tokens = [
+        tuple(_entrypoint_tokens(step)) if isinstance(step, str) else () for step in steps
+    ]
+    for tokens in step_tokens:
+        # A shell command may ``cd`` to the legacy root and run a relative
+        # script.  The relative name is only dangerous when the overlay
+        # delivers an entry with that basename.
+        token_names = {_token_basename(token) for token in tokens if token}
+        for token in tokens:
+            if not token or token in mounted:
+                continue
+            match: tuple[str, str, bool] | None = None
+            for root, legacy in ((RUNTIME_MOUNT_TARGET, False), (LEGACY_RUNTIME_ROOT, True)):
+                if (index := _anchored_root_index(token, root)) is not None:
+                    match = (token[index:], root, legacy)
+                    break
+            # Outside either known root: a bare or relative spelling of a
+            # declared executable names that executable without resolving
+            # through the content-addressed mount.
+            if match is None:
+                if _token_basename(token) in declared_names:
+                    return f"{violation}: {token}"
+                continue
+            path, root, legacy = match
+            if path == root:
+                if legacy and declared_names & token_names:
+                    return f"{violation}: {path}"
+                continue
+            relative = path[len(root) + 1 :]
+            if not legacy:
+                if relative not in declared:
+                    return f"Runtime entrypoint is not in the declared overlay: {path}"
+                continue
+            # Legacy images flattened each family's declared files into
+            # ``/app/revocompute``, so a legacy ``/app/revocompute/run.sh``
+            # and an overlay entry ``example/run.sh`` name the same
+            # executable.  Refuse the legacy spelling when the overlay
+            # delivers that file; an entrypoint the overlay does not deliver
+            # belongs to an unmigrated family and stays baked.
+            if relative in declared or _token_basename(relative) in declared_names:
+                return f"{violation}: {path}"
+    if own_mounts:
+        command = _executed_script(tuple(step_tokens))
+        if command not in own_mounts:
+            return (
+                "Runtime entrypoint must start the family's own run script under "
+                f"{RUNTIME_MOUNT_TARGET}: {command or 'none'}"
+            )
+    return None
 
 
 #: Build byproducts that are not part of a declaration's identity.  A ``.pyc``
@@ -375,6 +601,10 @@ def index_path(store_root: str | os.PathLike[str]) -> Path:
     return Path(store_root) / _INDEX_NAME
 
 
+def rollback_path(store_root: str | os.PathLike[str]) -> Path:
+    return Path(store_root) / _ROLLBACK_NAME
+
+
 def load_index(store_root: str | os.PathLike[str]) -> dict[str, str]:
     """The published ``family -> bundle digest`` binding.
 
@@ -408,6 +638,74 @@ def write_index(store_root: str | os.PathLike[str], index: Mapping[str, str]) ->
 def index_digests(store_root: str | os.PathLike[str]) -> set[str]:
     """Every digest the published binding currently references."""
     return set(load_index(store_root).values())
+
+
+def load_rollback_holds(store_root: str | os.PathLike[str]) -> dict[str, str]:
+    """The per-family rollback intent: do not re-activate the checkout yet.
+
+    A rollback is an operator decision, so it outlives the invocation that made
+    it.  Without this durable record the next ``setup``/``restart`` would
+    re-materialize the newer checkout, find an old PASS receipt for it, and
+    silently undo the rollback.  An absent file means no rollback; an
+    unreadable or malformed one raises rather than silently reverting to the
+    checkout, because dropping the intent is exactly the failure this record
+    prevents.
+    """
+    path = rollback_path(store_root)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise RuntimeBundleError(f"Runtime rollback intent is unreadable: {path!r}") from exc
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeBundleError(f"Runtime rollback intent is malformed: {path!r}") from exc
+    if not isinstance(raw, Mapping):
+        raise RuntimeBundleError(f"Runtime rollback intent is malformed: {path!r}")
+    holds: dict[str, str] = {}
+    for family, digest in raw.items():
+        if not isinstance(family, str) or not family or not isinstance(digest, str) or not digest:
+            raise RuntimeBundleError(f"Runtime rollback intent has an invalid entry: {path!r}")
+        holds[family] = digest
+    return holds
+
+
+def write_rollback_holds(store_root: str | os.PathLike[str], holds: Mapping[str, str]) -> None:
+    """Atomically publish the per-family rollback intent."""
+    payload = {family: digest for family, digest in sorted(holds.items())}
+    destination = rollback_path(store_root)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{_ROLLBACK_NAME}.{os.getpid()}")
+    temporary.write_text(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o444)
+    os.replace(temporary, destination)
+
+
+def verified_hold(
+    store_root: str | os.PathLike[str], family: str, holds: Mapping[str, str] | None = None
+) -> str | None:
+    """The verified digest a rollback holds for ``family``, or ``None``.
+
+    The hold is a preference, never a licence: a digest whose snapshot is
+    missing or no longer hashes to its name raises, so admission and readiness
+    fail closed instead of falling back to the checkout or to a stale index.
+    """
+    holds = load_rollback_holds(store_root) if holds is None else holds
+    digest = holds.get(family)
+    if not digest:
+        return None
+    if resolve_pinned(store_root, digest) is None:
+        raise RuntimeBundleError(
+            f"Runtime bundle {digest!r} held for {family!r} is unavailable in {store_root!r}"
+        )
+    return digest
+
+
+def rollback_digests(store_root: str | os.PathLike[str]) -> set[str]:
+    """Every digest a rollback intent holds active."""
+    return set(load_rollback_holds(store_root).values())
 
 
 def resolve_pinned(store_root: str | os.PathLike[str], digest: Any) -> Path | None:
@@ -452,19 +750,24 @@ def resolve_for_submission(
 
     ``digest`` overrides the published binding for candidate validation: a live
     test must exercise the exact snapshot it just materialized, which is not yet
-    eligible for new submissions.
+    eligible for new submissions.  A valid rollback hold otherwise takes
+    precedence over the index, so admission follows the operator's rollback even
+    when the index has not been reconciled yet.
 
-    Returns ``None`` only when the family declares no overlay, so a task without
-    a runtime overlay is exactly the task it was before this mechanism existed.
-    A family that *does* declare one but has no resolvable snapshot raises.
+    Returns ``None`` when the family declares no overlay, even if a stale index
+    entry remains, so readiness and submission agree after a family drops its
+    overlay.  A family that *does* declare one but has no resolvable snapshot
+    raises.
     """
-    chosen = digest if digest is not None else index.get(family)
-    if chosen is None:
-        if declares_overlay:
-            raise RuntimeBundleError(
-                f"Runner family {family!r} declares a runtime overlay but has no published bundle"
-            )
+    if not declares_overlay:
         return None
+    chosen = digest if digest is not None else verified_hold(store_root, family)
+    if chosen is None:
+        chosen = index.get(family)
+    if chosen is None:
+        raise RuntimeBundleError(
+            f"Runner family {family!r} declares a runtime overlay but has no published bundle"
+        )
     if resolve_pinned(store_root, chosen) is None:
         raise RuntimeBundleError(
             f"Runtime bundle {chosen!r} for {family!r} is unavailable in {store_root!r}"
@@ -526,11 +829,17 @@ __all__ = [
     "garbage_collect",
     "index_path",
     "load_index",
+    "load_rollback_holds",
     "materialize",
     "normalize_overlay_paths",
     "overlay_build_overlap",
     "overlay_digest",
+    "overlay_entrypoint_error",
     "resolve_pinned",
+    "rollback_digests",
+    "rollback_path",
+    "verified_hold",
     "verify_bundle",
     "write_index",
+    "write_rollback_holds",
 ]

@@ -129,6 +129,11 @@ def parse_args(argv: list[str]) -> tuple[str, str, RestartFlags]:
                 _usage_exit("--collection requires a collection name.")
             flags.collection = rest[position]
             collection_set = True
+        elif arg == "--digest":
+            position += 1
+            if position >= len(rest) or rest[position].startswith("--"):
+                _usage_exit("--digest requires a sha256:... Runtime Bundle digest.")
+            flags.digest = rest[position]
         elif arg == "--all":
             flags.all_runners = True
         elif arg == "--json":
@@ -138,16 +143,26 @@ def parse_args(argv: list[str]) -> tuple[str, str, RestartFlags]:
         else:
             _usage_exit(f"Unexpected argument: {arg}")
         position += 1
-    if subcommand not in ("live-test", "runner-status", "api-receipt") and (
+    if subcommand not in ("live-test", "runner-status", "api-receipt", "rollback-bundle") and (
         flags.runner or flags.task or flags.all_runners or collection_set
     ):
-        _usage_exit("--runner, --task, --all, and --collection are only supported by live-test, runner-status, or api-receipt.")
+        _usage_exit(
+            "--runner, --task, --all, and --collection are only supported by live-test, "
+            "runner-status, api-receipt, or rollback-bundle."
+        )
     if subcommand == "runner-status" and (flags.task or collection_set):
         _usage_exit("--task and --collection are only supported by live-test.")
     if subcommand == "api-receipt" and not flags.task:
         _usage_exit("api-receipt requires --task <task-id>.")
     if subcommand == "api-receipt" and (flags.runner or flags.all_runners or collection_set):
         _usage_exit("api-receipt takes only --task <task-id>; the task's own state names its Runner.")
+    if flags.digest and subcommand != "rollback-bundle":
+        _usage_exit("--digest is only supported by rollback-bundle.")
+    if subcommand == "rollback-bundle":
+        if not flags.runner or not flags.digest:
+            _usage_exit("rollback-bundle requires --runner <family> and --digest <sha256:...>.")
+        if flags.task or flags.all_runners or collection_set:
+            _usage_exit("rollback-bundle takes only --runner and --digest.")
     return subcommand, reset_username, flags
 
 
@@ -207,7 +222,18 @@ def main() -> None:
         raise SystemExit(1)
 
     deployment_lock = None
-    if subcommand in ("setup", "build", "prepare", "live-test", "up", "down", "reload", "reset-passwd", "restart"):
+    if subcommand in (
+        "setup",
+        "build",
+        "prepare",
+        "live-test",
+        "rollback-bundle",
+        "up",
+        "down",
+        "reload",
+        "reset-passwd",
+        "restart",
+    ):
         deployment_lock = None if flags.dry_run else acquire_deployment_lock(env_file)
 
     if not (subcommand == "runner-status" and flags.as_json):
@@ -277,6 +303,12 @@ def main() -> None:
         except RegistryError as exc:
             print(str(exc), file=sys.stderr)
             raise SystemExit(1) from None
+    elif subcommand == "rollback-bundle":
+        require_env_file(state)
+        validate_required_settings(state)
+        from revocompute_ctl.steps import cmd_rollback_bundle
+
+        cmd_rollback_bundle(state, str(flags.runner), flags.digest)
     elif subcommand == "api-receipt":
         # Read-only against the deployment: no compose action, no lock, and no
         # secret generation. It needs only the env file that locates the store.

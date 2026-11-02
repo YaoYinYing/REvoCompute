@@ -86,7 +86,9 @@ The exact freshness action is therefore:
 - `BUILD_STALE`: run `prepare --build-sif`, live-test the candidate, then
   promote it with a prepared restart.
 - `VALIDATION_STALE`: do not rebuild; live-test the current SIF against the
-  current execution contract, then deploy normally.
+  current execution contract. If `reason=RUNTIME_BUNDLE_CHANGED`, that PASS
+  activates the validated Runtime Bundle; otherwise deploy the server/config
+  change normally after acceptance.
 - `READY` after a presentation-only change: do not rebuild or live-test; deploy
   the server/config change normally.
 
@@ -122,6 +124,11 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh live-test \
 bash run/restart.sh live-test --task gremlin
 bash run/restart.sh live-test --all --collection smoke
 
+# Switch one family to an earlier accepted Runtime Bundle (no rebuild, restart,
+# SIF change, or live test; the target snapshot and its receipt are re-verified)
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh rollback-bundle \
+  --runner <family> --digest <sha256:...>
+
 # Record the observed production evidence for a finished API submission
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh api-receipt \
   --task <task-id>
@@ -132,6 +139,13 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh mcp-status
 # Validate first, then stop/start and promote receipted candidates
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepared
 ```
+
+A Runtime Bundle rollback is durable: the controller records a per-family hold
+in the bundle store, so a later `setup` or `restart` keeps the held digest
+active instead of publishing the newer checkout. A full live-test PASS clears
+the hold and activates the validated digest; a failed test leaves it in place.
+A held snapshot that is missing or no longer verifies fails closed. See
+[Runtime Bundles](../runner-guide/runtime-bundles.md#rolling-back).
 
 `api-receipt` is read-only against the deployment: it reads the task store,
 result store, and deploy stamp and writes one machine-readable receipt under

@@ -60,8 +60,17 @@ case "${command_name}" in
           ;;
       esac
     done
-    [[ "${image:-}" == *.sif && "${1:-}" == "bash" && "${2:-}" == "/app/revocompute/run.sh" ]] || {
+    # Production executes the manifest entrypoint from the read-only Runtime
+    # Bundle, never an image-baked script.  Assert both the reserved mount and
+    # that the named entrypoint exists in the bound snapshot.
+    entrypoint="${2:-}"
+    [[ "${image:-}" == *.sif && "${1:-}" == "bash" && "${entrypoint}" == /opt/revocompute/runtime/*/run.sh ]] || {
       echo "mock apptainer received an unexpected execution plan" >&2
+      exit 2
+    }
+    bundle_source="${binds[/opt/revocompute/runtime]:-}"
+    [[ -n "${bundle_source}" && -f "${bundle_source}/${entrypoint#/opt/revocompute/runtime/}" ]] || {
+      echo "mock apptainer could not resolve the Runtime Bundle entrypoint" >&2
       exit 2
     }
     shift 2

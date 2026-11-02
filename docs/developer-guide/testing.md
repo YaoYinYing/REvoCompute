@@ -270,7 +270,9 @@ fleet projection boundary (with `tests/fleet/browser/` physically excluded).
 GREMLIN_LH fitting, artifact, upstream-equivalence and reference-generation cases
 in its locked environment, and EvoSplit tensor/clustering cases in its pinned
 Python 3.10 environment. The pinned upstream notebook is fetched at its immutable
-commit and verified by the reference generator before use.
+commit and verified by the reference generator before use. This lane covers
+`gremlin_lh` and `evosplit` only: PSSM-GREMLIN and AlphaFold 3 scientific
+acceptance is target-host live acceptance (M4), not a CI lane.
 
 The existing `tools/classify_ci_scope.py` owns lane selection, including
 `runner_fast`; workflows do not add another path policy. Unknown paths, CI policy

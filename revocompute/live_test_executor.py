@@ -86,9 +86,10 @@ def _live_task_manifest(
 
     The live test must exercise the production protocol, so it projects the same
     runner-protocol v4 keys from the same owning manifest rather than a reduced
-    hand-built shape.  ``runtime_bundles`` is resolved by the caller: it is the
-    candidate digest the controller materialized, not the published binding,
-    so a live test validates exactly what it is about to activate.
+    hand-built shape.  ``runtime_bundles`` is the exact per-family map the
+    controller froze: the candidate digest for a family validated in this pass
+    and the published binding for a companion that is not, so a live test
+    validates exactly what it is about to activate.
     """
     return {
         "version": 4,
@@ -283,6 +284,20 @@ def _live_storage_key() -> str:
     return "live-test-" + "-".join(names or ["runner"])
 
 
+def _live_test_families(task_type_def: Any) -> dict[str, Any]:
+    """Every runtime family this Task's graph executes, keyed by family name."""
+    families = {task_type_def.runtime.name: task_type_def.runtime}
+    for stage in task_type_def.workflow:
+        family_id = stage.family or task_type_def.runtime.name
+        if family_id in families:
+            continue
+        try:
+            families[family_id] = get_family(family_id)[0]
+        except KeyError as exc:
+            raise ValueError(f"live-test references unknown runtime family: {family_id}") from exc
+    return families
+
+
 def _pinned_runtime_images(task_type_def: Any) -> dict[str, str]:
     """Pin the exact SIF bytes this live-test graph is about to execute.
 
@@ -291,56 +306,57 @@ def _pinned_runtime_images(task_type_def: Any) -> dict[str, str]:
     candidate's receipt, so it pins those bytes; a production submission
     separately requires the deployment's accepted receipt for them.
     """
-    families = {task_type_def.runtime.name: task_type_def.runtime}
-    for stage in task_type_def.workflow:
-        family_id = stage.family or task_type_def.runtime.name
-        if family_id in families:
-            continue
-        try:
-            families[family_id] = get_family(family_id)[0]
-        except KeyError as exc:
-            raise ValueError(f"live-test references unknown runtime family: {family_id}") from exc
     try:
         return {
             family.name: runtime_image.runtime_image_for_submission(family).digest
-            for family in families.values()
+            for family in _live_test_families(task_type_def).values()
         }
     except runtime_image.RuntimeImageError as exc:
         raise ValueError(f"live-test runtime image is unavailable: {exc}") from exc
 
 
-def _pinned_runtime_bundles(task_type_def: Any, candidate_digest: str | None) -> dict[str, str | None]:
-    """Pin every runtime family the live-test graph will execute.
+def _pinned_runtime_bundles(task_type_def: Any, runtime_bundles: Any) -> dict[str, str | None]:
+    """Pin exactly the per-family Runtime Bundles the controller selected.
 
-    The family under test uses the candidate digest the controller materialized;
-    every other referenced family uses its published binding. A family that
-    declares an overlay but has no resolvable bundle fails the live test before
-    launch, matching production submission.
+    The request already froze every graph family: a candidate digest for a
+    family validated in this pass, the published binding for a companion that
+    was not.  This function resolves those exact digests and never substitutes
+    the published binding for a family the request names as a candidate: a
+    composed case must execute the pair its receipt will record.
+
+    An overlay family with no key in the map refuses rather than falling back,
+    and every named bundle must still resolve in the store.
     """
-    families = {task_type_def.runtime.name: task_type_def.runtime}
-    for stage in task_type_def.workflow:
-        family_id = stage.family or task_type_def.runtime.name
-        if family_id in families:
-            continue
-        try:
-            families[family_id] = get_family(family_id)[0]
-        except KeyError as exc:
-            raise ValueError(f"live-test references unknown runtime family: {family_id}") from exc
+    if not isinstance(runtime_bundles, dict):
+        raise ValueError("live-test request runtime bundle map is invalid")
+    families = _live_test_families(task_type_def)
+    unknown = sorted(set(runtime_bundles) - set(families))
+    if unknown:
+        raise ValueError(f"live-test request pins a family its graph does not run: {unknown[0]!r}")
     bundle_root = task_runtime.CONFIG.runtime_bundle_root
     index = runtime_bundle.load_index(bundle_root)
-    try:
-        return {
-            family.name: runtime_bundle.resolve_for_submission(
-                bundle_root,
-                index,
-                family.name,
-                declares_overlay=bool(family.runtime_overlay),
-                digest=candidate_digest if family.name == task_type_def.runtime.name else None,
+    pins: dict[str, str | None] = {}
+    for name, family in families.items():
+        overlay = bool(family.runtime_overlay)
+        if name in runtime_bundles:
+            chosen = runtime_bundles[name]
+            if overlay and not chosen:
+                raise ValueError(f"live-test request does not pin the runtime bundle for {name!r}")
+            if not overlay and chosen is not None:
+                raise ValueError(
+                    f"live-test request pins a runtime bundle for {name!r}, which declares no overlay"
+                )
+        elif overlay:
+            raise ValueError(f"live-test request does not pin the runtime bundle for {name!r}")
+        else:
+            chosen = None
+        try:
+            pins[name] = runtime_bundle.resolve_for_submission(
+                bundle_root, index, name, declares_overlay=overlay, digest=chosen
             )
-            for family in families.values()
-        }
-    except runtime_bundle.RuntimeBundleError as exc:
-        raise ValueError(f"live-test runtime bundle is unavailable: {exc}") from exc
+        except runtime_bundle.RuntimeBundleError as exc:
+            raise ValueError(f"live-test runtime bundle is unavailable: {exc}") from exc
+    return pins
 
 
 def _prepare_gpu_accounting(task_type_def: Any) -> dict[str, Any] | None:
@@ -421,6 +437,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         "files",
         "resources",
         "runtime_bundle_sha256",
+        "runtime_bundles",
     }
     if not isinstance(request, dict) or set(request) != required:
         raise ValueError("live-test request has an invalid schema")
@@ -428,6 +445,8 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         not isinstance(request["runtime_bundle_sha256"], str) or not request["runtime_bundle_sha256"]
     ):
         raise ValueError("live-test request runtime bundle identity is invalid")
+    if not isinstance(request["runtime_bundles"], dict):
+        raise ValueError("live-test request runtime bundle map is invalid")
     task_id, task_type, result_path = request["task_id"], request["task_type"], Path(request["result_path"])
     result_root = Path("/run/revocompute-live").resolve()
     if not result_path.is_absolute() or not result_path.resolve().is_relative_to(result_root):
@@ -564,9 +583,13 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
             }
         )
     atomic = snapshot_root / "task.json"
-    # The candidate digest travels in the request; every other referenced family
-    # resolves its published pin, exactly as a production submission does.
-    runtime_bundles = _pinned_runtime_bundles(task_type_def, request.get("runtime_bundle_sha256") or None)
+    # The request carries the exact per-family pair the controller froze: the
+    # candidate digest for every family selected in this pass and the published
+    # binding for any other companion.  The snapshot pins that pair unchanged.
+    runtime_bundles = _pinned_runtime_bundles(task_type_def, request["runtime_bundles"])
+    owner_pin = runtime_bundles.get(task_type_def.runtime.name)
+    if owner_pin != (request["runtime_bundle_sha256"] or None):
+        raise ValueError("live-test request runtime bundle identity disagrees with its runtime_bundles pin")
     runtime_images = _pinned_runtime_images(task_type_def)
     input_form = _task_input_form(
         entities,

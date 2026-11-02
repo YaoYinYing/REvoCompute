@@ -6,13 +6,12 @@ runtime:
   image_artifact: gremlin_lh_v1.sif
   definition: gremlin_lh.def
   build_inputs:
-  - gremlin_lh/run.sh
-  - gremlin_lh/fit_model.py
-  - gremlin_lh/stage_inputs.py
   - gremlin_lh/requirements.lock
-  # Family adapter code is still baked here; migration to runtime_overlay is deferred (docs/runner-guide/runtime-bundles.md).
   runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
-  entrypoint: [bash, /app/revocompute/run.sh]
+  - gremlin_lh/run.sh
+  - gremlin_lh/fit_model.py
+  - gremlin_lh/stage_inputs.py
+  entrypoint: [bash, /opt/revocompute/runtime/gremlin_lh/run.sh]
 tasks: [tasks/gremlin_lh_fit/task.yaml]

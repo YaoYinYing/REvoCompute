@@ -15,7 +15,6 @@ from revocompute import runtime_bundle as rb
 from revocompute.access_control import load_policy_documents, resolve_policy
 from revocompute.live_tests import LiveTestConfigurationError, load_live_test_plan
 from revocompute.config import ComputeConfig, ToolConfig
-from revocompute.runtime_bundle import RUNTIME_MOUNT_TARGET
 from revocompute.tool_types import ToolRegistry
 
 @dataclass(frozen=True, slots=True)
@@ -190,24 +189,17 @@ def diagnose(
                         )
                     )
                 entrypoint = runtime.get("entrypoint", ())
-                if isinstance(entrypoint, list) and len(entrypoint) > 1 and isinstance(entrypoint[-1], str):
+                if isinstance(entrypoint, list) and (
+                    error := rb.overlay_entrypoint_error(
+                        entrypoint, entries, source_directory=family.name
+                    )
+                ):
                     # The runtime entrypoint executes from the mounted bundle: a
                     # path under the overlay is valid, but it must actually be in
-                    # the bundle, or the container starts nothing.
-                    relative = entrypoint[-1].removeprefix(RUNTIME_MOUNT_TARGET + "/")
-                    if not relative.startswith("/") and relative not in {""}:
-                        present = any(
-                            entry.relative == relative or relative.startswith(entry.relative + "/")
-                            for entry in entries
-                        )
-                        if not present:
-                            diagnostics.append(
-                                Diagnostic(
-                                    "E2005", "error", "runner",
-                                    f"Runtime entrypoint is not in the declared overlay: {entrypoint[-1]}",
-                                    manifest.id, source=str(family),
-                                )
-                            )
+                    # the bundle, and only the reserved mount may deliver it.
+                    diagnostics.append(
+                        Diagnostic("E2005", "error", "runner", error, manifest.id, source=str(family))
+                    )
         policy_id = runtime.get("access_policy")
         if policy_id:
             try:
