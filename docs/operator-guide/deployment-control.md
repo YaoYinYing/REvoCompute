@@ -67,14 +67,8 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh runner-status --runner
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh runner-status --runner alphafold3 --json
 ```
 
-| Status | Meaning | Next action |
-|---|---|---|
-| `NOT_CONFIGURED` | Strict-equivalent Doctor contract checks fail | Fix the reported contract and run Doctor again |
-| `NOT_BUILT` | The active production SIF is absent | Run `prepare --build-sif` for the family |
-| `BUILD_STALE` | Active SIF provenance differs from the definition or declared build inputs | Rebuild and validate a candidate |
-| `NOT_VALIDATED` | Current active SIF has no live receipt | Run `live-test --runner <family>` |
-| `VALIDATION_STALE` | Build is current, but the receipt differs from the runtime bundle, execution/test/resource identity, or required smoke coverage | Keep the SIF and rerun the live-test |
-| `READY` | Doctor passes and the exact current active SIF passed all required current smoke cases | None |
+Readiness states, their meaning, and the corrective action are defined once in
+[Runner Readiness States and Invalidation](runner-readiness.md); this page lists only the commands.
 
 `runner-status` evaluates `<artifact>.sif`, not a staged
 `<artifact>.sif.next`. `READY` does not grant a user access to a restricted

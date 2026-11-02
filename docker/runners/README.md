@@ -74,10 +74,10 @@ The declaration rules are in
 Target-host workflow, in order:
 
 ```bash
-bash run/restart.sh runner-status --runner example
+bash run/restart.sh runner-status --runner example --enabled-runners=example
 bash run/restart.sh prepare --build-sif --enabled-runners=example
 bash run/restart.sh live-test --runner example --collection smoke
-bash run/restart.sh runner-status --runner example --json
+bash run/restart.sh runner-status --runner example --enabled-runners=example --json
 bash run/restart.sh restart --mode=prepared
 ```
 
@@ -94,7 +94,7 @@ validation-contract digest, so candidates cannot replace active evidence.
 `NOT_VALIDATED`, `VALIDATION_STALE`, or `READY` from Doctor, active-SIF
 provenance, the Runtime Bundle binding, and the live receipt. A definition or
 declared build-input change requires a rebuild. A `runtime_overlay` change keeps
-the SIF but reports `VALIDATION_STALE` with `reason=runtime_bundle_changed`, and
+the SIF but reports `VALIDATION_STALE` with `reason=RUNTIME_BUNDLE_CHANGED`, and
 the required action is to rerun the live test against the same SIF.
 Execution-affecting Task/runtime fields, `runner.yaml`, effective resources, or
 `test.yaml` require a new live validation but do not by themselves stale the SIF

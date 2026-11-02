@@ -182,8 +182,8 @@ Add pytest coverage only for executable family logic such as parsers, command
 builders, normalizers, or postprocessors. Do not write tests that merely read
 and restate YAML, shell, definition, or documentation text.
 
-Every family also ships one focused **contract test** under
-`docker/runners/<family>/tests/fast/`. It executes the family's real entrypoint against a
+A family with executable adapter logic should ship one focused **contract test** under
+`docker/runners/<family>/tests/fast/`; a declarative family may ship none. The test executes the family's real entrypoint against a
 `task.json` and proves the Runner consumes the declared named input role and the
 server-resolved parameters, rather than positional files or environment values.
 `docker/runners/example/tests/fast/test_analyze.py` is the canonical reference to copy.
