@@ -54,6 +54,10 @@ VALUE_EXCEPTIONS = {
     "tests/test_test_boundaries.py": {
         "example", 'family = "example"', 'path = "docker/runners/example/plugin.yaml"',
     },
+    # A synthetic manifest in the entrypoint counterexample collides with the demo family name.
+    "tests/test_pr131_lifecycle_guards.py": {
+        "example", "example.def", "example.sif", "example/run.sh",
+    },
     # Immutable format-parser corpus is shared input data, not plugin assets.
     "tests/test_input_validation.py": {
         "tests/data/foundry/rf3_monomer.json", "tests/data/foundry/rfd3_unconditional.json",
