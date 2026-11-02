@@ -20,23 +20,22 @@ change reports `BUILD_STALE` even when the execution contract also changed.
 A `runtime_overlay` change reports `VALIDATION_STALE` with
 `reason=RUNTIME_BUNDLE_CHANGED`: the SIF is current, only the mounted runtime
 code moved, and the action is to rerun the live test against the same SIF
-(see [Runtime Bundles](../runner-guide/runtime-bundles.md#freshness)). Readiness
+(see [Runtime Bundles](../runner-guide/runtime-bundles.md#change-impact)). Readiness
 compares the checked-out overlay source digest with the published index digest,
 so the edit is visible before any build, restart, or activation. A family that
 declares an overlay but has no published binding is never `READY`; it refuses
 new submissions until a receipt authorizes a binding.
-Execution-affecting Task/runtime fields, mounts, resource limits, service
-identity, `test.yaml`, fixtures, or required coverage produce
-`VALIDATION_STALE` without requiring a rebuild. Presentation-only fields such
-as labels, summaries, help, citations, and UI hints leave a valid receipt
-current. Changing `family.version` alone is release metadata and also leaves
-both freshness identities current.
+Which change moves which identity is owned by
+[Runtime Bundles](../runner-guide/runtime-bundles.md#change-impact); readiness
+reports the resulting state. A presentation-only change or `family.version`
+alone leaves a valid receipt current.
 
 Queue congestion or an idle/occupied GPU does not change readiness. Readiness
 changes do not cancel already-running tasks; only new submissions are denied
-until evidence is restored. Runner authors should use the canonical
-[change-impact matrix](../runner-guide/adding-a-runner.md#runner-change-impact-model)
-before deciding which action to take.
+until evidence is restored. The four identity classes are owned by
+[Runner Family Protocol](../runner-guide/runner-family-protocol.md#identity-classes),
+and the detailed change list is in
+[Runtime Bundles](../runner-guide/runtime-bundles.md#change-impact).
 
 ### Why the Admin view can report `BUILD_STALE` while the CLI says otherwise
 

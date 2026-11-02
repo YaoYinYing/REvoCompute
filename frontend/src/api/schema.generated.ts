@@ -2842,6 +2842,12 @@ export interface components {
         };
         PreflightAdmission: {
             allowed: boolean;
+            /** @description The Runner readiness verdict a refusal reports, when one was published. */
+            status?: string;
+            /** @description Stable machine-readable reason for the refusal; clients localize the copy. */
+            reason_code?: string;
+            /** @description Recovery step the deployment recommends. */
+            next_action?: string;
             runner_ready?: boolean;
             infrastructure_ready?: boolean;
             /** @enum {string} */

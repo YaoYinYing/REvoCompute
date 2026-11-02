@@ -193,6 +193,36 @@ def test_wrong_artifact_contract_or_coverage_makes_validation_stale(evidence, up
     assert result.build_provenance_current is True
 
 
+def test_an_overlay_receipt_with_a_different_configuration_is_not_blamed_on_the_bundle(evidence, tmp_path):
+    """A receipt that matches the build but not the configuration is stale.
+
+    The bundle comparison asks what changed between the receipt and the current
+    identity.  When no receipt matches the identity at all, there is nothing to
+    compare: reporting ``RUNTIME_BUNDLE_CHANGED`` for an unchanged, published
+    bundle sends the operator to re-accept code that did not move.  The recovery
+    action is the same live test, but the reason must name the actual fact.
+    """
+    state, family, active = evidence
+    family = replace(family, runtime_overlay=("demo/run.sh",))
+    (family.root / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    store = Path(state.server_dir()).parent / "runtime-bundles"
+    digest = runtime_bundle.materialize(family.root.parent, family.runtime_overlay, store)[0]
+    runtime_bundle.write_index(store, {"demo": digest})
+    _write_receipt(
+        family,
+        active,
+        runtime_bundle_sha256=digest,
+        configuration_digest="sha256:different-effective-resources",
+    )
+
+    result = resolve_runner_readiness(state, family)
+
+    assert result.status is RunnerReadinessStatus.VALIDATION_STALE
+    assert result.reason_code == "RECEIPT_STALE"
+    assert result.runtime_bundle_sha256 == digest
+    assert result.receipt_runtime_bundle_sha256 is None
+
+
 def test_current_evidence_is_ready_and_serializes_stably(evidence):
     state, family, active = evidence
     _write_receipt(family, active)

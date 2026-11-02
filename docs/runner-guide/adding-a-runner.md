@@ -1,76 +1,23 @@
 # Adding a Runner
 
+This is the walkthrough. [Runner Family Protocol](runner-family-protocol.md)
+owns the normative lifecycle and release gate; the linked pages own their
+fields.
+
 Use the CPU-only `docker/runners/example/` family as the structural reference
 for a conventional Runner. It is a complete,
 fast path through plugin discovery, named inputs, Task parameters, execution,
 artifact acceptance, Result Workspace views, and a ResultStoryboard without
 weights, databases, network access, or a GPU.
 
-## Runner change-impact model
+## Classify the change
 
 Classify every changed Runner file or manifest field before building or
-deploying it. The four identities have different consequences:
-
-- **Build Identity** is the direct Apptainer definition plus every mutable
-  repository file declared by `runtime.build_inputs`. A change means rebuild
-  the SIF, run its checks, and live-test the exact candidate before promotion.
-- **Runtime Bundle Identity** is the content digest of the repository-owned
-  executable code declared by `runtime.runtime_overlay`. A change keeps the SIF
-  and makes its live-test receipt stale — nothing is rebuilt.
-- **Execution Contract Identity** is the parsed configuration that determines
-  accepted inputs and parameters, argument and stage behavior, expected
-  outputs, effective resources, runtime invocation, and live-test coverage. A
-  change keeps the existing SIF but makes its live-test receipt stale.
-- **Presentation Identity** is user-facing metadata that cannot alter execution,
-  such as display names, summaries, help text, citations, category labels, and
-  UI hints. A presentation-only change needs the normal server/config
-  deployment, but neither a SIF rebuild nor a new live-test.
-
-This is the canonical change-impact matrix:
-
-| Change | Rebuild SIF | Re-run live-test |
-| --- | ---: | ---: |
-| Apptainer `.def` | Yes | Yes |
-| Requirements or lockfile copied into the image | Yes | Yes |
-| Family code still copied into the image (see `runtime_overlay` below) | Yes | Yes |
-| `runtime.runtime_overlay` path (shared helper or family adapter) | No | Yes |
-| Task argument forwarding or execution-affecting default | No | Yes |
-| Task input/output execution contract | No | Yes |
-| Result-view source selectors or acceptance-relevant mapping | No | Yes |
-| `expected_files.yaml` logical-output contract | No | Yes |
-| Which directory owns a Task's result contract (its `expected_files.yaml` and `storyboard/`) | No | Yes |
-| Runtime entrypoint declaration or `runner.yaml` mounts/env/limits | No | Yes |
-| Effective resource policy | No | Yes |
-| Access-policy identification or entitlement requirement | No | Yes |
-| Runner-owned input-workspace module, styles, schema, backend module, or backend role binding | No | Yes |
-| `test.yaml` case, fixture, or required coverage | No | Yes |
-| Display name, summary, `use_when`, or help text | No | No |
-| Citation or documentation link | No | No |
-| Result-view titles, labels, units, scales, or axis hints | No | No |
-| UI, layout, viewer, or category hint | No | No |
-| `family.version` release metadata alone | No | No |
-
-Runner-owned workspace assets are server-side executable code, not image
-content: they are loaded from the Runner tree at request time and are absent
-from the SIF. They therefore follow the execution-contract row, while only
-files copied into the image belong in Build Identity.
-
-`family.version` identifies the family release for display and audit. It is not
-an automatic build or validation input. If image construction consumes a
-version value, the file or recipe that supplies that value must participate in
-Build Identity; changing that actual input then drives the rebuild.
-
-For each new file or field, ask in order:
-
-1. Is it REvoCompute-owned executable code the container runs? Put it in
-   `runtime.runtime_overlay` — the SIF keeps the environment, the bundle
-   supplies the orchestration. See [Runtime Bundles](runtime-bundles.md).
-2. Can changing it alter SIF contents or other code baked into the SIF? Put the
-   file in `runtime.build_inputs`.
-3. Can changing it alter how Core invokes, validates, resources, or accepts the
-   computation? Put the field in Execution Contract Identity.
-4. Can changing it only alter what a user sees? It belongs to Presentation
-   Identity.
+deploying it. The four identity classes are owned by
+[Runner Family Protocol](runner-family-protocol.md#identity-classes), and the
+detailed per-file change list is owned by
+[Runtime Bundles](runtime-bundles.md#change-impact). The table is not repeated
+here.
 
 ## 1. Copy the Example Runner
 
@@ -225,17 +172,18 @@ result time.
 ## 5. Define `test.yaml`
 
 Add a deterministic fixture under `tests/data/` and a required smoke case for
-every TaskType in the family. Group fixture paths by named role and provide
-parameters accepted by the Task schema. Keep the case small enough for routine
-target-host execution while exercising real parsing and artifact acceptance.
-See [Test Plan](test-plan.md).
+every TaskType in the family. `test.yaml` declares only case IDs, the TaskType,
+fixtures grouped by named input role, and schema-valid parameters; output
+contracts, resources, weights, and defaults stay in their owning manifests.
+Keep the case small enough for routine target-host execution while exercising
+real parsing and artifact acceptance. See [Test Plan](test-plan.md).
 
 Add pytest coverage only for executable family logic such as parsers, command
 builders, normalizers, or postprocessors. Do not write tests that merely read
 and restate YAML, shell, definition, or documentation text.
 
-Every family also ships one focused **contract test** under
-`docker/runners/<family>/tests/fast/`. It executes the family's real entrypoint against a
+A family with executable adapter logic should ship one focused **contract test** under
+`docker/runners/<family>/tests/fast/`; a declarative family may ship none. The test executes the family's real entrypoint against a
 `task.json` and proves the Runner consumes the declared named input role and the
 server-resolved parameters, rather than positional files or environment values.
 `docker/runners/example/tests/fast/test_analyze.py` is the canonical reference to copy.
@@ -284,7 +232,8 @@ REVODESIGN_SERVER_ENV=/path/server.env \
 ```
 
 The run must exercise the real parser and artifact contract. A local execution
-or mocked scheduler test cannot issue promotable readiness evidence.
+or mocked scheduler test cannot issue promotable readiness evidence, and green
+CI is not HPC scientific acceptance.
 
 ## 9. Inspect the receipt
 
@@ -300,20 +249,29 @@ REVODESIGN_SERVER_ENV=/path/server.env \
 
 Record effective walltime, CPU, host memory, GPU memory, and GPU utilization.
 Use those observations to set durable resource limits rather than estimates.
+A narrowed `--task` pass is not promotion evidence when it omitted a required
+smoke case; rerun the full `smoke` collection.
 
-## 10. Promote
+## 10. Promote and activate
 
-Activate only the prepared, receipt-backed candidate:
+Activation is maintainer-authorized and is separate from merge. Promote only the
+prepared, receipt-backed candidate:
 
 ```bash
 REVODESIGN_SERVER_ENV=/path/server.env \
   bash run/restart.sh restart --mode=prepared
 ```
 
+For an overlay family, the PASS in step 8 already published the Runtime Bundle
+digest it validated; the prepared restart promotes the SIF. A passed live test,
+a green CI run, or a merged pull request does not promote the SIF by itself.
+
 After activation, confirm that `/compute/api/types` exposes the TaskType and
 that `/compute/api/task-parameters/<task-type>` matches its owning manifest.
-Submit the canonical fixture once through the public API and verify status,
-immutable inputs, logs, manifest, artifact download, and result rendering.
+With deployment authorization, submit the canonical fixture once through the
+public API and verify status, immutable inputs, logs, manifest, artifact
+download, and result rendering. `READY` does not grant access or authorize a
+submission.
 
 ## Advanced families
 

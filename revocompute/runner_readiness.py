@@ -92,6 +92,19 @@ class RunnerReadiness:
         return value
 
 
+def _receipt_names_a_different_bundle(receipt: Mapping[str, Any] | None, expected_bundle: str | None) -> bool:
+    """Whether a receipt that matched this identity recorded a different bundle.
+
+    An absent receipt has no recorded digest to compare, so it cannot attribute
+    the invalidation to the bundle; only a matched receipt can.
+    """
+    return (
+        receipt is not None
+        and expected_bundle is not None
+        and _string_field(receipt, "runtime_bundle_sha256") != expected_bundle
+    )
+
+
 def _result(
     family: RuntimeFamily,
     status: RunnerReadinessStatus,
@@ -388,9 +401,8 @@ def _staged_candidate_readiness(
                 sif_exists=active_exists,
                 **fields,
             )
-        bundle_changed = (
-            evidence.fields["runtime_bundle_sha256"] is not None
-            and _string_field(receipt, "runtime_bundle_sha256") != evidence.fields["runtime_bundle_sha256"]
+        bundle_changed = _receipt_names_a_different_bundle(
+            receipt, evidence.fields["runtime_bundle_sha256"]
         )
         return _result(
             family,
@@ -601,10 +613,12 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
         # Distinguish "the SIF is fine, only the runtime code moved" from the
         # generic receipt mismatch: the operator action is the same live test,
         # but the diagnosis is not.
-        bundle_changed = (
-            fields["runtime_bundle_sha256"] is not None
-            and _string_field(receipt, "runtime_bundle_sha256") != fields["runtime_bundle_sha256"]
-        )
+        # Only a receipt that matched the current identity can attribute the
+        # invalidation to a moved Runtime Bundle.  When no receipt matched, the
+        # bundle comparison has no recorded digest to compare and would read as
+        # changed merely because the receipt is absent; the generic stale-receipt
+        # reason is the truthful one.
+        bundle_changed = _receipt_names_a_different_bundle(receipt, fields["runtime_bundle_sha256"])
         return _result(
             family,
             RunnerReadinessStatus.VALIDATION_STALE,

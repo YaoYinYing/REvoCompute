@@ -1,8 +1,10 @@
 # Runner Guide
 
 This section is for people authoring or maintaining a scientific runtime family.
-Start with the [Adding a Runner](adding-a-runner.md) walkthrough and the
-CPU-only `docker/runners/example/` reference family. Runner families are
+Start with the [Runner Family Protocol](runner-family-protocol.md) for the
+normative ownership, lifecycle, and release gate, then follow the
+[Adding a Runner](adding-a-runner.md) walkthrough. The CPU-only
+`docker/runners/example/` is the reference family. Runner families are
 self-contained under `docker/runners/<family>/`; each owns its manifests,
 direct Apptainer definition, test plan, and runtime script.
 
@@ -31,8 +33,8 @@ science, and the guide owns only the expectation that the record exists.
 
 ## Pages
 
-- [Runner Family Protocol](runner-family-protocol.md) — what every family owns
-  and the direct-SIF lifecycle.
+- [Runner Family Protocol](runner-family-protocol.md) — the normative
+  ownership, lifecycle, evidence, and release gate for every family.
 - [Persistent Execution](persistent-execution.md) — work items, per-item commit,
   resume, and resource adaptation boundaries.
 - [Plugin Manifest](plugin-manifest.md) — the `plugin.yaml` contract.

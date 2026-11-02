@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import uuid
 from pathlib import Path
 
@@ -464,6 +465,203 @@ def test_workflow_submission_failure_cannot_inherit_previous_stage_evidence(task
     assert payload["exit_code_source"] is None
     assert payload["stage"] == "second"
     assert payload["logs"] == []
+
+
+def test_failed_workflow_branch_survives_a_later_sibling_success(task_context, monkeypatch, tmp_path):
+    """The Task summary names the failed branch, not the sibling that succeeded.
+
+    A later independent allocation replaces the shared diagnostics row with its
+    own zero-exit evidence.  The durable failed StageRun is the authority, so
+    both the stored row and the user-facing summary must still name the branch
+    that failed, with its reason and exit status.
+    """
+    from types import SimpleNamespace
+
+    from revocompute.execution_diagnostics import REASONS
+    from revocompute.execution_graph import compile_graph
+    from revocompute.job import JobState
+    from revocompute.resource_policy import resolve_resources
+    from revocompute.task_types import WorkflowStage
+    from test_slurm_runner import _make_task_type
+
+    module, client, task_id, root, owner, *_ = task_context
+    store = module.task_store
+    runtime = module.task_runtime
+    stages = (
+        WorkflowStage("pipeline.failed", "Failed", False, (), ("first",)),
+        WorkflowStage("pipeline.sibling", "Sibling", False, (), ("second",)),
+    )
+    tt = _make_task_type(workflow=stages, stage_markers={"first": "First", "second": "Second"})
+    graph = compile_graph(tt)
+    assert store.update_task(
+        task_id,
+        status="pending",
+        run_stage="first",
+        input_form=json.dumps({
+            "execution_graph": {
+                "ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document,
+            },
+        }),
+    )
+    policy = resolve_resources(
+        lambda field: None, lambda field: None, requires_gpu=False, allowed_queues=(), default_timeout_seconds=60,
+    )
+    image = "sha256:" + "a" * 64
+
+    class Job:
+        def __init__(self, name):
+            self.name = name
+
+        def runtime_image_observation(self):
+            return SimpleNamespace(expected=image, observed=image)
+
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            if self.name == "pipeline-failed":
+                store.record_task_diagnostics(
+                    task_id,
+                    {"reason_code": "nonzero_exit", "exit_code": 2, "stage_id": "pipeline.failed"},
+                )
+                return JobState.FAILED
+            # The successful sibling replaces the row with its own evidence.
+            (root / "sibling.txt").write_text("sibling output")
+            store.record_task_diagnostics(
+                task_id, {"reason_code": "completed", "exit_code": 0, "stage_id": "pipeline.sibling"}
+            )
+            return JobState.COMPLETED
+
+    monkeypatch.setattr(runtime, "_create_job", lambda _id, stage_tt, *a, **kw: Job(stage_tt.name))
+    entities = [{"type": "workspace", "workspace_root": str(tmp_path / "workspace"), "workspace_key": "tester"}]
+
+    result = runtime._run_compute_workflow(
+        task_id,
+        store.get_task(task_id),
+        tt,
+        entities,
+        str(root),
+        {stage.name: policy for stage in stages},
+        lambda stage: None,
+    )
+
+    assert result == JobState.FAILED
+    evidence = store.get_task_diagnostics(task_id)
+    assert evidence["reason_code"] == "nonzero_exit"
+    assert evidence["stage_id"] == "pipeline.failed"
+    assert evidence["exit_code"] == 2
+
+    # Then settle the Task exactly as _execute_compute_task's failure path does.
+    runtime._record_failure(
+        task_id,
+        store.get_task(task_id),
+        1.0,
+        "second",
+        REASONS.get(evidence["reason_code"], "Execution failed."),
+    )
+    payload = client.get(f"/compute/api/tasks/{task_id}/diagnostics", headers=owner).json
+    assert payload["reason_code"] == "nonzero_exit"
+    assert payload["stage"] == "pipeline.failed"
+    assert payload["exit_code"] == 2
+    assert payload["summary"] == REASONS["nonzero_exit"]
+
+
+def test_pre_dispatch_refusal_keeps_its_stage_through_task_failure(task_context, monkeypatch, tmp_path):
+    """A refused stage stays attributed, without any sibling allocation facts.
+
+    The producer succeeds and its adapter row carries exit 0, attempt identity
+    and a log record.  The next stage cannot open an attempt, so the failure
+    boundary must keep the refusal's stage name and drop that evidence: the
+    stage never dispatched, and the API must not report an srun exit for it.
+    """
+    from types import SimpleNamespace
+
+    from revocompute.execution_graph import compile_graph
+    from revocompute.job import JobState
+    from revocompute.resource_policy import resolve_resources
+    from revocompute.task_types import WorkflowStage
+    from test_slurm_runner import _make_task_type
+
+    module, client, task_id, root, owner, *_ = task_context
+    store = module.task_store
+    runtime = module.task_runtime
+    stages = (
+        WorkflowStage("pipeline.first", "First", False, (), ("first",)),
+        WorkflowStage("pipeline.refused", "Refused", False, (), ("second",)),
+    )
+    tt = _make_task_type(workflow=stages, stage_markers={"first": "First", "second": "Second"})
+    graph = compile_graph(tt)
+    assert store.update_task(
+        task_id,
+        status="pending",
+        run_stage="first",
+        input_form=json.dumps({
+            "execution_graph": {
+                "ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document,
+            },
+        }),
+    )
+    policy = resolve_resources(
+        lambda field: None, lambda field: None, requires_gpu=False, allowed_queues=(), default_timeout_seconds=60,
+    )
+    image = "sha256:" + "a" * 64
+
+    class Job:
+        def runtime_image_observation(self):
+            return SimpleNamespace(expected=image, observed=image)
+
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            (root / "first.txt").write_text("first output")
+            store.record_task_diagnostics(
+                task_id,
+                {
+                    "attempt_id": "first-attempt",
+                    "record_sha256": "ab" * 32,
+                    "reason_code": None,
+                    "exit_code": 0,
+                    "stage_id": "pipeline-first",
+                },
+            )
+            return JobState.COMPLETED
+
+    real_begin = store.begin_stage_attempt
+
+    def refuse_second(**kwargs):
+        if kwargs.get("stage_name") == "pipeline.refused":
+            raise sqlite3.OperationalError("database is locked")
+        return real_begin(**kwargs)
+
+    monkeypatch.setattr(store, "begin_stage_attempt", refuse_second)
+    monkeypatch.setattr(runtime, "_create_job", lambda *args, **kwargs: Job())
+    entities = [{"type": "workspace", "workspace_root": str(tmp_path / "workspace"), "workspace_key": "tester"}]
+
+    result = runtime._run_compute_workflow(
+        task_id,
+        store.get_task(task_id),
+        tt,
+        entities,
+        str(root),
+        {stage.name: policy for stage in stages},
+        lambda stage: None,
+    )
+    assert result == JobState.FAILED
+
+    # Settle the Task exactly as _execute_compute_task's failure path does.
+    runtime._record_failure(task_id, store.get_task(task_id), 1.0, "second", "Execution failed.")
+
+    evidence = store.get_task_diagnostics(task_id)
+    assert evidence["reason_code"] == "stage_attempt_unavailable"
+    assert evidence["stage_id"] == "pipeline.refused"
+    for key in ("attempt_id", "record_sha256", "exit_code", "scheduler_state"):
+        assert key not in evidence
+    payload = client.get(f"/compute/api/tasks/{task_id}/diagnostics", headers=owner).json
+    assert payload["reason_code"] == "stage_attempt_unavailable"
+    assert payload["stage"] == "pipeline.refused"
+    assert payload["exit_code"] is None
+    assert payload["exit_code_source"] is None
 
 
 @pytest.mark.parametrize("fault", [None, "metadata", "publication"])

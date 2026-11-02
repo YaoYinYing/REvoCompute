@@ -449,6 +449,12 @@ class PreflightPhase(BaseModel):
 
 class PreflightAdmission(BaseModel):
     allowed: bool
+    #: The same readiness decision catalog, detail and POST report.  Present
+    #: when a refusal carries a published Runner admission verdict, so preflight
+    #: can name the reason and recovery instead of only "unavailable".
+    status: str | None = None
+    reason_code: str | None = None
+    next_action: str | None = None
     runner_ready: bool | None = None
     infrastructure_ready: bool | None = None
     infrastructure_status: Literal["READY", "DEGRADED", "UNAVAILABLE"] | None = None

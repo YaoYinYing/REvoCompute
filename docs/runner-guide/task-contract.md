@@ -4,7 +4,10 @@ A task manifest is the complete scientific API for one TaskType. Define its
 input schema and validation, typed parameters and defaults, resource/network
 requirements, runner arguments, execution stages, output files, and result
 parser/artifact contract. Keep task-specific knowledge in the owning family;
-Core should only orchestrate generic schemas and plans.
+Core should only orchestrate generic schemas and plans. The normative release
+gate and the ownership of output identity are in
+[Runner Family Protocol](runner-family-protocol.md); this page owns the field
+semantics.
 
 Under `parameters.properties`, declare every user-facing parameter's name,
 JSON Schema type, default or required semantics, applicable enum/range/format

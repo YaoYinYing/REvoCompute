@@ -34,7 +34,6 @@ from pathlib import Path
 from typing import Any
 
 from celery import Celery
-from revocompute.admission import resolve_submission_readiness
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_int, env_path
 from revocompute.db import (
     GPUAuthorizationUnavailableError,
@@ -817,7 +816,6 @@ def _compute_allocation_callbacks(
     stage_id: str,
     resource_policy: ResolvedResources | None,
     required_entitlements: tuple[str, ...] = (),
-    runner_family: str = "",
     attempt: int | None = None,
 ) -> tuple[Any, Any, Any]:
     """The three resource-accounting edges of one Slurm allocation.
@@ -952,14 +950,6 @@ def _compute_allocation_callbacks(
 
     def started(slurm_job_id: str, started_at: float) -> None:
         if accounting:
-            # Runner readiness is checked here because only the caller knows the
-            # runner family, but the outcome is handed to the store as the grant
-            # decision: the allocation fact is written first and unconditionally,
-            # so a not-ready runner denies the *command* without erasing the
-            # allocation the scheduler already handed this Task.
-            denied_reason = None
-            if runner_family and not resolve_submission_readiness(CONFIG.server_dir, runner_family).ready:
-                denied_reason = "Runner readiness is unavailable"
             # The allocation is recorded here — fact first, then the grant
             # decision in the same transaction.  There is deliberately no
             # separate entitlement read: a bare read cannot see that the hold
@@ -974,7 +964,6 @@ def _compute_allocation_callbacks(
                 cpu_cores=cpu_cores,
                 started_at=started_at,
                 required_entitlements=required_entitlements,
-                denied_reason=denied_reason,
                 gres=resource_policy.gres or "",
             )
             if not entitlement.get("granted", True):
@@ -1253,7 +1242,6 @@ def _run_compute_job(
         stage_id=tt.name,
         resource_policy=resource_policy,
         required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
-        runner_family=tt.runtime.name,
         attempt=attempt,
     )
     try:
@@ -1528,13 +1516,74 @@ def _finish_stage_attempt(
 
 
 def _record_workflow_refusal(task_id: str, stage_name: str, reason_code: str) -> None:
-    """Classify a pre-dispatch refusal without touching a completed attempt."""
+    """Classify a refusal without inheriting the last allocation's evidence.
+
+    The shared row may describe whichever stage ran last, including its exit
+    status and attempt.  Those facts do not explain a stage that never
+    dispatched, so they are dropped rather than presented beside this reason.
+    """
     try:
         evidence = task_store.get_task_diagnostics(task_id) or {}
         evidence.update(reason_code=reason_code, stage_id=stage_name)
+        for key in ("attempt_id", "record_sha256", "exit_code", "scheduler_state"):
+            evidence.pop(key, None)
         task_store.record_task_diagnostics(task_id, evidence)
     except Exception:
         logging.exception("Could not retain workflow refusal for task %s", task_id)
+
+
+def _record_workflow_failure(
+    task_id: str, failed_stages: list[str], failed_evidence: dict[str, dict[str, Any]]
+) -> None:
+    """Settle the Task-level row on this execution's primary failed StageRun.
+
+    ``failed_stages`` lists the stages this execution failed, in manifest
+    order.  Attempt records are history: a stage that failed in an
+    earlier execution and is blocked or refused now is not a failure of this
+    one, so it must not outrank the stage that actually failed.  The durable
+    attempt supplies its settled reason, and the captured adapter row supplies
+    the exit, scheduler, attempt and log facts a later independent sibling
+    replaced.  Fields belonging to that sibling are dropped rather than
+    presented as this failure's evidence.
+    """
+    if not failed_stages:
+        return
+    primary = failed_stages[0]
+    try:
+        evidence = task_store.get_task_diagnostics(task_id) or {}
+        captured = failed_evidence.get(primary) or {}
+        # The captured row can be more specific than the attempt (the adapter
+        # distinguishes a nonzero exit from a generic allocation failure), but
+        # only a real failure classification may be adopted: a stage the
+        # composer reclassified after a zero exit keeps the attempt's reason.
+        captured_reason = captured.get("reason_code")
+        if captured_reason in REASONS:
+            evidence["reason_code"] = captured_reason
+        else:
+            try:
+                projection = stage_state.workflow_state_projection(task_store.list_stage_runs(task_id))
+            except Exception:
+                logging.exception("Could not read stage attempts for task %s", task_id)
+                projection = {}
+            step = projection.get(primary)
+            if step is not None and step["status"] == stage_state.FAILED.lower():
+                evidence["reason_code"] = stage_state.bounded_reason(step.get("reason_code"))
+        evidence["stage_id"] = primary
+        for key in ("attempt_id", "record_sha256"):
+            if captured.get(key) is not None:
+                evidence[key] = captured[key]
+            else:
+                evidence.pop(key, None)
+        # Exit status describes the allocation, so it travels only with a real
+        # failure classification: a zero exit cannot explain the failure.
+        for key in ("exit_code", "scheduler_state"):
+            if captured_reason in REASONS and captured.get(key) is not None:
+                evidence[key] = captured[key]
+            else:
+                evidence.pop(key, None)
+        task_store.record_task_diagnostics(task_id, evidence)
+    except Exception:
+        logging.exception("Could not attribute workflow failure for task %s", task_id)
 
 
 def _record_blocked_nodes(task_id: str, blocked: set[str]) -> None:
@@ -1619,6 +1668,32 @@ def _run_compute_workflow(
     completed: set[str] = set()
     failed: set[str] = set()
     blocked: set[str] = set()
+    #: The adapter row a failed stage left before a later sibling replaced it.
+    failed_evidence: dict[str, dict[str, Any]] = {}
+
+    def capture_failed_evidence(stage_name: str) -> None:
+        """Snapshot the failed stage's diagnostics row before a sibling replaces it.
+
+        Each allocation rewrites the single Task-level row, so a later
+        independent sibling's success would otherwise be the only evidence the
+        workflow leaves behind.  The durable StageRun remains the authority for
+        *which* stage failed; this snapshot keeps its exit code, scheduler
+        state, attempt identity and log record alongside it.
+        """
+        if stage_name in failed_evidence:
+            return
+        try:
+            evidence = task_store.get_task_diagnostics(task_id) or {}
+        except Exception:
+            logging.exception("Could not preserve failed-stage evidence for task %s", task_id)
+            return
+        if str(evidence.get("stage_id") or "") not in {stage_name, stage_name.replace(".", "-")}:
+            return
+        failed_evidence[stage_name] = {
+            key: evidence[key]
+            for key in ("reason_code", "exit_code", "scheduler_state", "attempt_id", "record_sha256")
+            if evidence.get(key) is not None
+        }
 
     def block_descendants(node_id: str) -> None:
         pending = list(children[node_id])
@@ -1651,6 +1726,7 @@ def _run_compute_workflow(
                 # the Server never saw.  A stage with a row is recomputed
                 # instead, because that row cannot be tied to this image.
                 _record_workflow_refusal(task_id, node.id, "stage_output_unverified")
+                capture_failed_evidence(node.id)
                 failed.add(node.id)
                 block_descendants(node.id)
                 progressed = True
@@ -1671,6 +1747,7 @@ def _run_compute_workflow(
                 if refreshed is not None:
                     latest_runs[node.id] = refreshed
             else:
+                capture_failed_evidence(node.id)
                 failed.add(node.id)
                 block_descendants(node.id)
         if all(node.id in completed or node.id in failed or node.id in blocked for node in graph.nodes):
@@ -1680,6 +1757,9 @@ def _run_compute_workflow(
                 f"Workflow made no progress; unresolved stages: "
                 f"{', '.join(node.id for node in graph.nodes if node.id not in completed | failed | blocked)}"
             )
+    if failed:
+        manifest_failed = [stage.name for stage in tt.workflow if stage.name in failed]
+        _record_workflow_failure(task_id, manifest_failed, failed_evidence)
     if blocked:
         _record_blocked_nodes(task_id, blocked)
     return JobState.FAILED if failed else JobState.COMPLETED
@@ -1768,7 +1848,6 @@ def _execute_workflow_node(
         stage_id=stage.name,
         resource_policy=policy,
         required_entitlements=(stage_runtime.access_policy.requires if stage_runtime.access_policy else ()),
-        runner_family=stage_runtime.name,
         attempt=attempt,
     )
     try:
@@ -3197,14 +3276,36 @@ def _record_failure(
         return
     run_stage = (task_store.get_task(md5sum) or {}).get("run_stage") or run_stage
     stage_reason = reason_code or "execution_exception"
+    latest_failed: set[str] = set()
+    try:
+        # Read beside the diagnostics write, not inside it: a store read that
+        # fails must not also drop the fallback classification below.
+        latest_failed = {
+            name
+            for name, step in stage_state.workflow_state_projection(
+                task_store.list_stage_runs(md5sum)
+            ).items()
+            if step["status"] == stage_state.FAILED.lower()
+        }
+    except Exception:
+        logging.exception("Could not read failed attempts for task %s", md5sum)
     try:
         # The diagnostic row is Task-level and may describe an earlier stage;
         # the attempts this boundary settles are classified by this failure,
         # not by whatever reason the row happens to carry.
         evidence = task_store.get_task_diagnostics(md5sum) or {}
+        prior_stage = str(evidence.get("stage_id") or "")
+        # The row's stage identity survives when it names a durable failed
+        # attempt, or when it is a refusal that opened no attempt and left no
+        # allocation facts: the progress marker only says where execution
+        # stopped, and may name a sibling that ran after the failed stage.
+        attributed = bool(prior_stage) and (
+            prior_stage in latest_failed
+            or (not evidence.get("attempt_id") and evidence.get("reason_code") in REASONS)
+        )
         if reason_code is not None or not evidence.get("reason_code"):
             evidence["reason_code"] = stage_reason
-        if run_stage and evidence.get("reason_code") != "stage_blocked_by_failed_dependency":
+        if run_stage and not attributed and evidence.get("reason_code") != "stage_blocked_by_failed_dependency":
             evidence["stage_id"] = run_stage
         task_store.record_task_diagnostics(md5sum, evidence)
     except Exception:

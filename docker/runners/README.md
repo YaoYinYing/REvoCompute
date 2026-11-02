@@ -1,9 +1,10 @@
-# Runner family protocol
+# Runner families
 
 Each directory with `plugin.yaml` is one self-contained Runner family. The
 server discovers its task manifests, runtime, optional workspace plugins,
 policies, and live-test declaration from that tree. Core code has no
-task-name registry.
+task-name registry. The normative lifecycle and release gate are owned by
+[docs/runner-guide/runner-family-protocol.md](../../docs/runner-guide/runner-family-protocol.md).
 
 Projects that are candidates but are not yet adapted are tracked separately in
 the [Runner Adaptation Wait List](../../docs/runner-guide/wait-list.md). The
@@ -15,11 +16,11 @@ Required runtime shape:
 runtime:
   image_artifact: example_v1.sif
   definition: example.def
-  build_inputs:
-  - example/requirements.lock
+  build_inputs: []
   runtime_overlay:
   - common/runtime/
   - example/run.sh
+  - example/analyze.py
   entrypoint: [bash, /opt/revocompute/runtime/example/run.sh]
 ```
 
@@ -43,9 +44,11 @@ belongs in is the important decision**:
 A file must not appear in both lists; Doctor rejects the overlap.
 `family.version` is release/audit metadata and does not itself make an image
 stale. Put environment-validity checks (binary/import/ABI) in `%test` — never an
-import of an overlay module, which no longer exists in the image. The canonical
-impact matrix is in
-[Adding a Runner](../../docs/runner-guide/adding-a-runner.md#runner-change-impact-model).
+import of an overlay module, which no longer exists in the image. The four
+identity classes are owned by
+[Runner Family Protocol](../../docs/runner-guide/runner-family-protocol.md#identity-classes),
+and the detailed per-file change list is in
+[Runtime Bundles](../../docs/runner-guide/runtime-bundles.md#change-impact).
 
 Every family also owns `test.yaml`. Its required `smoke` collection must cover
 every enabled TaskType and may only reference immutable repository fixtures
@@ -56,44 +59,56 @@ version: 1
 collections:
   smoke:
     cases:
-    - id: minimal-example
-      task: example
-      input: {files: [tests/data/example/input.fasta]}
-      parameters: {iterations: 1}
+    - id: minimal-sequence-statistics
+      task: sequence_statistics
+      input:
+        roles: {sequence: [tests/data/example/sequences.fasta]}
+      parameters: {mass_precision: 2}
 ```
 
 Do not copy weights, databases, resource policy, output contracts, or defaults
 into `test.yaml`; the worker resolves those through production configuration.
+The declaration rules are in
+[Test Plan](../../docs/runner-guide/test-plan.md).
 
-Target-host workflow:
+Target-host workflow, in order:
 
 ```bash
-bash run/restart.sh runner-status --runner example
+bash run/restart.sh runner-status --runner example --enabled-runners=example
 bash run/restart.sh prepare --build-sif --enabled-runners=example
 bash run/restart.sh live-test --runner example --collection smoke
+bash run/restart.sh runner-status --runner example --enabled-runners=example --json
 bash run/restart.sh restart --mode=prepared
-bash run/restart.sh runner-status --runner example --json
 ```
 
-The prepare command atomically stages `<artifact>.next`. The live-test command runs real
-`apptainer inspect`, `apptainer test`, production Task submission, Slurm,
-Apptainer execution, parsing, and artifact acceptance. It writes a PASS receipt
-bound to the exact SIF, Runtime Bundle digest, provenance, test declaration,
-and public hash of execution-affecting configuration. Prepared activation
-refuses a changed candidate without that receipt.
+The prepare command atomically stages `<artifact>.next`. The live-test command
+runs real `apptainer inspect`, `apptainer test`, production Task submission,
+Slurm, Apptainer execution, parsing, and artifact acceptance. It writes a PASS
+receipt bound to the exact SIF, Runtime Bundle digest, provenance, test
+declaration, and public hash of execution-affecting configuration. Prepared
+activation refuses a changed candidate without that receipt.
 Build evidence is stored by family and SIF SHA-256; receipts also include the
 validation-contract digest, so candidates cannot replace active evidence.
 
-After activation, `runner-status` derives one of `NOT_CONFIGURED`, `NOT_BUILT`,
-`BUILD_STALE`, `NOT_VALIDATED`, `VALIDATION_STALE`, or `READY` from Doctor,
-active-SIF provenance, and the receipt. Definition or declared build-input
-changes require a rebuild. A `runtime_overlay` change keeps the SIF but reports
-`VALIDATION_STALE` with `reason=runtime_bundle_changed`, and the required action
-is to rerun the live test against the same SIF. Execution-affecting
-Task/runtime fields, `runner.yaml`, effective resources, or `test.yaml` require
-a new live validation but do not by themselves stale the SIF build.
-Presentation-only labels, prose, citations, and UI hints require neither.
-Readiness does not include user entitlement or momentary scheduler/GPU capacity.
+`runner-status` derives one of `NOT_CONFIGURED`, `NOT_BUILT`, `BUILD_STALE`,
+`NOT_VALIDATED`, `VALIDATION_STALE`, or `READY` from Doctor, active-SIF
+provenance, the Runtime Bundle binding, and the live receipt. A definition or
+declared build-input change requires a rebuild. A `runtime_overlay` change keeps
+the SIF but reports `VALIDATION_STALE` with `reason=RUNTIME_BUNDLE_CHANGED`, and
+the required action is to rerun the live test against the same SIF.
+Execution-affecting Task/runtime fields, `runner.yaml`, effective resources, or
+`test.yaml` require a new live validation but do not by themselves stale the SIF
+build. Presentation-only labels, prose, citations, and UI hints require neither.
+
+`READY` means eligible for a new submission, not access, capacity, or deployed
+resource availability: entitlement, scheduler/GPU occupancy, and model/database
+mounts are separate facts, and a missing mount fails acceptance as
+`RESOURCE_MISSING`. Green CI and a merge deploy or activate nothing. A passing
+live test activates only the Runtime Bundle digest it validated; it does not
+promote the SIF. SIF promotion is the maintainer-authorized
+`restart --mode=prepared`; server deployment is a separate `restart --mode=prod`
+or prepared restart. See
+[Runner Readiness](../../docs/operator-guide/runner-readiness.md).
 
 Docker Compose remains the server deployment framework; Runner families do not
 have Dockerfiles or local Docker image identities.

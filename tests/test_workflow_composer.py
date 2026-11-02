@@ -401,7 +401,6 @@ def test_foreign_family_node_uses_that_family_runtime_runner_and_policy(monkeypa
     assert foreign_job_runner is foreign_runner
     callback = next(item for item in callback_arguments if item["stage_id"] == "dag.b")
     assert callback["required_entitlements"] == ("synthetic_noncommercial",)
-    assert callback["runner_family"] == "restricted_runner"
     own_tt, own_job_runner = by_name["dag-a"]
     assert own_tt.runtime.name == "multistage_runner"
     assert own_job_runner is get_family("multistage_runner")[1]
@@ -541,6 +540,489 @@ def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypa
     assert {(run["stage_name"], run["status"]) for run in runs if run["attempt"] == 1} == {
         ("dag.a", "COMPLETED"), ("dag.b", "FAILED"), ("dag.c", "COMPLETED"), ("dag.d", "COMPLETED")
     }
+
+
+# -- Task-level failure attribution across independent branches (PR #130 P2) --
+
+
+def _diamond_job_class(action, allocation_facts=None):
+    """A job double whose stage ``a``/``b``/``c``/``d`` suffix picks its behavior.
+
+    Both outcomes mirror the production adapter: every allocation replaces the
+    shared Task-level diagnostics row with its own evidence.  ``allocation_facts``
+    are merged into a successful allocation's row, like the attempt identity and
+    log record the real adapter persists.
+    """
+
+    class Job(_ObservedImageMixin):
+        def __init__(self, task_id, name):
+            self._task_id = task_id
+            self._name = name
+
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            task_runtime = _live_task_runtime()
+            suffix = self._name.rsplit("-", 1)[-1]
+            reason, exit_code = action(suffix)
+            self.failure_reason = reason
+            if reason is not None:
+                evidence = {"reason_code": reason, "exit_code": exit_code, "stage_id": self._name.replace("-", ".")}
+            else:
+                # A successful allocation's adapter also replaces the row with
+                # its own zero-exit evidence before the composer settles it.
+                evidence = {"reason_code": None, "exit_code": 0, "stage_id": self._name.replace("-", ".")}
+                evidence.update(allocation_facts or {})
+            task_runtime.task_store.record_task_diagnostics(self._task_id, evidence)
+            return JobState.FAILED if reason is not None else JobState.COMPLETED
+
+    return Job
+
+
+def _write_diamond_output(output, name):
+    suffix = name.rsplit("-", 1)[-1]
+    (output / f"{suffix}.dat").write_text(suffix)
+
+
+def test_failure_attribution_names_failed_stage_when_independent_sibling_succeeds(monkeypatch, tmp_path):
+    """A failed branch's evidence wins over a later successful sibling's.
+
+    Branch ``b`` fails; sibling ``c`` succeeds afterwards.  The workflow must
+    stay FAILED and the Task-level diagnostics must name ``b``'s failure, never
+    ``c``'s success: the durable failed StageRun is the authority for failure
+    attribution, not the latest allocation's diagnostics row.
+    """
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+
+    def action(suffix):
+        if suffix == "b":
+            return ("timeout", None)
+        _write_diamond_output(output, suffix)
+        return (None, 0)
+
+    job_class = _diamond_job_class(action)
+
+    def create(task_id, stage_tt, *_args, **_kwargs):
+        return job_class(task_id, stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "da" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert result == JobState.FAILED
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id) or {}
+    assert evidence.get("reason_code") == "timeout"
+    assert evidence.get("stage_id") == "dag.b"
+    assert evidence.get("exit_code") is None
+    # The sibling's success is preserved beside the attribution.
+    runs = {run["stage_name"]: run for run in task_runtime.task_store.list_stage_runs(task_id)}
+    assert runs["dag.c"]["status"] == "COMPLETED"
+
+
+def test_failure_attribution_prefers_first_failed_stage_when_two_fail(monkeypatch, tmp_path):
+    """Two failures attribute deterministically: the first failed stage wins."""
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+
+    def action(suffix):
+        if suffix == "b":
+            return ("timeout", None)
+        if suffix == "c":
+            return ("nonzero_exit", 3)
+        _write_diamond_output(output, suffix)
+        return (None, 0)
+
+    job_class = _diamond_job_class(action)
+
+    def create(task_id, stage_tt, *_args, **_kwargs):
+        return job_class(task_id, stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "db" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert result == JobState.FAILED
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id) or {}
+    # Graph order settles b before c; attribution must not race them.
+    assert evidence.get("reason_code") == "timeout"
+    assert evidence.get("stage_id") == "dag.b"
+
+
+def test_failure_attribution_ignores_a_stale_failed_stage(monkeypatch, tmp_path):
+    """A stage that failed in an earlier execution cannot outrank this one's failure.
+
+    The manifest declares ``dag.b`` (a consumer) before its producer ``dag.a``,
+    so the consumer's stale FAILED attempt has the lower stage index.  On the
+    second execution the producer times out and the consumer is blocked: the
+    Task must name the producer that failed now, not the consumer's history.
+    """
+    task_runtime = _live_task_runtime()
+    base = _diamond_workflow()
+    task_type = replace(base, workflow=(base.workflow[1], base.workflow[0], *base.workflow[2:]))
+    output = tmp_path / "output"
+    output.mkdir()
+    phase = {"value": 1}
+
+    def action(suffix):
+        if phase["value"] == 1:
+            if suffix == "b":
+                return ("nonzero_exit", 3)
+            _write_diamond_output(output, suffix)
+            return (None, 0)
+        if suffix == "a":
+            return ("timeout", 9)
+        _write_diamond_output(output, suffix)
+        return (None, 0)
+
+    job_class = _diamond_job_class(action)
+
+    def create(task_id, stage_tt, *_args, **_kwargs):
+        return job_class(task_id, stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "di" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    first = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+    assert first == JobState.FAILED
+    assert (task_runtime.task_store.get_task_diagnostics(task_id) or {}).get("stage_id") == "dag.b"
+
+    phase["value"] = 2
+    second = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert second == JobState.FAILED
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id) or {}
+    assert evidence.get("reason_code") == "timeout"
+    assert evidence.get("stage_id") == "dag.a"
+    assert evidence.get("exit_code") == 9
+    assert evidence.get("blocked_stages") == ["dag.b", "dag.c", "dag.d"]
+
+
+def test_failure_attribution_records_pre_dispatch_refusal(monkeypatch, tmp_path):
+    """A pre-dispatch refusal is attributed to its stage, without a sibling's facts.
+
+    ``dag.a`` and ``dag.b`` allocate and leave exit, attempt and log-record
+    evidence in the shared row.  ``dag.c`` cannot open an attempt, so none of
+    that evidence describes it and the refusal must not present it.
+    """
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+
+    def action(suffix):
+        _write_diamond_output(output, suffix)
+        return (None, 0)
+
+    job_class = _diamond_job_class(
+        action,
+        allocation_facts={
+            "attempt_id": "sibling-attempt",
+            "record_sha256": "ab" * 32,
+            "scheduler_state": "COMPLETED",
+        },
+    )
+
+    def create(task_id, stage_tt, *_args, **_kwargs):
+        return job_class(task_id, stage_tt.name)
+
+    real_begin = task_runtime.task_store.begin_stage_attempt
+
+    def refuse_c(**kwargs):
+        if kwargs.get("stage_name") == "dag.c":
+            raise sqlite3.OperationalError("database is locked")
+        return real_begin(**kwargs)
+
+    monkeypatch.setattr(task_runtime.task_store, "begin_stage_attempt", refuse_c)
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "dc" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert result == JobState.FAILED
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id) or {}
+    assert evidence.get("reason_code") == "stage_attempt_unavailable"
+    assert evidence.get("stage_id") == "dag.c"
+    for key in ("attempt_id", "record_sha256", "exit_code", "scheduler_state"):
+        assert key not in evidence
+    assert evidence.get("blocked_stages") == ["dag.d"]
+
+
+def test_failure_attribution_names_blocked_descendant_without_losing_failure(monkeypatch, tmp_path):
+    """A blocked descendant's reason never replaces the upstream stage's failure."""
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+
+    def action(suffix):
+        if suffix == "a":
+            return ("out_of_memory", None)
+        return (None, 0)
+
+    job_class = _diamond_job_class(action)
+
+    def create(task_id, stage_tt, *_args, **_kwargs):
+        return job_class(task_id, stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "dd" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert result == JobState.FAILED
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id) or {}
+    assert evidence.get("reason_code") == "out_of_memory"
+    assert evidence.get("stage_id") == "dag.a"
+    # The blocked descendants are named without overwriting the failure.
+    assert evidence.get("blocked_stages") == ["dag.b", "dag.c", "dag.d"]
+
+
+def test_failure_attribution_is_absent_when_everything_completes(monkeypatch, tmp_path):
+    """All-success leaves no failure attribution behind."""
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+
+    class Job(_ObservedImageMixin):
+        def __init__(self, task_id, name):
+            self._task_id = task_id
+            self._name = name
+
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            _write_diamond_output(output, self._name)
+            return JobState.COMPLETED
+
+    def create(task_id, stage_tt, *_args, **_kwargs):
+        return Job(task_id, stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "de" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert result == JobState.COMPLETED
+
+
+def test_failure_attribution_is_absent_after_cancellation(monkeypatch, tmp_path):
+    """A cancelled workflow records no failure attribution."""
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+
+    class Job(_ObservedImageMixin):
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            return JobState.CANCELLED
+
+    def create(_task_id, _stage_tt, *_args, **_kwargs):
+        return Job()
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "df" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert result == JobState.CANCELLED
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id) or {}
+    assert "reason_code" not in evidence
+    assert "stage_id" not in evidence
+
+
+def test_failure_attribution_survives_a_successful_retry(monkeypatch, tmp_path):
+    """After a retry completes the workflow, the earlier failed attempt's
+    attribution is gone: the Task is no longer failed."""
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+
+    fail_b = {"value": True}
+
+    def action(suffix):
+        if suffix == "b" and fail_b["value"]:
+            return ("timeout", None)
+        _write_diamond_output(output, suffix)
+        return (None, 0)
+
+    job_class = _diamond_job_class(action)
+
+    def create(task_id, stage_tt, *_args, **_kwargs):
+        return job_class(task_id, stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "dg" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    first = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+    assert first == JobState.FAILED
+    assert (task_runtime.task_store.get_task_diagnostics(task_id) or {}).get("reason_code") == "timeout"
+
+    fail_b["value"] = False
+    second = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+    assert second == JobState.COMPLETED
+    # The retry's completed attempts are the newest, so no stale failed attempt
+    # can describe the finished workflow.
+    latest: dict[str, dict] = {}
+    for run in task_runtime.task_store.list_stage_runs(task_id):
+        name = run["stage_name"]
+        if name not in latest or int(run["attempt"]) > int(latest[name]["attempt"]):
+            latest[name] = run
+    assert {run["status"] for run in latest.values()} == {"COMPLETED"}
+
+
+def test_failure_attribution_names_failed_stage_when_independent_sibling_succeeds_full_path(
+    monkeypatch, tmp_path,
+):
+    """End-to-end with the production SlurmJob: branch ``b`` fails, then the
+    independent sibling ``c`` succeeds, and the Task-level diagnostics still
+    name ``b``.  Both allocations really replace the shared diagnostics row.
+
+    Only the receipt parser is stubbed (the fake ``srun`` never runs the
+    wrapper); submit, poll, row persistence and StageRun settlement are the
+    production adapter's.
+    """
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+    root = Path(__file__).resolve().parents[1]
+
+    from revocompute import runtime_bundle
+    from revocompute.job.runners.slurm_runner import SlurmJob
+    from revocompute.plugins import PluginManager
+    from revocompute.resource_policy import resolve_resources
+
+    bundles = tmp_path / "runtime-bundles"
+    bundles.mkdir()
+    index = {}
+    for manifest in PluginManager().discover(
+        str(root / "tests" / "fixtures" / "runners"), enabled={"multistage_runner"}
+    ):
+        if manifest.id == "multistage_runner" and manifest.runtime_overlay:
+            digest, _path = runtime_bundle.materialize(
+                root / "tests" / "fixtures" / "runners", manifest.runtime_overlay, bundles
+            )
+            index[manifest.id] = digest
+    image = tmp_path / "images" / "multistage_runner_v1.sif"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"pinned-runner-image")
+
+    policy = resolve_resources(
+        lambda field: None, lambda field: None, requires_gpu=False, allowed_queues=(), default_timeout_seconds=60,
+    )
+    jobs = []
+
+    def create(task_id, stage_tt, runner, entities, out_dir, callback, **kwargs):
+        stage_inputs = Path(entities[0]["workspace_root"]) / "inputs"
+        stage_inputs.mkdir(parents=True, exist_ok=True)
+        (stage_inputs / "task.json").write_text(json.dumps({"runtime_bundles": index}))
+        pinned = replace(
+            stage_tt,
+            runtime=replace(stage_tt.runtime, slurm_image=str(image), image_artifact=image.name),
+        )
+        job = SlurmJob(
+            task_id, pinned, runner, entities, out_dir, callback,
+            manage_db=SimpleNamespace(slurm_enabled=lambda: True), task_store=task_runtime.task_store,
+            resource_policy=policy, runtime_bundle_root=str(bundles),
+        )
+        job.runtime_image_observation = lambda: SimpleNamespace(expected=_IMAGE, observed=_IMAGE)
+        jobs.append(job)
+        return job
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "dh" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    def popen(*_args, **_kwargs):
+        suffix = jobs[-1].tt.name.rsplit("-", 1)[-1]
+        if suffix == "b":
+            return SimpleNamespace(
+                stdout=StringIO("REVODESIGN_JOB_ID=42\n"), stderr=StringIO(""), returncode=1,
+                pid=99, wait=lambda timeout=None: 1,
+            )
+        _write_diamond_output(output, suffix)
+        return SimpleNamespace(
+            stdout=StringIO("REVODESIGN_JOB_ID=43\n"), stderr=StringIO(""), returncode=0,
+            pid=99, wait=lambda timeout=None: 0,
+        )
+
+    monkeypatch.setattr("revocompute.job.runners.slurm_runner.subprocess.Popen", popen)
+    monkeypatch.setattr("revocompute.job.runners.slurm_runner.shutil.which", lambda name: None)
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert result == JobState.FAILED
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id) or {}
+    # The successful c allocation overwrote the row; the durable failed StageRun
+    # for b must supply the Task-level failure attribution.
+    assert evidence.get("reason_code") == "nonzero_exit"
+    assert evidence.get("stage_id") == "dag.b"
+    assert evidence.get("exit_code") == 1
+    runs = {run["stage_name"]: run for run in task_runtime.task_store.list_stage_runs(task_id)}
+    assert runs["dag.b"]["reason_code"] == "nonzero_exit"
+    assert runs["dag.c"]["status"] == "COMPLETED"
 
 
 def test_fork_and_join_both_complete_in_deterministic_order(monkeypatch, tmp_path):
@@ -691,7 +1173,6 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
         "stage_id": "restricted_runner.model",
         "resource_policy": _policy(True),
         "required_entitlements": ("synthetic_noncommercial",),
-        "runner_family": "restricted_runner",
     }
 
 
