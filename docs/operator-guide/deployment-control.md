@@ -86,7 +86,9 @@ The exact freshness action is therefore:
 - `BUILD_STALE`: run `prepare --build-sif`, live-test the candidate, then
   promote it with a prepared restart.
 - `VALIDATION_STALE`: do not rebuild; live-test the current SIF against the
-  current execution contract, then deploy normally.
+  current execution contract. If `reason=RUNTIME_BUNDLE_CHANGED`, that PASS
+  activates the validated Runtime Bundle; otherwise deploy the server/config
+  change normally after acceptance.
 - `READY` after a presentation-only change: do not rebuild or live-test; deploy
   the server/config change normally.
 
@@ -121,6 +123,11 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh live-test \
 # Alternatives: select a TaskType or every family
 bash run/restart.sh live-test --task gremlin
 bash run/restart.sh live-test --all --collection smoke
+
+# Switch one family to an earlier accepted Runtime Bundle (no rebuild, restart,
+# SIF change, or live test; the target snapshot and its receipt are re-verified)
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh rollback-bundle \
+  --runner <family> --digest <sha256:...>
 
 # Record the observed production evidence for a finished API submission
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh api-receipt \

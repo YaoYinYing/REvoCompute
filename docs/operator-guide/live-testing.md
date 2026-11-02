@@ -37,6 +37,53 @@ Runner files are unchanged. Rerun `live-test` when `runner-status` reports
 `VALIDATION_STALE`; old receipts are preserved as historical evidence but do
 not authorize new submissions.
 
+## What a PASS binds and activates
+
+Before the cases run, `live-test` materializes the family's declared runtime
+overlay as a candidate snapshot and pins that exact digest; it does not publish
+it. A PASS names the exact `(SIF, Runtime Bundle)` pair together with its build
+provenance, test definition, configuration, and composed companion identities.
+Once every selected family's required cases pass, the command publishes exactly
+the digests it validated and refreshes the deployment's admission attestation.
+A failure publishes nothing: the prior binding remains and readiness keeps
+reporting the family stale.
+
+`setup` and `restart` apply the same gate to a changed binding. Without a valid
+receipt for that exact family, digest, SIF build provenance, configuration, and
+test definition they keep the prior binding; a deployment restart is never a
+scientific acceptance.
+
+A composed case binds the companion identities it actually ran: candidate
+bundle digests for families selected in the same pass, and published digests
+for unselected companions (with their SIF and build provenance). A later
+companion identity change invalidates the composed receipt, and a missing
+companion record refuses before submission.
+
+## Bundle-only update
+
+When only a `runtime_overlay` source changed, reuse the current SIF:
+
+1. Confirm `runner-status --runner <family>` reports `VALIDATION_STALE` with
+   `reason=RUNTIME_BUNDLE_CHANGED` and current SIF build provenance (see
+   [Runner Readiness](runner-readiness.md#bundle-only-update)).
+2. Run the family's live test. Do not run `prepare --build-sif`: no scientific
+   SIF rebuild is needed. The one-off Docker worker image build at the start of
+   the invocation is the orchestration boundary, not a SIF build.
+3. On PASS the same invocation activates the exact validated snapshot; no
+   separate deployment step is required. On failure the previous binding
+   remains; correct the cause and rerun the live test.
+
+```bash
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh runner-status \
+  --runner <family>
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh live-test \
+  --runner <family> --collection smoke
+```
+
+To return a family to an earlier accepted bundle without a rebuild or live
+test, use `rollback-bundle` as listed under
+[Deployment Control commands](deployment-control.md#commands).
+
 The deployment operator and production service identity are intentionally
 different. `live-test` is invoked by the deployment account (for example,
 `yinying`), then delegates the scientific task to a one-off Compose worker

@@ -1,161 +1,91 @@
-# Runner Environment–Execution Separation — PR #131
+# Runner Environment–Execution Separation
 
-> Status: implementation proposal, not a claim of delivered behavior.
+> Status: delivered architecture rationale for PR #131.
+> Normative contract: [Runtime Bundles](../runner-guide/runtime-bundles.md).
 > Base: the merged composable-execution foundation from PR #130.
-> Normative existing contract: [Runtime Bundles](../runner-guide/runtime-bundles.md).
-> Principle: **build the scientific environment; mount the scientific execution code**.
 
-## Problem and boundary
+This page explains why a Runner is split into an environment image and a mounted
+execution bundle, and what that decision deliberately leaves outside. It is not
+the operational contract: freshness, activation, rollback, and the declaration
+rules are owned by [Runtime Bundles](../runner-guide/runtime-bundles.md).
 
-The runtime-bundle infrastructure already snapshots repository-owned code as immutable,
-content-addressed, read-only overlays, pins the digest per family in the Task, and gates
-activation on live scientific acceptance. Yet AlphaFold 3, GREMLIN_LH and PSSM-GREMLIN
-still copy their REvoCompute execution scripts into SIF images through `%files`, and
-declare those scripts in `build_inputs`. An edit to a run script therefore changes
-the SIF build provenance even if the underlying scientific software stack is unchanged.
+## The boundary
 
-This campaign **migrates the three actual family implementations** and connects the
-existing build, readiness, receipt, and activation lifecycle. Do not build a second
-bundle manager, provenance ledger, admission path, or artifact store.
+Build the scientific environment; mount the scientific execution code.
 
-There are three independently versioned inputs to a reproducible Task:
+A reproducible Task has three independently versioned inputs:
 
-1. **SIF environment identity**: Apptainer definition, base OS, scientific
-   dependencies/locks, native packages, pinned upstream software and generated
-   installation artifacts. A change here requires SIF rebuild and acceptance.
-2. **Runtime Bundle identity**: REvoCompute-owned executable adapters, scripts,
-   algorithm implementations and stage-input resolvers. A change here requires a
-   new immutable bundle and scientific acceptance, but **not** a SIF rebuild.
-3. **Execution and scientific-data identity**: frozen graph, input and artifact
-   identities, parameter contract, model/database provenance and resource policy.
-   Changes that affect acceptance must be revalidated; unrelated presentation
-   changes must not invalidate the scientific receipt.
+1. **SIF environment identity** — the Apptainer definition, base OS, scientific
+   dependencies and locks, native packages, pinned upstream software, and
+   generated installation artifacts. A change requires a SIF rebuild and
+   acceptance.
+2. **Runtime Bundle identity** — REvoCompute-owned adapters, scripts, algorithm
+   implementations, and stage-input resolvers. A change requires a new immutable
+   bundle and scientific acceptance, but not a SIF rebuild.
+3. **Execution and scientific-data identity** — the frozen graph, input and
+   artifact identities, parameter contract, model/database provenance, and
+   resource policy. Changes that affect acceptance must be revalidated;
+   presentation changes must not invalidate a scientific receipt.
 
-A file must never silently participate in both SIF and Runtime Bundle identity.
-Do not remove `build_inputs` as a schema field: it correctly records genuine
-environment dependencies and remains allowed to be empty.
+A file must never silently participate in both the SIF and the Runtime Bundle
+identity. The split is not a second bundle manager, provenance ledger, admission
+path, or artifact store — it reuses the existing build, readiness, receipt, and
+activation lifecycle.
 
-## Target family mapping
+AlphaFold 3, GREMLIN_LH, and PSSM-GREMLIN now declare their adapters and
+algorithm code as runtime overlays, resolve their entrypoints under
+`/opt/revocompute/runtime/`, and keep `%files`, `%post`, and `%test` focused on
+the environment. The owning `plugin.yaml` files are authoritative for exactly
+which paths each family declares; this page does not restate them.
 
-| Family | Keep as SIF build input/environment | Move to Runtime Bundle | Important migration work |
-| --- | --- | --- | --- |
-| `alphafold3` | `alphafold3.def`, pinned upstream AF3, CUDA/Python, HMMER, compiled packages | `alphafold3/run.sh` plus existing `common/runtime/task_context.*` | Remove script `%files` and `chmod`, change manifest entrypoint; preserve AF3 features/model behavior and AF3 licensing boundary |
-| `gremlin_lh` | `gremlin_lh.def`, `gremlin_lh/requirements.lock`, JAX/NumPy/SciPy/Optax/matplotlib environment | `gremlin_lh/run.sh`, `fit_model.py`, `stage_inputs.py`, shared context | Replace `/app/revocompute/fit_model.py` and associated in-image imports/paths; preserve alignment role verification and Potts output contract |
-| `gremlin` (source directory `pssm_gremlin`) | `pssm_gremlin/gremlin.def`, `GREMLIN.yml`, Conda TF/GREMLIN, HHblits/HHfilter/PSI-BLAST executables | `pssm_gremlin/run.sh`, `stage_inputs.py`, the `scripts/` algorithm directory, shared context | Preserve two Python environments (legacy Conda scientific Python and modern resolver Python), stage selection `msa|fit|pssm`, produced-artifact role checks, existing output layouts |
+An image may still bake code that is genuinely ABI-coupled, compiled during the
+build, or generated by it. That is an environment dependency, not a boundary
+violation, and the reason is recorded next to the manifest.
 
-`%files` is allowed for an environment lock required during `%post`, but must
-not copy REvoCompute runtime/algorithm code. `%post` must not chmod runtime
-code that is no longer in the image; `%test` checks the environment only.
-Production execution uses `apptainer exec` and the manifest's explicit
-`entrypoint`, **not** the image's `%runscript`. Remove or neutralize legacy
-`%runscript` so it does not invoke an image-baked script. If an environment
-truly requires compiled/generated REvoCompute code inside the image, justify
-and test that exception explicitly; do not silently loosen the boundary.
+## Decisions the implementation preserves
 
-The container path for a snapshot is
-`/opt/revocompute/runtime/<family-source-dir>/...`; the family ID
-`gremlin` maps to directory `pssm_gremlin`. Relative helpers and imports
-must resolve from the script's actual location in the mounted snapshot rather
-than from a mutable working directory or `/app/revocompute`. Any path override
-for testing must not become an unverified production fallback.
+- A Task pins `runtime_bundles: {family: digest}` for every executing family; a
+  later activation never changes a queued or running Task.
+- The Slurm adapter resolves the pinned digest, verifies the immutable bundle
+  content, and mounts it read-only at the reserved root. A missing, corrupted,
+  or unverified bundle refuses before submission; there is no fallback to
+  `/app/revocompute` or a checkout path.
+- Candidate bundles are not active by construction. Materialization during a
+  live test never changes what a queued Task or the running deployment resolves.
+- Activation is receipt-gated: a changed binding is published only when a valid
+  live-test receipt covers that exact family, digest, SIF build provenance,
+  configuration, and test definition. A failed test leaves the prior binding.
+- Cross-family executed graphs keep the verified producer-output role binding
+  from PR #130, with per-stage identity and resource accounting unchanged.
+  Composed acceptance binds every participating SIF, build provenance, and
+  bundle digest, so a companion change invalidates the receipt.
+- Rollback switches the activation index to an accepted prior identity; it never
+  rewrites or prunes historical snapshots.
+- Serial DAG execution and the Nextflow-disabled decision from PR #130 are
+  unchanged. No concurrency, ledger, or workflow-backend redesign belongs to
+  this separation.
 
-## Expected change classification
+## Verification and evidence
 
-| Change | SIF/build provenance | Runtime Bundle | Live-test behavior |
-| --- | --- | --- | --- |
-| Edit `run.sh`, `fit_model.py`, `stage_inputs.py`, or GREMLIN scripts | Unchanged | New digest | New candidate snapshot; scientific live-test required before activation |
-| Edit `requirements.lock`, `GREMLIN.yml`, `.def`, or pinned upstream version | Changed | Unchanged unless overlay also changed | New candidate SIF; scientific live-test required |
-| Edit both classes | Changed | Changed | Validate the exact new pair |
-| No changes | Unchanged | Unchanged | No redundant build or re-acceptance if current identity and receipt remain valid |
-| Change task execution contract, stage outputs, input bindings, or test specification | Usually unchanged | Usually unchanged | Revalidate receipt/contract as existing policy requires |
-| Change presentation-only labels/docs | Unchanged | Unchanged | No scientific re-acceptance |
+CI contracts exercise the mutation classes: an overlay-only edit changes the
+bundle digest while the SIF identity and bytes stay fixed; an environment-only
+edit changes the SIF identity and cannot reuse the prior receipt; mixed changes
+require the exact pair; unchanged inputs are a no-op. Execution-path contracts
+assert that the generated Slurm/Apptainer command resolves the pinned bundle and
+refuses missing, tampered, or legacy-spelled code.
 
-“Trigger live test” means a **gated controller/deployment operation**, not a
-filesystem watcher that silently executes HPC workloads. The controller must
-report the needed action, materialize and validate a candidate without
-activating it, and publish only after acceptance. Integrate the established
-CLI/workflow paths; do not create a second deployment orchestrator. Distinguish
-a one-off server worker image build from a **scientific SIF rebuild** when
-reporting zero rebuilds.
+GitHub-hosted CI may isolate OS and HPC boundaries for those checks, but it does
+not build a target-cluster SIF or establish scientific readiness. Real isolated
+target-host acceptance for PR #131 has not been run yet; no CI result or page in
+this site is a substitute for it, and nothing here claims production activation.
 
-## Build, admission and promotion invariants
+## Remaining scope
 
-- The exact same normalized sources define a SIF's build identity across
-  local checks and deployment. The contents and executable mode of the
-  declared overlay alone define the Runtime Bundle digest.
-- A Task pins `runtime_bundles: {family: digest}` for **every executing family**;
-  a later activation may not change queued/running Tasks.
-- The Slurm adapter resolves the pinned digest, verifies immutable bundle
-  content and mounts it read-only at the reserved root. Missing/corrupted,
-  unlisted, stale, or unverified executable input refuses before submission.
-  No fallback to `/app/revocompute/run.sh` or checkout paths.
-- Cross-family compiled graphs retain the verified producer-output-to-consumer
-  role binding introduced in PR #130. Preserve per-stage StageRun identity,
-  allocation and GPU accounting; do not turn serial branches into concurrency.
-- Composed acceptance binds **all** participating SIF hashes, build
-  provenances and Runtime Bundle digests. Companion SIF/bundle changes
-  invalidate the relevant receipt. A single-family receipt cannot bless a
-  foreign stage merely because its owning stage passed.
-- Candidate bundles/SIFs are **not** production active by construction.
-  Refusal or live-test failure leaves previous active identities intact.
-  Activating a successfully tested bundle is permitted only via the existing
-  controlled mechanism, never as a side effect of a failed test.
-- Retention/GC must preserve the old immutable bundle for active, queued and
-  running Tasks. Version rollback is switching the active index to an accepted
-  prior identity, not rewriting historical snapshots.
-
-## Regression and scientific acceptance
-
-The PR is not complete when the YAML passes linting. Use a mutation-sensitive
-matrix, implemented in the existing server/runner/fleet test suites:
-
-1. Modify **only** each family adapter/algorithm file: assert unchanged
-   `build_provenance_digest`, changed bundle digest, zero scientific SIF
-   rebuild requests, stale/new acceptance before activation, and refusal
-   to execute an unpinned or corrupt bundle.
-2. Modify **only** the environment lock or `.def`: assert SIF identity changes,
-   rebuild requested, and a previous receipt cannot authorize it.
-3. Unchanged inputs: assert no-op behavior (no unnecessary rebuild/retest).
-   Mixed changes must require acceptance of the exact SIF+bundle pair.
-4. Verify the actual `ExecutionPlan.command` and generated Slurm/Apptainer
-   wrapper target the pinned overlay, without an in-image or mutable-source
-   fallback. Test correct executable modes, missing scripts, unexpected
-   symlinks, digest tampering, and bundle removal after submission.
-5. Verify both the legacy single-family GREMLIN stages and the composed
-   `gremlin_msa_to_lh_fit` path with real output identities, verified alignment
-   passed via `TASK_STAGE_INPUTS`, and no reuse of an unverified shared file.
-   Validate AF3 `features -> model` on the existing SIF/overlay pair with
-   immutable output provenance. A code-path presence assertion is insufficient.
-6. Verify the non-GPU and GPU stages' scheduler allocation, accounting and
-   fail-closed refusal paths. Preserve existing gate behavior across family
-   discovery, disabled families and partial installations.
-7. Check the CI change classifier and existing `RunnerFastContracts`,
-   `RunnerScientificAcceptance`, `REvoComputeTests`,
-   `ServerComposeFullStack`, and documentation. CI scientific tests may use
-   isolated dependencies/stubs for contract mutation checks; do **not**
-   mistake those results for real SIF/Slurm acceptance.
-
-Before final campaign acceptance, report **real isolated Apptainer/Slurm
-scientific evidence** on the exact PR head for the three migrated families:
-AF3 GPU `features -> model`, standalone GREMLIN_LH, GREMLIN MSA/fit/PSSM,
-and GREMLIN MSA -> GREMLIN_LH across families, including SIF and bundle digests,
-StageRun/Slurm IDs, artifact hashes, scientific result validation and
-allocation/ledger facts as applicable. First migration **does require**
-building new candidate SIFs because the definitions changed; the proof of
-zero rebuild concerns subsequent overlay-only mutations. Do not use an old
-receipt as exact-head acceptance after acceptance-code changes.
-
-## Out of scope and control
-
-Do not automatically migrate the rest of the Runner Fleet. Produce a **fleet
-audit** listing remaining baked script/algorithm entrypoints and justified
-environment-coupled exceptions, for a separate rollout. Do not change the
-scientific algorithms, rewrite resource accounting, introduce a new bundle
-store, change license policies, add Nextflow, or authorize production changes.
-
-PR is **Draft / NO MERGE** until exact-head CI, mutation-sensitive evidence,
-isolated scientific acceptance, independent technical/security/scientific
-reviews, Examiner and final Campaign Acceptance Auditor PASS. Maintainer alone
-authorizes squash merge, production deployment, restart, migration and SIF
-promotion. Keep the Independent Campaign Adviser active; post substantive
-findings and receipts in PR threads as the canonical technical record.
+- A fleet audit of the remaining Runner Family definitions — baked entrypoints,
+  algorithm scripts, lock-file classification, and hardcoded `/app/revocompute`
+  execution — is a separate follow-up. It is not a blanket mutation of unrelated
+  families.
+- Upstream libraries and compiled or ABI-coupled artifacts may stay in the
+  image. Only pure REvoCompute adapters and algorithm code belong in a bundle.
+- Merge, production deployment, SIF promotion, and bundle activation remain
+  maintainer-authorized actions outside the scope of this design record.
