@@ -69,6 +69,58 @@ def _durable_uploads(module) -> list[Path]:
     return sorted(path for path in root.rglob("*") if path.is_file())
 
 
+def _assert_no_submission_side_effects(module, queued: list[bool]) -> None:
+    assert module.task_store.list_tasks() == []
+    assert module.task_store.list_live_reservations() == []
+    assert _durable_uploads(module) == []
+    assert queued == []
+
+
+def test_a_family_outside_the_enabled_set_is_refused_before_any_side_effect(monkeypatch, tmp_path):
+    """Family-level enablement is the registry, not a UI affordance.
+
+    The deployment enables one family; the other family's Task is not in the
+    server's registry at all.  Both the read-only preflight and the submission
+    boundary must refuse before a Task row, an upload publication, a quota hold
+    or a scheduler request exists.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "cpu_runner",
+        },
+    )
+    queued: list[bool] = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_args, **_kwargs: queued.append(True))
+
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+
+    def payload() -> dict:
+        return {
+            "task_type": "structure_runner",
+            "files": (io.BytesIO(b"ATOM      1  CA  ALA A   1\n"), "structure.pdb"),
+            "input_roles": "structure",
+        }
+
+    for endpoint in ("/compute/api/preflight/structure_runner", "/compute/api/post"):
+        response = client.post(endpoint, headers=headers, data=payload(), content_type="multipart/form-data")
+
+        assert response.status_code == 400, response.get_data(as_text=True)
+        body = response.get_json()
+        if endpoint.endswith("/post"):
+            assert body["error"] == "Validation failed"
+            assert "Unknown task type" in body["details"][0]["message"]
+        else:
+            assert body["valid"] is False
+            assert body["admission"] == {"allowed": False}
+            assert body["errors"][0]["code"] == "contract_invalid"
+        _assert_no_submission_side_effects(module, queued)
+
+
 def test_disabled_task_type_is_refused_before_any_task_upload_or_dispatch(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
