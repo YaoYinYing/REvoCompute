@@ -441,7 +441,9 @@ def _entry(tmp_path: Path, relative: str) -> rb.OverlayEntry:
 def test_a_single_element_legacy_entrypoint_is_refused_when_the_overlay_delivers_it(tmp_path: Path) -> None:
     entry = _entry(tmp_path, "demo/run.sh")
 
-    error = rb.overlay_entrypoint_error(["/app/revocompute/run.sh"], [entry])
+    error = rb.overlay_entrypoint_error(
+        ["/app/revocompute/run.sh"], [entry], source_directory="demo"
+    )
 
     assert error is not None and "must resolve under" in error
 
@@ -457,7 +459,9 @@ def test_a_single_element_legacy_entrypoint_is_refused_when_the_overlay_delivers
 def test_a_shell_entrypoint_cannot_hide_a_legacy_path(tmp_path: Path, entrypoint: list[str]) -> None:
     entry = _entry(tmp_path, "demo/run.sh")
 
-    assert rb.overlay_entrypoint_error(entrypoint, [entry]) is not None
+    assert (
+        rb.overlay_entrypoint_error(entrypoint, [entry], source_directory="demo") is not None
+    )
 
 
 @pytest.mark.parametrize(
@@ -475,7 +479,9 @@ def test_shell_punctuation_cannot_hide_a_legacy_path(
 ) -> None:
     entry = _entry(tmp_path, "demo/run.sh")
 
-    assert rb.overlay_entrypoint_error(entrypoint, [entry]) is not None
+    assert (
+        rb.overlay_entrypoint_error(entrypoint, [entry], source_directory="demo") is not None
+    )
 
 
 @pytest.mark.parametrize(
@@ -505,7 +511,9 @@ def test_an_overlay_executable_outside_the_reserved_mount_is_refused(
     """
     entry = _entry(tmp_path, "demo/run.sh")
 
-    error = rb.overlay_entrypoint_error(entrypoint, [entry])
+    error = rb.overlay_entrypoint_error(
+        entrypoint, [entry], source_directory="demo"
+    )
 
     assert error is not None and "must resolve under" in error
 
@@ -519,21 +527,119 @@ def test_an_argument_spelling_of_the_declared_executable_is_also_refused(tmp_pat
     entry = _entry(tmp_path, "demo/run.sh")
 
     error = rb.overlay_entrypoint_error(
-        ["/opt/revocompute/runtime/demo/run.sh", "--config", "./run.sh"], [entry]
+        ["/opt/revocompute/runtime/demo/run.sh", "--config", "./run.sh"],
+        [entry],
+        source_directory="demo",
     )
 
     assert error is not None and "must resolve under" in error
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        ["bash", "/tmp/wrapper.sh"],
+        ["bash", "-c", "echo done"],
+        ["bash", "-c", "sh /tmp/wrapper.sh"],
+        ["bash", "/tmp/wrapper.sh", "/opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "/opt/revocompute/runtime/demo/helper.sh"],
+        ["bash", "/opt/revocompute/runtime/common/run.sh"],
+        ["/bin/true", "/opt/revocompute/runtime/demo/run.sh"],
+        ["echo", "/opt/revocompute/runtime/demo/run.sh"],
+        ["cat", "/opt/revocompute/runtime/demo/run.sh"],
+        ["rm", "-rf", "/data", "/opt/revocompute/runtime/demo/run.sh"],
+        ["/bin/echo", "/opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-c", "true", "/opt/revocompute/runtime/demo/run.sh"],
+        ["sh", "-c", "true", "/opt/revocompute/runtime/demo/run.sh"],
+        ["python3", "-c", "pass", "/opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-c", "echo /opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-c", "exec -a /opt/revocompute/runtime/demo/run.sh /tmp/evil.sh"],
+        ["bash", "--rcfile", "/opt/revocompute/runtime/demo/run.sh", "/tmp/evil.sh"],
+        ["bash", "--init-file", "/opt/revocompute/runtime/demo/run.sh", "/tmp/evil.sh"],
+        ["env", "-u", "/opt/revocompute/runtime/demo/run.sh", "/tmp/evil.sh"],
+        ["bash", "-c", "command -v /opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-ec", "exec /opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-o", "errexit", "/opt/revocompute/runtime/demo/run.sh"],
+        ["env", "-C", "/tmp", "/opt/revocompute/runtime/demo/run.sh"],
+        ["command", "-v", "/opt/revocompute/runtime/demo/run.sh"],
+    ],
+)
+def test_a_family_that_declares_its_own_run_script_must_start_it(
+    tmp_path: Path, entrypoint: list[str]
+) -> None:
+    """The own mount is the executed command, not a trailing argument.
+
+    ``helper.sh`` and ``common/run.sh`` are declared too, so their mount paths
+    pass the spelling rule; only the command-position requirement refuses
+    starting them in place of the source directory's ``run.sh``.
+    """
+    run = _entry(tmp_path, "demo/run.sh")
+    helper = _entry(tmp_path, "demo/helper.sh")
+    shared = _entry(tmp_path, "common/run.sh")
+
+    error = rb.overlay_entrypoint_error(
+        entrypoint, [run, helper, shared], source_directory="demo"
+    )
+
+    assert error is not None and "own run script" in error
+
+
+def test_a_run_script_outside_the_source_directory_is_not_owned(tmp_path: Path) -> None:
+    """Another family's ``run.sh`` in the shared overlay is not this entrypoint."""
+    run = _entry(tmp_path, "demo/run.sh")
+    shared = _entry(tmp_path, "common/run.sh")
+
+    assert (
+        rb.overlay_entrypoint_error(
+            ["bash", "/opt/revocompute/runtime/common/run.sh"],
+            [run, shared],
+            source_directory="demo",
+        )
+        is not None
+    )
+    # Without a source directory the family is helper-only and keeps any
+    # declared mounted command.
+    assert (
+        rb.overlay_entrypoint_error(
+            ["bash", "/opt/revocompute/runtime/common/run.sh"], [run, shared]
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        ["bash", "/opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-c", "exec /opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-c", "exec /opt/revocompute/runtime/demo/run.sh extra"],
+        ["env", "X=1", "bash", "/opt/revocompute/runtime/demo/run.sh"],
+        ["/opt/revocompute/runtime/demo/run.sh", "arg"],
+    ],
+)
+def test_starting_the_own_run_script_at_its_mount_is_accepted(
+    tmp_path: Path, entrypoint: list[str]
+) -> None:
+    entry = _entry(tmp_path, "demo/run.sh")
+
+    assert (
+        rb.overlay_entrypoint_error(entrypoint, [entry], source_directory="demo") is None
+    )
 
 
 def test_an_entrypoint_under_the_reserved_mount_must_be_declared(tmp_path: Path) -> None:
     entry = _entry(tmp_path, "demo/run.sh")
 
     assert (
-        rb.overlay_entrypoint_error(["bash", "/opt/revocompute/runtime/demo/run.sh"], [entry])
+        rb.overlay_entrypoint_error(
+            ["bash", "/opt/revocompute/runtime/demo/run.sh"], [entry], source_directory="demo"
+        )
         is None
     )
     assert (
-        rb.overlay_entrypoint_error(["bash", "/opt/revocompute/runtime/demo/other.sh"], [entry])
+        rb.overlay_entrypoint_error(
+            ["bash", "/opt/revocompute/runtime/demo/other.sh"], [entry], source_directory="demo"
+        )
         is not None
     )
     # Every element is inspected, not only the executable.
@@ -541,6 +647,7 @@ def test_an_entrypoint_under_the_reserved_mount_must_be_declared(tmp_path: Path)
         rb.overlay_entrypoint_error(
             ["/opt/revocompute/runtime/demo/run.sh", "--config", "/opt/revocompute/runtime/demo/other.sh"],
             [entry],
+            source_directory="demo",
         )
         is not None
     )
@@ -549,4 +656,9 @@ def test_an_entrypoint_under_the_reserved_mount_must_be_declared(tmp_path: Path)
 def test_an_unmigrated_family_keeps_its_legacy_entrypoint(tmp_path: Path) -> None:
     entry = _entry(tmp_path, "common/runtime/task_context.sh")
 
-    assert rb.overlay_entrypoint_error(["bash", "/app/revocompute/run.sh"], [entry]) is None
+    assert (
+        rb.overlay_entrypoint_error(
+            ["bash", "/app/revocompute/run.sh"], [entry], source_directory="demo"
+        )
+        is None
+    )

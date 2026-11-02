@@ -545,6 +545,69 @@ def test_an_overlay_entrypoint_outside_the_mount_is_refused(
     )
 
 
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        ["bash", "/tmp/wrapper.sh"],
+        ["bash", "-c", "echo done"],
+        ["bash", "-c", "sh /tmp/wrapper.sh"],
+        ["bash", "/tmp/wrapper.sh", "/opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "/opt/revocompute/runtime/demo/helper.sh"],
+        ["bash", "/opt/revocompute/runtime/common/run.sh"],
+        ["/bin/true", "/opt/revocompute/runtime/demo/run.sh"],
+        ["echo", "/opt/revocompute/runtime/demo/run.sh"],
+        ["cat", "/opt/revocompute/runtime/demo/run.sh"],
+        ["rm", "-rf", "/data", "/opt/revocompute/runtime/demo/run.sh"],
+        ["/bin/echo", "/opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-c", "true", "/opt/revocompute/runtime/demo/run.sh"],
+        ["sh", "-c", "true", "/opt/revocompute/runtime/demo/run.sh"],
+        ["python3", "-c", "pass", "/opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-c", "echo /opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-c", "exec -a /opt/revocompute/runtime/demo/run.sh /tmp/evil.sh"],
+        ["bash", "--rcfile", "/opt/revocompute/runtime/demo/run.sh", "/tmp/evil.sh"],
+        ["bash", "--init-file", "/opt/revocompute/runtime/demo/run.sh", "/tmp/evil.sh"],
+        ["env", "-u", "/opt/revocompute/runtime/demo/run.sh", "/tmp/evil.sh"],
+        ["bash", "-c", "command -v /opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-ec", "exec /opt/revocompute/runtime/demo/run.sh"],
+        ["bash", "-o", "errexit", "/opt/revocompute/runtime/demo/run.sh"],
+        ["env", "-C", "/tmp", "/opt/revocompute/runtime/demo/run.sh"],
+        ["command", "-v", "/opt/revocompute/runtime/demo/run.sh"],
+    ],
+)
+def test_a_family_that_declares_its_own_run_script_must_start_it(
+    tmp_path: Path, entrypoint: list[str]
+) -> None:
+    """Registry load and Doctor refuse an entrypoint that skips the own script."""
+    runners = tmp_path / "runners"
+    family = runners / "demo"
+    family.mkdir(parents=True)
+    (family / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (family / "helper.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    shared = runners / "common"
+    shared.mkdir()
+    (shared / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (family / "demo.def").write_text("Bootstrap: docker\nFrom: scratch\n", encoding="utf-8")
+    manifest = {
+        "api_version": 1,
+        "id": "demo",
+        "version": "1",
+        "runtime": {
+            "image_artifact": "demo.sif",
+            "definition": "demo.def",
+            "entrypoint": entrypoint,
+            "runtime_overlay": ["demo/run.sh", "demo/helper.sh", "common/run.sh"],
+        },
+    }
+    (family / "plugin.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+    with pytest.raises(RegistryError):
+        load_plugin_families(runners)
+    assert any(
+        diagnostic.code == "E2005" and "own run script" in diagnostic.message
+        for diagnostic in diagnose(runners, repo_root=ROOT).diagnostics
+    )
+
+
 def _composed_tree(tmp_path: Path) -> tuple[RuntimeFamily, RuntimeFamily]:
     runners = tmp_path / "runners"
     owner_root = runners / "composed_runner"

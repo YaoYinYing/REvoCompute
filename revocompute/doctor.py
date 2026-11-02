@@ -190,7 +190,9 @@ def diagnose(
                     )
                 entrypoint = runtime.get("entrypoint", ())
                 if isinstance(entrypoint, list) and (
-                    error := rb.overlay_entrypoint_error(entrypoint, entries)
+                    error := rb.overlay_entrypoint_error(
+                        entrypoint, entries, source_directory=family.name
+                    )
                 ):
                     # The runtime entrypoint executes from the mounted bundle: a
                     # path under the overlay is valid, but it must actually be in

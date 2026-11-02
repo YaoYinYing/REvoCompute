@@ -113,7 +113,9 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
                 file=sys.stderr,
             )
             raise RegistryError
-        entrypoint_error = runtime_bundle.overlay_entrypoint_error(entrypoint, overlay_entries)
+        entrypoint_error = runtime_bundle.overlay_entrypoint_error(
+            entrypoint, overlay_entries, source_directory=manifest.path.name
+        )
         if entrypoint_error:
             print(
                 f"Runner plugin {manifest.id} has an invalid runtime entrypoint: {entrypoint_error}",

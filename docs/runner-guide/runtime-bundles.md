@@ -62,9 +62,15 @@ same overlay. Any other spelling of an overlay-delivered executable — a legacy
 `/app/revocompute/<file>`, a different absolute path, a relative path, or a
 shell-wrapped word — is refused when the overlay delivers that executable (same
 repository-relative path or basename), because it would start baked or missing
-code while the bundle identity claims the snapshot ran. An entrypoint that does not name overlay content — an
-unmigrated family, or an executable that genuinely belongs to the image — is
-accepted unchanged.
+code while the bundle identity claims the snapshot ran. A family that declares
+its own `<source-directory>/run.sh` must start that exact mount path: another
+executable, or a wrapper that only passes the declared script as an argument,
+is refused. The accepted forms are the mount path as the command, a shell word
+followed by the mount path, `env` assignments then a shell word and the mount
+path, and `<shell> -c 'exec <mount>'`. Interpreter and `env` options are refused
+rather than parsed, so spell the script directly. An entrypoint that does not name overlay content — an unmigrated
+family whose overlay carries only shared helpers, or an executable that
+genuinely belongs to the image — is accepted unchanged.
 
 Doctor and the registry apply this rule during validation, so a half-migrated
 manifest fails before deployment rather than at launch.

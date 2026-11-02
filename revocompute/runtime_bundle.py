@@ -232,7 +232,93 @@ def _anchored_root_index(token: str, root: str) -> int | None:
     return None
 
 
-def overlay_entrypoint_error(entrypoint: Iterable[str], entries: Iterable[OverlayEntry]) -> str | None:
+def _is_assignment(token: str) -> bool:
+    """Whether a word is a ``NAME=value`` environment assignment."""
+    name, separator, _value = token.partition("=")
+    return bool(separator) and name.isidentifier()
+
+
+_SHELLS = {"bash", "sh", "dash", "zsh", "ksh"}
+_REFUSED_PREFIXES = {"command", "builtin", "time", "exec", "nohup"}
+
+
+def _code_script(code: tuple[str, ...]) -> str | None:
+    """The script a shell ``-c`` code word executes, or ``None``.
+
+    Only ``M ...`` and ``exec M ...`` shapes are accepted; an option after
+    ``exec`` or any other prefix is refused.
+    """
+    if not code or code[0].startswith("-"):
+        return None
+    word = _token_basename(code[0])
+    if word == "exec":
+        if len(code) < 2 or code[1].startswith("-"):
+            return None
+        return code[1]
+    if word in _REFUSED_PREFIXES:
+        return None
+    return code[0]
+
+
+def _shell_script(
+    flat: list[tuple[int, str]], groups: tuple[tuple[str, ...], ...], position: int
+) -> str | None:
+    """The script operand of a shell word, or ``None`` for an option."""
+    index = position + 1
+    if index >= len(flat):
+        return None
+    token = flat[index][1]
+    if token not in {"-c", "--command"}:
+        return None if token.startswith("-") else token
+    flag_group = flat[index][0]
+    same_group = tuple(item for group, item in flat[index + 1 :] if group == flag_group)
+    if same_group:
+        return _code_script(same_group)
+    following = groups[flag_group + 1] if flag_group + 1 < len(groups) else ()
+    return _code_script(following)
+
+
+def _executed_script(groups: tuple[tuple[str, ...], ...]) -> str | None:
+    """The script an accepted entrypoint shape executes, or ``None``.
+
+    Accepted shapes are ``[M, ...]``, ``env (NAME=value)* [shell] M ...``,
+    ``[shell, M, ...]``, and ``[shell, "-c", code]`` with code shaped ``M ...``
+    or ``exec M ...``.  Options on the interpreter or ``env`` are refused rather
+    than parsed, so ``bash -o errexit M`` and ``env -u X bash M`` are not
+    accepted forms; unknown shapes fail closed.
+    """
+    flat = [(index, token) for index, group in enumerate(groups) for token in group]
+    if not flat:
+        return None
+    first = flat[0][1]
+    if first == "env":
+        index = 1
+        while index < len(flat) and _is_assignment(flat[index][1]):
+            index += 1
+        if index >= len(flat):
+            return None
+        token = flat[index][1]
+        if _token_basename(token) in _SHELLS:
+            return _shell_script(flat, groups, index)
+        if token.startswith("-") or _token_basename(token) in _REFUSED_PREFIXES:
+            return None
+        return token
+    if first.startswith("-") or _is_assignment(first):
+        return None
+    word = _token_basename(first)
+    if word in _SHELLS:
+        return _shell_script(flat, groups, 0)
+    if word in _REFUSED_PREFIXES:
+        return None
+    return first
+
+
+def overlay_entrypoint_error(
+    entrypoint: Iterable[str],
+    entries: Iterable[OverlayEntry],
+    *,
+    source_directory: str | None = None,
+) -> str | None:
     """The contract violation for an entrypoint that names an overlay-declared file.
 
     An executable the bundle delivers resolves only under the reserved mount.
@@ -241,24 +327,30 @@ def overlay_entrypoint_error(entrypoint: Iterable[str], entries: Iterable[Overla
     nothing, while its bundle identity says it runs the snapshot.  Every argv
     element and every shell word is inspected, not just the last one, so
     ``bash -c "exec /app/revocompute/run.sh"`` cannot bypass the rule.  A path
-    under the reserved mount must be a declared entry.  Families whose
+    under the reserved mount must be a declared entry.  A family whose source
+    directory declares ``run.sh`` must have it as the executed command, not
+    unrelated code or a later argument; ``source_directory`` names that
+    directory, and ``None`` keeps a helper-only family exempt.  Families whose
     entrypoint is not overlay-declared are outside this contract: they have not
     migrated and keep their image entrypoint.
     """
     declared_entries = tuple(entries)
     if not declared_entries:
         return None
+    steps = tuple(entrypoint or ())
     declared = {entry.relative for entry in declared_entries}
     declared_names = {Path(entry.relative).name for entry in declared_entries}
     mounted = {f"{RUNTIME_MOUNT_TARGET}/{entry.relative}" for entry in declared_entries}
+    own = {f"{source_directory}/run.sh"} & declared if source_directory else set()
+    own_mounts = {f"{RUNTIME_MOUNT_TARGET}/{relative}" for relative in own}
     violation = (
         "Runtime entrypoint for an overlay-declared file must resolve under "
         f"{RUNTIME_MOUNT_TARGET}"
     )
-    for step in entrypoint or ():
-        if not isinstance(step, str):
-            continue
-        tokens = _entrypoint_tokens(step)
+    step_tokens = [
+        tuple(_entrypoint_tokens(step)) if isinstance(step, str) else () for step in steps
+    ]
+    for tokens in step_tokens:
         # A shell command may ``cd`` to the legacy root and run a relative
         # script.  The relative name is only dangerous when the overlay
         # delivers an entry with that basename.
@@ -296,6 +388,13 @@ def overlay_entrypoint_error(entrypoint: Iterable[str], entries: Iterable[Overla
             # belongs to an unmigrated family and stays baked.
             if relative in declared or _token_basename(relative) in declared_names:
                 return f"{violation}: {path}"
+    if own_mounts:
+        command = _executed_script(tuple(step_tokens))
+        if command not in own_mounts:
+            return (
+                "Runtime entrypoint must start the family's own run script under "
+                f"{RUNTIME_MOUNT_TARGET}: {command or 'none'}"
+            )
     return None
 
 

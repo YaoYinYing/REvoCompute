@@ -73,8 +73,9 @@ edit changes the SIF identity and cannot reuse the prior receipt; a mixed edit
 is reported `BUILD_STALE` for the new build provenance, and the prior receipt
 does not authorize the new `(SIF, bundle)` pair; unchanged inputs are a no-op.
 Registry and Doctor validation refuse any entrypoint spelling of an
-overlay-delivered executable other than its exact mount path, and bundle
-resolution fails closed for a missing, tampered, or unpublished binding.
+overlay-delivered executable other than its exact mount path, and a family that
+declares its own run script must start it rather than another executable.
+Bundle resolution fails closed for a missing, tampered, or unpublished binding.
 
 GitHub-hosted CI isolates OS and HPC boundaries for those checks, but it does
 not build a target-cluster SIF or establish scientific readiness. Isolated
