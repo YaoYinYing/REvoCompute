@@ -546,11 +546,13 @@ def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypa
 # -- Task-level failure attribution across independent branches (PR #130 P2) --
 
 
-def _diamond_job_class(action):
+def _diamond_job_class(action, allocation_facts=None):
     """A job double whose stage ``a``/``b``/``c``/``d`` suffix picks its behavior.
 
     Both outcomes mirror the production adapter: every allocation replaces the
-    shared Task-level diagnostics row with its own evidence.
+    shared Task-level diagnostics row with its own evidence.  ``allocation_facts``
+    are merged into a successful allocation's row, like the attempt identity and
+    log record the real adapter persists.
     """
 
     class Job(_ObservedImageMixin):
@@ -565,12 +567,14 @@ def _diamond_job_class(action):
             task_runtime = _live_task_runtime()
             suffix = self._name.rsplit("-", 1)[-1]
             reason, exit_code = action(suffix)
+            self.failure_reason = reason
             if reason is not None:
                 evidence = {"reason_code": reason, "exit_code": exit_code, "stage_id": self._name.replace("-", ".")}
             else:
                 # A successful allocation's adapter also replaces the row with
                 # its own zero-exit evidence before the composer settles it.
                 evidence = {"reason_code": None, "exit_code": 0, "stage_id": self._name.replace("-", ".")}
+                evidence.update(allocation_facts or {})
             task_runtime.task_store.record_task_diagnostics(self._task_id, evidence)
             return JobState.FAILED if reason is not None else JobState.COMPLETED
 
@@ -663,8 +667,69 @@ def test_failure_attribution_prefers_first_failed_stage_when_two_fail(monkeypatc
     assert evidence.get("stage_id") == "dag.b"
 
 
+def test_failure_attribution_ignores_a_stale_failed_stage(monkeypatch, tmp_path):
+    """A stage that failed in an earlier execution cannot outrank this one's failure.
+
+    The manifest declares ``dag.b`` (a consumer) before its producer ``dag.a``,
+    so the consumer's stale FAILED attempt has the lower stage index.  On the
+    second execution the producer times out and the consumer is blocked: the
+    Task must name the producer that failed now, not the consumer's history.
+    """
+    task_runtime = _live_task_runtime()
+    base = _diamond_workflow()
+    task_type = replace(base, workflow=(base.workflow[1], base.workflow[0], *base.workflow[2:]))
+    output = tmp_path / "output"
+    output.mkdir()
+    phase = {"value": 1}
+
+    def action(suffix):
+        if phase["value"] == 1:
+            if suffix == "b":
+                return ("nonzero_exit", 3)
+            _write_diamond_output(output, suffix)
+            return (None, 0)
+        if suffix == "a":
+            return ("timeout", 9)
+        _write_diamond_output(output, suffix)
+        return (None, 0)
+
+    job_class = _diamond_job_class(action)
+
+    def create(task_id, stage_tt, *_args, **_kwargs):
+        return job_class(task_id, stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "di" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    first = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+    assert first == JobState.FAILED
+    assert (task_runtime.task_store.get_task_diagnostics(task_id) or {}).get("stage_id") == "dag.b"
+
+    phase["value"] = 2
+    second = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    )
+
+    assert second == JobState.FAILED
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id) or {}
+    assert evidence.get("reason_code") == "timeout"
+    assert evidence.get("stage_id") == "dag.a"
+    assert evidence.get("exit_code") == 9
+    assert evidence.get("blocked_stages") == ["dag.b", "dag.c", "dag.d"]
+
+
 def test_failure_attribution_records_pre_dispatch_refusal(monkeypatch, tmp_path):
-    """A pre-dispatch refusal (no durable attempt) is attributed to its stage."""
+    """A pre-dispatch refusal is attributed to its stage, without a sibling's facts.
+
+    ``dag.a`` and ``dag.b`` allocate and leave exit, attempt and log-record
+    evidence in the shared row.  ``dag.c`` cannot open an attempt, so none of
+    that evidence describes it and the refusal must not present it.
+    """
     task_runtime = _live_task_runtime()
     task_type = _diamond_workflow()
     output = tmp_path / "output"
@@ -674,7 +739,14 @@ def test_failure_attribution_records_pre_dispatch_refusal(monkeypatch, tmp_path)
         _write_diamond_output(output, suffix)
         return (None, 0)
 
-    job_class = _diamond_job_class(action)
+    job_class = _diamond_job_class(
+        action,
+        allocation_facts={
+            "attempt_id": "sibling-attempt",
+            "record_sha256": "ab" * 32,
+            "scheduler_state": "COMPLETED",
+        },
+    )
 
     def create(task_id, stage_tt, *_args, **_kwargs):
         return job_class(task_id, stage_tt.name)
@@ -701,6 +773,8 @@ def test_failure_attribution_records_pre_dispatch_refusal(monkeypatch, tmp_path)
     evidence = task_runtime.task_store.get_task_diagnostics(task_id) or {}
     assert evidence.get("reason_code") == "stage_attempt_unavailable"
     assert evidence.get("stage_id") == "dag.c"
+    for key in ("attempt_id", "record_sha256", "exit_code", "scheduler_state"):
+        assert key not in evidence
     assert evidence.get("blocked_stages") == ["dag.d"]
 
 
