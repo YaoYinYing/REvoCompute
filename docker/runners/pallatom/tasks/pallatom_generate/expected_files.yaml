@@ -1,0 +1,45 @@
+# Logical result files published by the Pallatom generation Task.
+#
+# Derived from the Nov 3 2026 target-host Slurm/Apptainer live-test acceptance
+# result (live-test fb7b02f92af4afc3584eff3ec926991b, SIF 2be064a6ae9e). The
+# observed tree has one jointly generated structure per sample, the FASTA pairs
+# for those samples, and the generation provenance. Generation is unconditional,
+# so all three are required; the structure file count follows `num_samples`.
+result:
+  files:
+    generated_structures:
+      pattern: 'design_*.pdb'
+      cardinality: many
+      required: true
+      type: structure
+      role: evidence
+    generated_sequences:
+      path: sample_seq.fasta
+      cardinality: one
+      required: true
+      type: fasta
+      role: evidence
+    generation_metadata:
+      path: generation_metadata.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

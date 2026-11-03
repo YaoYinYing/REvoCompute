@@ -1,0 +1,45 @@
+# Logical result files published by the Pythia-ddG Task.
+#
+# Derived from the Nov 3 2026 target-host Slurm/Apptainer live-test acceptance
+# result (live-test ce24912f795b88328d6b4268f0118368, SIF e7bc08014944). The
+# upstream scan writes the per-position stability-change matrix as both CSV and
+# TXT in the same unconditional branch, so both are required; the CSV is the
+# primary matrix the Task view renders.
+result:
+  files:
+    mutation_matrix:
+      pattern: '*_pred_mask.csv'
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    mutation_matrix_text:
+      pattern: '*_pred_mask.txt'
+      cardinality: one
+      required: true
+      type: text
+      role: artifact
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

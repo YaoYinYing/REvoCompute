@@ -1,0 +1,64 @@
+# Logical result files published by the GeoDock Task.
+#
+# Derived from the Nov 3 2026 target-host Slurm/Apptainer live-test acceptance
+# result (live-test 9676b7a8bc36d3ebea142aa307dddabd, SIF 778d1e07f831). The
+# observed tree has one raw docked pose, its per-residue confidence, the run and
+# model provenance, and the two normalized partner inputs. `geodock_refined.pdb`
+# is written only when the optional OpenMM refinement runs (`refine=true`), so it
+# is declared but not required.
+result:
+  files:
+    docked_complex:
+      path: geodock_raw.pdb
+      cardinality: one
+      required: true
+      type: structure
+      role: evidence
+    refined_complex:
+      path: geodock_refined.pdb
+      cardinality: one
+      required: false
+      type: structure
+      role: artifact
+    residue_confidence:
+      path: geodock-confidence.json
+      cardinality: one
+      required: true
+      type: json
+      role: evidence
+    run_provenance:
+      path: geodock-run.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    model_assets:
+      path: geodock-model-assets.sha256
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    input_partners:
+      pattern: 'debug/inputs/partner_*/*.pdb'
+      cardinality: many
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic
