@@ -185,8 +185,7 @@ def test_simplefold_publishes_structure_format_and_optional_matching_confidence(
 
     assert manifest["output_check"]["state"] == "passed", manifest["output_check"]
     assert manifest["storyboard"]["identifier"] == "simplefold-result"
-    assert len(manifest["result"]["files"]["structures_cif"]) == 1
-    assert manifest["result"]["files"]["structures_pdb"] == []
+    assert len(manifest["result"]["files"]["structures"]) == 1
     assert len(manifest["result"]["files"]["confidences"]) == 1
 
 

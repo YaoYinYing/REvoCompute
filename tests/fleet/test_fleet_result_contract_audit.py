@@ -42,8 +42,8 @@ def test_real_fleet_is_discovered_and_audited_end_to_end():
 def test_real_fleet_reports_no_unrecorded_contract_defect():
     """Every remaining finding is the explicit coverage boundary, nothing else.
 
-    The fleet is still NOT claimed clean: the 12 Tasks that require a view
-    source and ship no ``expected_files.yaml`` are reported as
+    The fleet is still NOT claimed clean: the six disabled Tasks that require a
+    view source and ship no ``expected_files.yaml`` are reported as
     ``result.required_source_undeclared_tree`` (unaudited, not green). The test
     fails if any *other* finding appears, so the reported state cannot drift
     into looking greener than it is.
@@ -151,11 +151,12 @@ def test_fleet_report_separates_covered_unaudited_and_defective():
     # Coverage is a partition ...
     assert report.covered | report.unaudited == frozenset(report.tasks)
     assert not (report.covered & report.unaudited)
-    assert len(report.covered) == 48 and len(report.unaudited) == 12
+    assert len(report.covered) == 54 and len(report.unaudited) == 6
     assert "caver" in report.covered
     assert "mol1_predict" in report.covered
-    # ... and defect status is orthogonal: it is empty here, while 12 Tasks are
-    # still unaudited, so a clean defect set is not a clean coverage set.
+    # ... and defect status is orthogonal: it is empty here, while the six
+    # disabled Tasks still have no tree, so a clean defect set is not a clean
+    # coverage set.
     assert set(report.defective) == set()
     assert report.defective <= report.covered
     assert report.ok is True
@@ -168,12 +169,12 @@ def test_fleet_audit_surfaces_the_families_with_no_declared_result_tree():
 
     The required-source and renderer-kind invariants are statements about a view
     and the ``expected_files.yaml`` identities a family publishes. Of the 60 Tasks,
-    48 are covered (a declared tree lets their required sources be evaluated) and
-    12 are unaudited -- each declaring a required view source with no shipped tree
-    to check it against. This test names that gap rather than letting the audit
-    report those Tasks green, and it fails if the set changes -- either a family
-    gained a tree (good; update the expected set) or a required source appeared
-    where nothing can validate it.
+    54 are covered (a declared tree lets their required sources be evaluated) and
+    the six disabled Tasks are unaudited -- each declaring a required view source
+    with no shipped tree to check it against. This test names that gap rather than
+    letting the audit report those Tasks green, and it fails if the set changes --
+    either a family gained a tree (good; update the expected set) or a required
+    source appeared where nothing can validate it.
     """
     report = audit_fleet(str(RUNNERS), server_dir=str(ROOT))
     undeclared = {
@@ -183,9 +184,8 @@ def test_fleet_audit_surfaces_the_families_with_no_declared_result_tree():
     # against. Each entry is a family that ships a ``result_workspace`` with a
     # required source but no ``expected_files.yaml``.
     expected = {
-        "deeppocket", "diffdock", "frodock", "geodock", "gnina",
-        "molprobity_validate", "p2rank", "pallatom_generate", "pythia_ddg",
-        "rfdiffusion2_ligand_binder", "rfdiffusion2_motif_scaffold", "thermompnn",
+        "deeppocket", "diffdock", "frodock", "gnina",
+        "molprobity_validate", "p2rank",
     }
     assert undeclared == expected
     # And the tree-bearing families are not in it: those ARE fully audited.

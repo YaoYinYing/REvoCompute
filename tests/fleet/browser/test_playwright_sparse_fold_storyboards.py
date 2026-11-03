@@ -77,11 +77,10 @@ def test_alphafold2_joins_rank_to_model_identity_before_loading_evidence(page: P
 
 def test_simplefold_pairs_optional_confidence_by_sample_stem(page: Page) -> None:
     files = {
-        "structures_cif": [
+        "structures": [
             {"url": "/sample-0", "name": "mini_sampled_0.cif"},
             {"url": "/sample-1", "name": "mini_sampled_1.cif"},
         ],
-        "structures_pdb": [],
         "confidences": [{"url": "/confidence-1", "name": "mini_sampled_1.json"}],
     }
     responses = {"/confidence-1": {"confidenceScore": [80, 90], "meanPlddt": 85}}
@@ -108,8 +107,7 @@ def test_sparse_storyboards_clear_structure_action_and_confidence_after_failed_r
         responses = {"/ranking": {"order": ["model_0", "model_1"]}, "/confidence-0": {"confidenceScore": [80], "residueNumber": [1]}}
     else:
         files = {
-            "structures_cif": [{"url": "/sample-0", "name": "sample_0.cif"}, {"url": "/sample-1", "name": "sample_1.cif"}],
-            "structures_pdb": [],
+            "structures": [{"url": "/sample-0", "name": "sample_0.cif"}, {"url": "/sample-1", "name": "sample_1.cif"}],
             "confidences": [{"url": "/confidence-0", "name": "sample_0.json"}, {"url": "/confidence-1", "name": "sample_1.json"}],
         }
         responses = {"/confidence-0": {"confidenceScore": [80]}}

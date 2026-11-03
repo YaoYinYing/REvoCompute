@@ -70,7 +70,7 @@ optional.
 Coverage and defect status are independent. A `tree_audited` Task can carry a
 concrete defect, and the report always exposes both, so a clean defect set can
 never be read as "the whole fleet passed": the defect set is currently empty
-while 12 Tasks remain unaudited (see [Known defects](#known-defects)).
+while six disabled TaskTypes remain unaudited (see [Known defects](#known-defects)).
 
 ## Evidence levels
 
@@ -194,8 +194,8 @@ Two caveats are load-bearing and are carried in the report itself:
 
 The audit's defect set is orthogonal to its coverage partition, and it is
 currently **empty**: `defective: []`, `ok: true`, with the coverage partition
-at 45 covered / 12 unaudited. An empty defect set is not a clean bill of
-health — all 12 unaudited Tasks still report
+at 54 covered / 6 unaudited. An empty defect set is not a clean bill of
+health — the six unaudited TaskTypes (all in disabled families) still report
 `result.required_source_undeclared_tree`, because no shipped tree exists to check
 their required sources against. The partition and the defect set are read off the
 same audit report, so a fleet that grows or shrinks moves them together; the
@@ -214,6 +214,41 @@ resolution is a declaration change rather than an allowlist entry:
   the compressed `*.cif.gz` design tree, beside its own `storyboard/`. The
   `result.required_source_unaddressed` finding is absent for both, neither is
   defective, and both remain `tree_audited` and covered.
+
+### Enabled TaskType result-contract closure
+
+The eleven enabled TaskTypes recorded by the #132 fleet matrix are reconciled
+against the canonical audit and the Nov 3 2026 target-host live-test acceptance
+trees:
+
+- New observed-output `expected_files.yaml` contracts: `geodock`, `thermompnn`,
+  `pallatom_generate`, `pythia_ddg`, `rfdiffusion2_ligand_binder`,
+  `rfdiffusion2_motif_scaffold`. All six move from `tree_absent` to
+  `tree_audited`.
+- `simplefold_predict` now declares one required bounded structure selector,
+  `*_sampled_*.[cp][id][bf]`, which covers both the mmcif and pdb
+  `output_format` branches while excluding confidence JSON and raw `.npz`
+  intermediates. It moves from `no_required_source` to `tree_audited`.
+- `foundry_rf3_fold` remains `no_required_source` **by design**: its seeded
+  structure is conditional on not early-stopping. The runner accepts a
+  structure or early-stopping ranking metrics, and the storyboard explicitly
+  renders the early-stop-without-structure outcome, so requiring the structure
+  would fail a legitimate result. This is a conditional-primary design, not a
+  source defect.
+- `codon_optimize`, `esm_extract`, and `esmdynamic` remain `no_required_source`
+  because their primary view is an `evidence-bundle`, whose raw `items` source is
+  coverage-exempt. Their declared required logical files and primary-view sources
+  all resolve on the observed trees; the state is a coverage artifact, not a
+  contract defect.
+- `gremlin` / `gremlin_msa_to_lh_fit` remain `no_views`; that state is covered and
+  their shipped trees still enforce required files.
+
+These declarations were validated against observed pre-change outputs. A
+declaration change moves the live-test `declared_result_contracts` identity, so
+the existing receipts do not bind the new declarations and no receipt-bound
+certification is claimed here. Artifact contents and unexercised conditional
+branches (`refine`, `write_trajectory`, `predict_plddt`, pdb output, early stop)
+remain NOT CERTIFIED.
 
 A second discrepancy was recorded as a **parameter** finding rather than a result
 contract defect, and the parameter-semantics follow-on closed it:
