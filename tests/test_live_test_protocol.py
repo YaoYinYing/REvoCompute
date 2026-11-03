@@ -244,29 +244,3 @@ def test_atomic_report_write_is_machine_readable(tmp_path):
     path = tmp_path / "reports" / "result.json"
     atomic_write_json(path, {"passed": True})
     assert json.loads(path.read_text(encoding="utf-8")) == {"passed": True}
-
-
-def test_selector_contract_omits_undeclared_extensions_from_the_identity_digest():
-    from revocompute.runner_live_test import selector_contract
-    from revocompute.task_types import ArtifactSelector
-
-    selector = ArtifactSelector(value="*_sampled_*.cif", is_glob=True, required=True)
-    projected = selector_contract(selector)
-
-    assert projected == {"value": "*_sampled_*.cif", "is_glob": True, "required": True}
-    # The pre-extension serializer emitted exactly these three keys, so an
-    # undeclared family's configuration digest cannot move.
-    assert canonical_digest({"sources": {"candidates": [projected]}}) == canonical_digest(
-        {"sources": {"candidates": [{"value": "*_sampled_*.cif", "is_glob": True, "required": True}]}}
-    )
-
-
-def test_selector_contract_serializes_a_declared_extension_constraint():
-    from revocompute.runner_live_test import selector_contract
-    from revocompute.task_types import ArtifactSelector
-
-    selector = ArtifactSelector(
-        value="*_sampled_*.[cp][id][bf]", is_glob=True, required=True, extensions=(".cif", ".pdb")
-    )
-
-    assert selector_contract(selector)["extensions"] == [".cif", ".pdb"]

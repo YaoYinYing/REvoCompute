@@ -86,7 +86,6 @@ from revocompute.result_storyboard import (
     declared_file_roles,
     expected_file_tree,
     is_server_record,
-    path_matches_extensions,
     resolve_expected_files,
     storyboard_declaration,
 )
@@ -2610,17 +2609,10 @@ def _resolve_result_views(
                     [
                         path
                         for path in paths
-                        if fnmatchcase(path, selector.value)
-                        and view_source_eligible(path, definition.role)
-                        and path_matches_extensions(path, selector.extensions)
+                        if fnmatchcase(path, selector.value) and view_source_eligible(path, definition.role)
                     ]
                     if selector.is_glob
-                    else [selector.value]
-                    if (
-                        view_source_eligible(selector.value, definition.role)
-                        and path_matches_extensions(selector.value, selector.extensions)
-                    )
-                    else []
+                    else [selector.value] if view_source_eligible(selector.value, definition.role) else []
                 )
                 if len(selected) > 500:
                     problems.append(f"{definition.title}: {source_name} matched more than 500 artifacts")
