@@ -5,7 +5,9 @@
 # observed tree has one raw docked pose, its per-residue confidence, the run and
 # model provenance, and the two normalized partner inputs. `geodock_refined.pdb`
 # is written only when the optional OpenMM refinement runs (`refine=true`), so it
-# is declared but not required.
+# is declared but not required. The `debug/` input snapshot and submission copy
+# are captured best-effort by the Server, so their absence must not invalidate a
+# complete scientific result.
 result:
   files:
     docked_complex:
@@ -41,13 +43,13 @@ result:
     input_partners:
       pattern: 'debug/inputs/partner_*/*.pdb'
       cardinality: many
-      required: true
+      required: false
       type: structure
       role: provenance
     submission:
       path: debug/submission.json
       cardinality: one
-      required: true
+      required: false
       type: json
       role: provenance
     citations:

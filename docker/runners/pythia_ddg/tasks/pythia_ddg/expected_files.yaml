@@ -6,6 +6,8 @@
 # is the required scientific output. The upstream scan also writes the same
 # values as a TXT rendering, but no view consumes it and a single observed run
 # does not prove it is scientifically necessary, so it is a declared artifact.
+# The `debug/` input snapshot and submission copy are captured best-effort by
+# the Server, so their absence must not invalidate a complete scientific result.
 result:
   files:
     mutation_matrix:
@@ -23,13 +25,13 @@ result:
     input_structure:
       pattern: 'debug/inputs/structure/*.pdb'
       cardinality: one
-      required: true
+      required: false
       type: structure
       role: provenance
     submission:
       path: debug/submission.json
       cardinality: one
-      required: true
+      required: false
       type: json
       role: provenance
     citations:

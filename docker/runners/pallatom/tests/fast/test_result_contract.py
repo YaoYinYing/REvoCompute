@@ -111,3 +111,14 @@ def test_sample_count_is_not_pinned_and_missing_primary_breaks_the_source() -> N
     ]
     problems = _resolve(tree, misnamed)[2]
     assert len(problems) == 1 and problems[0].endswith("required output is missing or empty")
+
+
+def test_missing_best_effort_debug_capture_does_not_invalidate_the_result() -> None:
+    task, tree = _load()
+    without_debug = tuple(path for path in OBSERVED if not path.startswith("debug/"))
+
+    resolved, checks, problems = _resolve(tree, without_debug)
+
+    assert problems == []
+    assert all(check["status"] == "passed" for check in checks)
+    assert PRIMARY_OUTPUT in _resolved_paths(resolved)
