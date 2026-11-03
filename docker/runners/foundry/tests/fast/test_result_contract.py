@@ -1,21 +1,22 @@
 # Copyright (c) 2026 The REvoDesign Developers.
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
-"""Foundry result-contract regression: RF3's primary structure is required.
+"""Foundry result-contract regression: RF3 and the design Tasks own separate trees.
 
 Live-test acceptance, 2026-11-03 target-host Slurm/Apptainer run at the active
-SIF identity (job 9fb09b17099667a85d5f8800884600a8, SIF fd78dcfd2b00), observed
-the seeded structure beside its conditional confidence evidence:
+SIF identity (job 9fb09b17099667a85d5f8800884600a8, SIF fd78dcfd2b00), observed:
 
     minimal_rf3/seed-0_sample-0/minimal_rf3_seed-0_sample-0_model.cif
 
-The two RFD3 Tasks share the family but own separate contracts, so this file
-also pins that they still resolve their own ``*.cif.gz`` design tree.
+RF3's primary structure is conditional: ``run.sh`` accepts a structure or
+early-stopping ranking metrics, and the storyboard renders the metrics-only
+outcome, so this file pins resolution behaviour rather than a requiredness
+claim. It also pins that the two RFD3 design Tasks keep their own required
+``*.cif.gz`` tree.
 """
 
 from __future__ import annotations
 
-from fnmatch import fnmatchcase
 from pathlib import Path
 
 from revocompute.result_storyboard import contract_dir, expected_file_tree, resolve_expected_files
@@ -34,60 +35,48 @@ OBSERVED_EVIDENCE = (
     "foundry-run.json",
     "foundry-model-assets.json",
 )
+DESIGN_ARTIFACTS = (
+    "specification_example_model_0.cif.gz",
+    "foundry-run.json",
+    "foundry-model-assets.json",
+)
 
 
-def _tasks(task_ids: tuple[str, ...]) -> dict:
+def _task(task_id: str):
     with isolated_discovery(str(RUNNERS)) as manager:
-        return {task_id: manager.contributions.resolve("tasks", task_id) for task_id in task_ids}
+        return manager.contributions.resolve("tasks", task_id)
 
 
-def _primary_required_source(task) -> str:
-    primary = [view for view in task.result_workspace if view.role == "primary"]
-    assert len(primary) == 1
-    required = [selector for selector in primary[0].sources["candidates"] if selector.required]
-    assert len(required) == 1
-    assert required[0].is_glob
-    return required[0].value
+def _artifacts(*paths: str) -> list[dict]:
+    return [{"path": path, "size": 128, "preview": "structure"} for path in paths]
 
 
-def test_rf3_fold_requires_the_seeded_primary_structure() -> None:
-    task = _tasks(("foundry_rf3_fold",))["foundry_rf3_fold"]
-    tree = expected_file_tree(task, str(ROOT))
+def test_rf3_fold_resolves_the_observed_seeded_structure() -> None:
+    tree = expected_file_tree(_task("foundry_rf3_fold"), str(ROOT))
 
-    assert tree["structures"]["required"] is True
-    assert tree["structures"]["type"] == "structure"
-    assert fnmatchcase(OBSERVED_STRUCTURE, tree["structures"]["pattern"])
-    assert tree["structures"]["pattern"] == _primary_required_source(task)
+    resolved, _checks, problems = resolve_expected_files(tree, _artifacts(OBSERVED_STRUCTURE, *OBSERVED_EVIDENCE))
 
-    # Confidence and ranking evidence stays conditional; only the structure is
-    # the required scientific result.
-    for evidence in ("summaries", "confidences", "rankings"):
-        assert tree[evidence]["required"] is False
-
-
-def test_rf3_fold_required_identity_resolves_the_observed_tree_and_rejects_its_absence() -> None:
-    task = _tasks(("foundry_rf3_fold",))["foundry_rf3_fold"]
-    tree = expected_file_tree(task, str(ROOT))
-    artifacts = [
-        {"path": path, "size": 128, "preview": "structure"} for path in (OBSERVED_STRUCTURE, *OBSERVED_EVIDENCE)
-    ]
-
-    resolved, _checks, problems = resolve_expected_files(tree, artifacts)
     assert problems == []
     assert [item["path"] for item in resolved["structures"]] == [OBSERVED_STRUCTURE]
 
-    _resolved, _checks, problems = resolve_expected_files(
-        tree, [{"path": path, "size": 128, "preview": "json"} for path in OBSERVED_EVIDENCE]
-    )
-    assert problems == ["structures: required output is missing or empty"]
+
+def test_rf3_fold_accepts_a_metrics_only_early_stop_tree() -> None:
+    tree = expected_file_tree(_task("foundry_rf3_fold"), str(ROOT))
+    metrics_only = ("minimal_rf3/minimal_rf3_ranking_scores.csv", "foundry-run.json", "foundry-model-assets.json")
+
+    resolved, _checks, problems = resolve_expected_files(tree, _artifacts(*metrics_only))
+
+    assert problems == []
+    assert resolved["structures"] == []
 
 
-def test_design_tasks_keep_their_own_required_tree() -> None:
-    for task_id, task in _tasks(DESIGN_TASKS).items():
+def test_design_tasks_resolve_their_own_compressed_designs() -> None:
+    for task_id in DESIGN_TASKS:
+        task = _task(task_id)
         tree = expected_file_tree(task, str(ROOT))
 
         assert contract_dir(task, str(ROOT)) == (FAMILY / "tasks" / task_id).resolve()
-        assert tree["designs"]["pattern"] == "*.cif.gz"
-        assert tree["designs"]["required"] is True
         assert "structures" not in tree
-        assert _primary_required_source(task) == "*.cif.gz"
+        resolved, _checks, problems = resolve_expected_files(tree, _artifacts(*DESIGN_ARTIFACTS))
+        assert problems == []
+        assert [item["path"] for item in resolved["designs"]] == [DESIGN_ARTIFACTS[0]]

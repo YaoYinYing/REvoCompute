@@ -1,13 +1,9 @@
 result:
   files:
-    # RF3 always publishes one seeded structure per completed sample
-    # (`<example>/seed-<n>_sample-<n>/<example>_seed-<n>_sample-<n>_model.cif`).
-    # It is the task's primary scientific output, so it is required; summaries,
-    # per-atom confidences, and ranking tables remain conditional evidence.
     structures:
       pattern: '*/seed-*_sample-[0-7]/*_seed-*_sample-[0-7]_model.cif'
       cardinality: many
-      required: true
+      required: false
       type: structure
     summaries:
       pattern: '*/seed-*_sample-[0-7]/*_seed-*_sample-[0-7]_summary_confidences.json'

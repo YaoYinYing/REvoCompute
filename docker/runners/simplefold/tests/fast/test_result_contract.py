@@ -31,18 +31,19 @@ CIF = "simplefold_tiny/predictions_simplefold_1.6B/simplefold_tiny_sampled_0.cif
 PDB = "simplefold_tiny/predictions_simplefold_1.6B/simplefold_tiny_sampled_0.pdb"
 CONFIDENCE = "simplefold_tiny/confidence/simplefold_tiny_sampled_0.json"
 RAW_NPZ = "simplefold_tiny/structures/simplefold_tiny.npz"
+MISNAMED = "simplefold_tiny/predictions_simplefold_1.6B/simplefold_tiny.cif"
 MULTI = tuple(
     f"simplefold_multi_{record}/predictions_simplefold_1.6B/simplefold_multi_{record}_sampled_0.cif"
     for record in "abc"
 )
 
 
-def _task() -> object:
+def _task():
     with isolated_discovery(str(RUNNERS)) as manager:
         return manager.contributions.resolve("tasks", "simplefold_predict")
 
 
-def _primary_required_source(task) -> str:
+def _required_candidate_glob(task) -> str:
     primary = [view for view in task.result_workspace if view.role == "primary"]
     assert len(primary) == 1
     required = [selector for selector in primary[0].sources["candidates"] if selector.required]
@@ -51,47 +52,51 @@ def _primary_required_source(task) -> str:
     return required[0].value
 
 
-def test_required_source_accepts_both_observed_structure_formats() -> None:
-    selector = _primary_required_source(_task())
-    assert fnmatchcase(CIF, selector)
-    assert fnmatchcase(PDB, selector)
+def _artifacts(*paths: str) -> list[dict]:
+    return [{"path": path, "size": 128, "preview": "structure"} for path in paths]
 
 
-def test_required_source_excludes_confidence_json_and_raw_arrays() -> None:
-    selector = _primary_required_source(_task())
+def _resolve(*paths: str):
+    tree = expected_file_tree(_task(), str(ROOT))
+    assert tree["structures"]["required"] is True
+    return resolve_expected_files(tree, _artifacts(*paths))
+
+
+def test_cif_only_path_set_satisfies_the_required_primary_source() -> None:
+    assert fnmatchcase(CIF, _required_candidate_glob(_task()))
+
+    resolved, _checks, problems = _resolve(CIF)
+    assert problems == []
+    assert [item["path"] for item in resolved["structures"]] == [CIF]
+
+
+def test_pdb_only_path_set_satisfies_the_required_primary_source() -> None:
+    assert fnmatchcase(PDB, _required_candidate_glob(_task()))
+
+    resolved, _checks, problems = _resolve(PDB)
+    assert problems == []
+    assert [item["path"] for item in resolved["structures"]] == [PDB]
+
+
+def test_confidence_and_raw_arrays_do_not_satisfy_the_required_primary_source() -> None:
+    selector = _required_candidate_glob(_task())
     assert not fnmatchcase(CONFIDENCE, selector)
     assert not fnmatchcase(RAW_NPZ, selector)
 
+    resolved, _checks, problems = _resolve(CONFIDENCE, RAW_NPZ)
+    assert resolved["structures"] == []
+    assert problems == ["structures: required output is missing or empty"]
 
-def test_result_tree_declares_one_required_structure_identity() -> None:
-    task = _task()
-    tree = expected_file_tree(task, str(ROOT))
 
-    assert set(tree) == {"structures", "confidences"}
-    assert tree["structures"]["type"] == "structure"
-    assert tree["structures"]["required"] is True
-    assert tree["structures"]["pattern"] == _primary_required_source(task)
-    assert tree["confidences"]["required"] is False
+def test_missing_or_misnamed_structure_leaves_the_primary_source_unresolved() -> None:
+    assert not fnmatchcase(MISNAMED, _required_candidate_glob(_task()))
+
+    resolved, _checks, problems = _resolve(CONFIDENCE, MISNAMED)
+    assert resolved["structures"] == []
+    assert problems == ["structures: required output is missing or empty"]
 
 
 def test_multi_record_tree_resolves_every_observed_structure() -> None:
-    tree = expected_file_tree(_task(), str(ROOT))
-    artifacts = [{"path": path, "size": 128, "preview": "structure"} for path in MULTI]
-
-    resolved, _checks, problems = resolve_expected_files(tree, artifacts)
+    resolved, _checks, problems = _resolve(*MULTI)
     assert problems == []
     assert [item["path"] for item in resolved["structures"]] == list(MULTI)
-
-
-def test_missing_or_misnamed_structure_does_not_satisfy_the_required_identity() -> None:
-    tree = expected_file_tree(_task(), str(ROOT))
-    misnamed = "simplefold_tiny/predictions_simplefold_1.6B/simplefold_tiny.cif"
-
-    assert not fnmatchcase(misnamed, tree["structures"]["pattern"])
-
-    resolved, _checks, problems = resolve_expected_files(
-        tree,
-        [{"path": path, "size": 128, "preview": "json"} for path in (CONFIDENCE, misnamed, RAW_NPZ)],
-    )
-    assert resolved["structures"] == []
-    assert problems == ["structures: required output is missing or empty"]

@@ -56,7 +56,7 @@ result_workspace:
     sources:
       candidates:
       - glob: '*/seed-*_sample-[0-7]/*_seed-*_sample-[0-7]_model.cif'
-        required: true
+        required: false
     mapping: {}
   - plugin: scalar-summary
     id: confidence_summary
