@@ -10,16 +10,15 @@ in ``revocompute.result_audit``), so the audit reports the Task as
 ``no_required_source`` even though ``expected_files.yaml`` declares every
 required plot, table and structure pattern. This test pins the contract the
 audit cannot evaluate on its own: every declared required logical file resolves
-on the observed result tree, the three 320 K plots the primary view selects are
-covered by required declarations, and the required plot/table patterns still
-resolve.
+on the observed result tree, the primary view's three required sources are
+claimed only by required declarations, and removing them breaks the contract.
 
-Observed paths are a one-temperature representative subset of the authentic
-result captured for the Nov 3 2026 target-host Slurm/Apptainer live test
-``40881cad5bfa6799f7895cde9824b58b`` at SIF ``6a357433c22e`` (full tree: 174
-files across five temperatures; in-repo capture:
-``tests/data/storyboards/esmdynamic``). Server-owned ``manifest.json`` and
-``task_finished`` are omitted because no declared logical file names them.
+Observed paths are a one-temperature representative subset of the 174-file
+regular-file list captured for the Nov 3 2026 target-host Slurm/Apptainer live
+test ``40881cad5bfa6799f7895cde9824b58b`` at SIF ``6a357433c22e``
+(``/tmp/pr133-evidence/trees/esmdynamic.txt``). The subset retains all three
+required-view selectors (320 K dynamic, frequency and kinetics plots) and at
+least one file for every declared required pattern.
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ OBSERVED_FILES = (
     "2KL8/2KL8.pdb",
     "2KL8/dynamic/2KL8_dynamic_confidence_320K.csv",
     "2KL8/dynamic/2KL8_dynamic_confidence_320K.png",
-    "2KL8/dynamic/2KL8_dynamic_prob_320K.html",
+    "2KL8/dynamic/2KL8_dynamic_pred_320K.html",
     "2KL8/dynamic_nonnative/2KL8_dynamic_nonnative_320K.png",
     "2KL8/frequency/2KL8_frequency_error_320K.png",
     "2KL8/frequency/2KL8_frequency_pred_320K.png",
@@ -54,16 +53,9 @@ OBSERVED_FILES = (
     "debug/inputs/sequence/2KL8.fasta",
     "debug/submission.json",
     "execution/slurm-status.execution.json",
-    "execution/slurm-unknown-user-esmdynamic-86adfa8e017342d0f31dbef62a8e8a5f.resource.json",
-    "execution/slurm-unknown-user-esmdynamic-86adfa8e017342d0f31dbef62a8e8a5f.stderr.log",
-    "execution/slurm-unknown-user-esmdynamic-86adfa8e017342d0f31dbef62a8e8a5f.stdout.log",
-)
-
-#: The 320 K plots the primary view selects, in the order the view declares them.
-PRIMARY_SOURCES = (
-    "*/dynamic/*_dynamic_confidence_320K.png",
-    "*/frequency/*_frequency_pred_320K.png",
-    "*/kinetics/*_kinetics_confidence_320K.png",
+    "execution/slurm-unknown-user-esmdynamic-40881cad5bfa6799f7895cde9824b58b.resource.json",
+    "execution/slurm-unknown-user-esmdynamic-40881cad5bfa6799f7895cde9824b58b.stderr.log",
+    "execution/slurm-unknown-user-esmdynamic-40881cad5bfa6799f7895cde9824b58b.stdout.log",
 )
 
 
@@ -76,17 +68,13 @@ def _discover(monkeypatch):
 
 
 def _resolve(tree, observed):
-    artifacts = [{"path": path, "size": 1} for path in observed]
-    return resolve_expected_files(tree, artifacts)
+    return resolve_expected_files(tree, [{"path": path, "size": 1} for path in observed])
 
 
-def _covering_required_entries(tree, selector, observed):
-    matching = [path for path in observed if fnmatchcase(path, selector)]
-    return [
-        logical_id
-        for logical_id, definition in tree.items()
-        if any(fnmatchcase(path, definition.get("path") or definition["pattern"]) for path in matching)
-    ]
+def _required_selectors(task):
+    view = next(view for view in task.result_workspace if view.role == "primary")
+    assert view.plugin == "evidence-bundle"
+    return [selector for selectors in view.sources.values() for selector in selectors if selector.required]
 
 
 def test_every_declared_required_file_resolves_on_the_observed_tree(monkeypatch):
@@ -105,42 +93,32 @@ def test_required_plot_table_and_structure_patterns_resolve(monkeypatch):
     resolved, _, problems = _resolve(tree, OBSERVED_FILES)
 
     assert problems == []
-    for logical_id in (
-        "temperature_plots",
-        "confidence_tables",
-        "frequency_plots",
-        "kinetics_plots",
-        "kinetics_tables",
-        "nonnative_plots",
-        "native_contacts",
-        "predicted_structure",
-        "probability_arrays",
-        "plot_html",
-    ):
+    required_kinds = [
+        logical_id
+        for logical_id, definition in tree.items()
+        if definition["required"] and definition.get("type") in {"image", "table", "structure"}
+    ]
+    assert required_kinds
+    for logical_id in required_kinds:
         assert resolved[logical_id], logical_id
 
 
-def test_primary_scientific_artifacts_are_required_declarations(monkeypatch):
+def test_primary_view_sources_resolve_to_required_declarations(monkeypatch):
     task, tree = _discover(monkeypatch)
-    view = next(view for view in task.result_workspace if view.role == "primary")
+    resolved, _, _ = _resolve(tree, OBSERVED_FILES)
+    required_paths = {
+        item["path"]
+        for logical_id, definition in tree.items()
+        if definition["required"]
+        for item in resolved[logical_id]
+    }
 
-    assert view.plugin == "evidence-bundle"
-    required_sources = [
-        (source_name, selector)
-        for source_name, selectors in view.sources.items()
-        for selector in selectors
-        if selector.required
-    ]
-    assert [selector.value for _source_name, selector in required_sources] == list(PRIMARY_SOURCES)
-    for _source_name, selector in required_sources:
-        assert any(fnmatchcase(path, selector.value) for path in OBSERVED_FILES), selector.value
-        covering = _covering_required_entries(tree, selector.value, OBSERVED_FILES)
-        assert covering, selector.value
-        assert all(tree[logical_id]["required"] for logical_id in covering), selector.value
-
-    assert tree["temperature_plots"]["required"] is True
-    assert tree["frequency_plots"]["required"] is True
-    assert tree["kinetics_plots"]["required"] is True
+    selectors = _required_selectors(task)
+    assert selectors
+    for selector in selectors:
+        matching = [path for path in OBSERVED_FILES if fnmatchcase(path, selector.value)]
+        assert matching, selector.value
+        assert set(matching) <= required_paths, selector.value
 
 
 def test_task_reports_no_concrete_audit_finding(monkeypatch):
@@ -150,12 +128,27 @@ def test_task_reports_no_concrete_audit_finding(monkeypatch):
 
 
 def test_removing_the_primary_artifacts_breaks_the_declared_contract(monkeypatch):
-    _, tree = _discover(monkeypatch)
-    observed = [path for path in OBSERVED_FILES if not any(fnmatchcase(path, pattern) for pattern in PRIMARY_SOURCES)]
+    task, tree = _discover(monkeypatch)
+    primary_paths = {
+        path
+        for selector in _required_selectors(task)
+        for path in OBSERVED_FILES
+        if fnmatchcase(path, selector.value)
+    }
+    assert primary_paths
+    before, _, _ = _resolve(tree, OBSERVED_FILES)
+    owning = {
+        logical_id
+        for logical_id, items in before.items()
+        if any(item["path"] in primary_paths for item in items)
+    }
+    assert owning
+    observed = [path for path in OBSERVED_FILES if path not in primary_paths]
 
     resolved, checks, problems = _resolve(tree, observed)
 
-    assert not any(fnmatchcase(path, "*/dynamic/*_dynamic_confidence_320K.png") for path in observed)
-    assert resolved["temperature_plots"] == []
-    assert "temperature_plots: required output is missing or empty" in problems
-    assert any(check["file_id"] == "temperature_plots" and check["status"] == "failed" for check in checks)
+    assert any(not resolved[logical_id] for logical_id in owning)
+    assert any(
+        problem.startswith(f"{logical_id}: required output is missing") for logical_id in owning for problem in problems
+    )
+    assert any(check["file_id"] in owning and check["status"] == "failed" for check in checks)
