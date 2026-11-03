@@ -262,8 +262,9 @@ longer diverge.
 - **SimpleFold structure suffix.** The required selector
   `*_sampled_*.[cp][id][bf]` is a character-class Cartesian product, so it also
   matches synthetic suffixes such as `.pdf` and `.cdb`. The SimpleFold producer
-  writes only `.cif`/`.pdb`, and the requiredness/primary-view contract is
-  verified on those outputs. The residual over-match is a documented,
+  writes only `.cif`/`.pdb`; the live acceptance smoke used
+  `output_format: mmcif`, so the `.pdb` branch is synthetically verified only and
+  remains NOT CERTIFIED. The residual over-match is a documented,
   non-blocking limitation (filename suffix is not content/type validation); it
   is deferred rather than solved with a second selector vocabulary.
 - **Best-effort debug capture.** The six newly added result trees declare
