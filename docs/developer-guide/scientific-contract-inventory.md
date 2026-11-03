@@ -257,6 +257,21 @@ the run's provenance, but the launcher forwards it only for the RFD3 model; the
 follow-on removed the control and made the launcher fail closed, so the two no
 longer diverge.
 
+## Known limitations
+
+- **SimpleFold structure suffix.** The required selector
+  `*_sampled_*.[cp][id][bf]` is a character-class Cartesian product, so it also
+  matches synthetic suffixes such as `.pdf` and `.cdb`. The SimpleFold producer
+  writes only `.cif`/`.pdb`, and the requiredness/primary-view contract is
+  verified on those outputs. The residual over-match is a documented,
+  non-blocking limitation (filename suffix is not content/type validation); it
+  is deferred rather than solved with a second selector vocabulary.
+- **Best-effort debug capture.** The six newly added result trees declare
+  `debug/submission.json` and `debug/inputs/**` optional, matching Core's
+  best-effort capture. Several older trees still declare those copies required;
+  reconciling them would move more family identities and is a separate
+  follow-up.
+
 ## Regenerating this page
 
 The page is prose about a machine-generated report; keep the two in sync by

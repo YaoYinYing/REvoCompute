@@ -13,7 +13,10 @@ SIF identity (SIF 3d060238b528) observed nested structures under one item:
     (job 9ddbce9683c3583040e00b3589b555f8, multi-record)
 
 ``output_format`` is a task parameter (mmcif|pdb), so the primary source is one
-bounded glob that accepts either observed suffix and nothing else.
+required glob that accepts either observed suffix. The character class is a
+Cartesian product and synthetically also matches suffixes such as ``.pdf``; the
+producer writes only ``.cif``/``.pdb``, so that residual is documented as a
+non-blocking limitation rather than treated as a generated structure.
 """
 
 from __future__ import annotations

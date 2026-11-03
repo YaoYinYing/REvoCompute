@@ -4,7 +4,10 @@ result:
     # valid per run but exactly one structure format is always published as
     # `<item>/predictions_*/<item>_sampled_<n>.cif|pdb`. The character class
     # matches both observed suffixes while excluding `structures/*.npz` and
-    # `confidence/*_sampled_*.json`.
+    # `confidence/*_sampled_*.json`. It is a Cartesian product and also matches
+    # synthetic suffixes such as `.pdf`/`.cdb`; the SimpleFold producer writes
+    # only `.cif`/`.pdb`, so the residual is documented as a non-blocking
+    # limitation rather than expressed with a second selector vocabulary.
     structures:
       pattern: '*_sampled_*.[cp][id][bf]'
       cardinality: many

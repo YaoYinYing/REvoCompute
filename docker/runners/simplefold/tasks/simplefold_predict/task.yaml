@@ -102,6 +102,9 @@ result_workspace:
       # One sequence per work item: `<item>/predictions_*/...`. The bare form
       # still matches a flat single-item output tree. `output_format` selects
       # mmcif or pdb, so the character class accepts either observed suffix.
+      # The class is a Cartesian product and also matches synthetic suffixes
+      # such as `.pdf`; the producer emits only `.cif`/`.pdb` (documented
+      # non-blocking residual, see the result-contract matrix).
       - glob: '*_sampled_*.[cp][id][bf]'
         required: true
     mapping:
