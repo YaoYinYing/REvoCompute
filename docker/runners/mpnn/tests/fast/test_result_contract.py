@@ -99,6 +99,17 @@ def test_primary_output_is_selected_from_the_observed_tree() -> None:
     assert entry["role"] == "evidence"
 
 
+def test_missing_best_effort_debug_capture_does_not_invalidate_result() -> None:
+    """Core captures debug inputs and submission best-effort, so their absence is not a defect."""
+    _task, tree = _resolved()
+    scientific = [path for path in OBSERVED if not path.startswith("debug/")]
+
+    _resolved_files, checks, problems = resolve_expected_files(tree, _artifacts(scientific))
+
+    assert problems == []
+    assert all(check["status"] == "passed" for check in checks)
+
+
 def test_missing_or_misnamed_primary_is_reported() -> None:
     _task, tree = _resolved()
 

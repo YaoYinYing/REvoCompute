@@ -162,6 +162,18 @@ def test_missing_or_misnamed_primary_is_reported(task_id: str) -> None:
 
 
 @pytest.mark.parametrize("task_id", TASKS)
+def test_missing_best_effort_debug_capture_does_not_invalidate_result(task_id: str) -> None:
+    """Core captures debug inputs and submission best-effort, so their absence is not a defect."""
+    _task, tree = _resolved(task_id)
+    scientific = [path for path in OBSERVED[task_id] if not path.startswith("debug/")]
+
+    _resolved_files, checks, problems = resolve_expected_files(tree, _artifacts(scientific))
+
+    assert problems == []
+    assert all(check["status"] == "passed" for check in checks)
+
+
+@pytest.mark.parametrize("task_id", TASKS)
 def test_trajectory_source_stays_optional_when_absent(task_id: str) -> None:
     _task, tree = _resolved(task_id)
     trajectory_ids = [

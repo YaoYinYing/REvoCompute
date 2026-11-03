@@ -6,7 +6,10 @@
 # upstream mapping, and the remaining files are provenance and diagnostics.
 # Trajectories exist only when `write_trajectory` is enabled, so they stay
 # optional; the upstream `.cache/` and `.hydra/` state is internal and is not
-# declared. This Task owns this tree: the sibling scaffold Task has its own.
+# declared. The Core also captures `debug/` inputs and submission best-effort,
+# so those entries are optional too: a missing debug copy must not invalidate
+# a complete scientific result. This Task owns this tree: the sibling scaffold
+# Task has its own.
 result:
   files:
     designed_backbones:
@@ -41,13 +44,13 @@ result:
     input_structure:
       pattern: 'debug/inputs/structure/*.pdb'
       cardinality: one
-      required: true
+      required: false
       type: structure
       role: provenance
     submission:
       path: debug/submission.json
       cardinality: one
-      required: true
+      required: false
       type: json
       role: provenance
     citations:
