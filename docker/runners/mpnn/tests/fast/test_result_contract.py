@@ -82,15 +82,19 @@ def test_required_view_sources_resolve_on_the_observed_tree() -> None:
     assert all(check["status"] == "passed" for check in checks)
 
 
-def test_primary_view_declares_the_observed_stability_table() -> None:
+def test_primary_output_is_selected_from_the_observed_tree() -> None:
     task, tree = _resolved()
     primary = next(view for view in task.result_workspace if view.role == "primary")
-    selector = primary.sources["table"][0]
+    assert all(selector.required for selectors in primary.sources.values() for selector in selectors)
+
+    resolved, _checks, problems = resolve_expected_files(tree, _artifacts(OBSERVED))
+    selected = resolved[PRIMARY_ID]
     entry = tree[PRIMARY_ID]
 
-    assert selector.required and selector.value == "thermompnn.csv"
+    assert problems == []
+    assert selected
+    assert {item["cardinality"] for item in selected} == {"one"}
     assert entry["required"] is True
-    assert entry["cardinality"] == "one"
     assert entry["type"] == "table"
     assert entry["role"] == "evidence"
 
@@ -100,8 +104,8 @@ def test_missing_or_misnamed_primary_is_reported() -> None:
 
     missing = [path for path in OBSERVED if path != "thermompnn.csv"]
     _resolved_files, _checks, problems = resolve_expected_files(tree, _artifacts(missing))
-    assert any(problem.startswith(f"{PRIMARY_ID}:") for problem in problems)
+    assert len(problems) == 1 and "required output is missing" in problems[0]
 
     misnamed = [*missing, "thermompnn_scores.csv"]
     _resolved_files, _checks, problems = resolve_expected_files(tree, _artifacts(misnamed))
-    assert any(problem.startswith(f"{PRIMARY_ID}:") for problem in problems)
+    assert len(problems) == 1 and "required output is missing" in problems[0]

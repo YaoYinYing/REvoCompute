@@ -129,18 +129,21 @@ def test_required_view_sources_resolve_on_the_observed_tree(task_id: str) -> Non
 
 
 @pytest.mark.parametrize("task_id", TASKS)
-def test_primary_view_declares_the_observed_structure_collection(task_id: str) -> None:
+def test_primary_output_is_selected_from_the_observed_tree(task_id: str) -> None:
     task, tree = _resolved(task_id)
     primary = next(view for view in task.result_workspace if view.role == "primary")
-    selector = primary.sources["candidates"][0]
+    assert all(selector.required for selectors in primary.sources.values() for selector in selectors)
+
+    resolved, _checks, problems = resolve_expected_files(tree, _artifacts(OBSERVED[task_id]))
+    selected = resolved[PRIMARY[task_id]]
     entry = tree[PRIMARY[task_id]]
 
-    assert selector.required and selector.value == "design_*.pdb"
+    assert problems == []
+    assert selected
+    assert {item["cardinality"] for item in selected} == {"many"}
     assert entry["required"] is True
-    assert entry["cardinality"] == "many"
     assert entry["type"] == "structure"
     assert entry["role"] == "evidence"
-    assert fnmatchcase("design_0-atomized-bb-False.pdb", entry["pattern"])
 
 
 @pytest.mark.parametrize("task_id", TASKS)
@@ -148,27 +151,30 @@ def test_missing_or_misnamed_primary_is_reported(task_id: str) -> None:
     _task, tree = _resolved(task_id)
     observed = OBSERVED[task_id]
     design = next(path for path in observed if fnmatchcase(path, "design_*.pdb"))
-    primary_id = PRIMARY[task_id]
 
     missing = [path for path in observed if path != design]
     _resolved_files, _checks, problems = resolve_expected_files(tree, _artifacts(missing))
-    assert any(problem.startswith(f"{primary_id}:") for problem in problems)
+    assert len(problems) == 1 and "required output is missing" in problems[0]
 
     misnamed = [*missing, "design_0-atomized-bb-False.pdb.bak"]
     _resolved_files, _checks, problems = resolve_expected_files(tree, _artifacts(misnamed))
-    assert any(problem.startswith(f"{primary_id}:") for problem in problems)
+    assert len(problems) == 1 and "required output is missing" in problems[0]
 
 
 @pytest.mark.parametrize("task_id", TASKS)
-def test_trajectories_stay_optional(task_id: str) -> None:
+def test_trajectory_source_stays_optional_when_absent(task_id: str) -> None:
     _task, tree = _resolved(task_id)
-    entry = tree["trajectories"]
-
-    assert entry["required"] is False
-    assert entry["cardinality"] == "many"
+    trajectory_ids = [
+        logical_id
+        for logical_id, entry in tree.items()
+        if (entry.get("pattern") or entry.get("path", "")).startswith("traj/")
+    ]
+    assert trajectory_ids
 
     _resolved_files, checks, problems = resolve_expected_files(tree, _artifacts(OBSERVED[task_id]))
-    trajectory_check = next(check for check in checks if check["file_id"] == "trajectories")
     assert problems == []
-    assert trajectory_check["matched"] == 0
-    assert trajectory_check["status"] == "passed"
+    for logical_id in trajectory_ids:
+        check = next(check for check in checks if check["file_id"] == logical_id)
+        assert tree[logical_id]["required"] is False
+        assert check["matched"] == 0
+        assert check["status"] == "passed"
