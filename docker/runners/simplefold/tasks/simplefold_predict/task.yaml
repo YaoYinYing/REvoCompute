@@ -100,11 +100,10 @@ result_workspace:
     sources:
       candidates:
       # One sequence per work item: `<item>/predictions_*/...`. The bare form
-      # still matches a flat single-item output tree.
-      - glob: '*_sampled_*.cif'
-        required: false
-      - glob: '*_sampled_*.pdb'
-        required: false
+      # still matches a flat single-item output tree. `output_format` selects
+      # mmcif or pdb, so the character class accepts either observed suffix.
+      - glob: '*_sampled_*.[cp][id][bf]'
+        required: true
     mapping:
       confidence_encoding: plddt_bfactor
   - plugin: metric-series

@@ -3,8 +3,8 @@ entrypoint: ./index.js
 requires:
   - run_record
   - model_assets
-optional:
   - structures
+optional:
   - summaries
   - confidences
   - rankings

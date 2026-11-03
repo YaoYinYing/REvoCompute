@@ -1,7 +1,6 @@
 identifier: simplefold-result
 entrypoint: ./index.js
-requires: []
+requires:
+  - structures
 optional:
-  - structures_cif
-  - structures_pdb
   - confidences

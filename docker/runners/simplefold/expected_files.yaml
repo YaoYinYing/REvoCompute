@@ -1,14 +1,14 @@
 result:
   files:
-    structures_cif:
-      pattern: '*_sampled_*.cif'
+    # `output_format` is a task parameter (mmcif|pdb), so either suffix is
+    # valid per run but exactly one structure format is always published as
+    # `<item>/predictions_*/<item>_sampled_<n>.cif|pdb`. The character class
+    # matches both observed suffixes while excluding `structures/*.npz` and
+    # `confidence/*_sampled_*.json`.
+    structures:
+      pattern: '*_sampled_*.[cp][id][bf]'
       cardinality: many
-      required: false
-      type: structure
-    structures_pdb:
-      pattern: '*_sampled_*.pdb'
-      cardinality: many
-      required: false
+      required: true
       type: structure
     confidences:
       pattern: '*confidence/*_sampled_*.json'
