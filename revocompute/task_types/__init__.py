@@ -30,6 +30,11 @@ from revocompute.citations import Citation, load_citations
 from revocompute.io_contracts import NamedFileRole, load_named_file_roles
 from revocompute.placement import AcceleratorRequirement
 from revocompute.resource_policy import ResourceValidationError
+from revocompute.result_storyboard import (
+    ResultContractError,
+    path_matches_extensions,
+    validate_artifact_extensions,
+)
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -105,6 +110,7 @@ class ArtifactSelector:
     value: str
     is_glob: bool
     required: bool
+    extensions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1078,7 +1084,7 @@ def _load_input_workspace(
 
 
 def _load_artifact_selector(raw: Any, view_id: str) -> ArtifactSelector:
-    if not isinstance(raw, dict) or set(raw) not in ({"path", "required"}, {"glob", "required"}):
+    if not isinstance(raw, dict) or set(raw) - {"extensions"} not in ({"path", "required"}, {"glob", "required"}):
         raise ValueError(f"Result view {view_id!r} selectors require exactly path or glob plus required")
     key = "glob" if "glob" in raw else "path"
     value = raw[key]
@@ -1092,7 +1098,18 @@ def _load_artifact_selector(raw: Any, view_id: str) -> ArtifactSelector:
         raise ValueError(f"Unsafe result workspace artifact selector: {value!r}")
     if not isinstance(raw["required"], bool):
         raise ValueError(f"Result view {view_id!r} selector required must be a boolean")
-    return ArtifactSelector(value=value, is_glob=key == "glob", required=raw["required"])
+    if "extensions" in raw:
+        try:
+            extensions = validate_artifact_extensions(raw["extensions"])
+        except ResultContractError as exc:
+            raise ValueError(f"Result view {view_id!r} selector: {exc}") from exc
+    else:
+        extensions = ()
+    if key == "path" and not path_matches_extensions(value, extensions):
+        raise ValueError(
+            f"Result view {view_id!r} path selector {value!r} does not end with a declared extension"
+        )
+    return ArtifactSelector(value=value, is_glob=key == "glob", required=raw["required"], extensions=extensions)
 
 
 def _string_list(value: Any, field_name: str, *, required: bool = False) -> list[str]:

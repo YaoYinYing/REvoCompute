@@ -264,3 +264,167 @@ def test_a_contract_that_genuinely_differs_is_still_recorded_per_owner(tmp_path,
     assert sorted(contracts) == ["synthetic_design", "synthetic_fold"]
     assert contracts["synthetic_fold"]["outputs"]["pattern"] == "*.cif"
     assert contracts["synthetic_design"]["outputs"]["pattern"] == "*.cif.gz"
+
+
+def _write_extension_tree(tmp_path, extensions):
+    declaration = tmp_path / "expected_files.yaml"
+    declaration.write_text(
+        yaml.safe_dump(
+            {
+                "result": {
+                    "files": {
+                        "structures": {
+                            "pattern": "*_sampled_*.[cp][id][bf]",
+                            "extensions": extensions,
+                            "required": True,
+                            "cardinality": "many",
+                            "type": "structure",
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return declaration
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [([], ()), ([".cif", ".cif"], (".cif",)), ([".cif", ".pdb"], (".cif", ".pdb"))],
+)
+def test_expected_file_tree_loads_an_extension_constraint(tmp_path, declared, expected) -> None:
+    tree = result_storyboard.load_expected_file_tree(_write_extension_tree(tmp_path, declared))
+
+    assert tree["structures"]["extensions"] == expected
+
+
+def test_expected_file_tree_does_not_inject_extensions_when_undeclared(tmp_path) -> None:
+    declaration = tmp_path / "expected_files.yaml"
+    declaration.write_text(
+        yaml.safe_dump(
+            {"result": {"files": {"structures": {"pattern": "*.cif", "required": True, "cardinality": "many"}}}}
+        ),
+        encoding="utf-8",
+    )
+
+    tree = result_storyboard.load_expected_file_tree(declaration)
+
+    assert "extensions" not in tree["structures"]
+
+
+@pytest.mark.parametrize("extensions", ["cif", [".CIF"], ["..cif"], ["*.cif"], ["a/b.cif"], [".cif", 1]])
+def test_expected_file_tree_rejects_an_invalid_extension_constraint(tmp_path, extensions) -> None:
+    with pytest.raises(ResultContractError, match="[Ee]xtension"):
+        result_storyboard.load_expected_file_tree(_write_extension_tree(tmp_path, extensions))
+
+
+def test_expected_file_tree_rejects_a_path_outside_its_extension_constraint(tmp_path) -> None:
+    declaration = tmp_path / "expected_files.yaml"
+    declaration.write_text(
+        yaml.safe_dump(
+            {
+                "result": {
+                    "files": {"report": {"path": "readme.pdf", "extensions": [".cif"], "required": True}}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ResultContractError, match="does not end with a declared extension"):
+        result_storyboard.load_expected_file_tree(declaration)
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [([], ()), ([".cif", ".cif"], (".cif",)), ([".cif", ".pdb"], (".cif", ".pdb"))],
+)
+def test_view_selector_loader_loads_an_extension_constraint(declared, expected) -> None:
+    from revocompute.task_types import _load_artifact_selector
+
+    selector = _load_artifact_selector(
+        {"glob": "*_sampled_*.[cp][id][bf]", "extensions": declared, "required": True}, "structures"
+    )
+
+    assert selector.extensions == expected
+
+
+@pytest.mark.parametrize("extensions", ["cif", [".CIF"], ["..cif"], ["*.cif"], ["a/b.cif"], [".cif", 1]])
+def test_view_selector_loader_rejects_an_invalid_extension_constraint(extensions) -> None:
+    from revocompute.task_types import _load_artifact_selector
+
+    with pytest.raises(ValueError, match="[Ee]xtension"):
+        _load_artifact_selector(
+            {"glob": "*_sampled_*.cif", "extensions": extensions, "required": True}, "structures"
+        )
+
+
+def test_view_selector_loader_rejects_a_path_outside_its_extension_constraint() -> None:
+    from revocompute.task_types import _load_artifact_selector
+
+    with pytest.raises(ValueError, match="does not end with a declared extension"):
+        _load_artifact_selector({"path": "readme.pdf", "extensions": [".cif"], "required": True}, "report")
+
+
+@pytest.mark.parametrize("path", ["item/predictions/item_sampled_0.cif"])
+def test_resolved_expected_files_apply_the_extension_constraint(tmp_path, path) -> None:
+    tree = result_storyboard.load_expected_file_tree(_write_extension_tree(tmp_path, [".cif", ".pdb"]))
+    artifacts = [
+        {"path": path, "size": 1},
+        {"path": "item/predictions/item_sampled_0.pdb", "size": 1},
+        {"path": "item/predictions/item_sampled_0.pdf", "size": 1},
+        {"path": "item/predictions/item_sampled_0.cdb", "size": 1},
+    ]
+
+    files, _checks, problems = resolve_expected_files(tree, artifacts)
+    assert [item["path"] for item in files["structures"]] == [path, "item/predictions/item_sampled_0.pdb"]
+    assert problems == []
+
+    files, _checks, problems = resolve_expected_files(tree, artifacts[2:3])
+    assert files["structures"] == []
+    assert problems == ["structures: required output is missing or empty"]
+
+
+def test_extension_matching_is_case_insensitive_but_the_glob_is_not(tmp_path) -> None:
+    from revocompute.result_storyboard import path_matches_extensions
+
+    assert path_matches_extensions("item/predictions/item_sampled_0.CIF", (".cif",))
+
+    tree = result_storyboard.load_expected_file_tree(_write_extension_tree(tmp_path, [".cif"]))
+    files, _checks, problems = resolve_expected_files(
+        tree, [{"path": "item/predictions/item_sampled_0.CIF", "size": 1}]
+    )
+    assert files["structures"] == []
+    assert problems == ["structures: required output is missing or empty"]
+
+
+def test_multi_dot_names_only_match_a_declared_trailing_suffix(tmp_path) -> None:
+    tree = result_storyboard.load_expected_file_tree(_write_extension_tree(tmp_path, [".cif", ".pdb"]))
+    artifacts = [
+        {"path": "item/predictions/item_sampled_0.pdb.bak", "size": 1},
+        {"path": "item/predictions/item_sampled_0.cif", "size": 1},
+    ]
+
+    files, _checks, problems = resolve_expected_files(tree, artifacts)
+    assert [item["path"] for item in files["structures"]] == ["item/predictions/item_sampled_0.cif"]
+    assert problems == []
+
+
+def test_declared_roles_apply_the_extension_constraint() -> None:
+    tree = {
+        "structures": {
+            "pattern": "*_sampled_*.[cp][id][bf]",
+            "extensions": (".cif", ".pdb"),
+            "required": True,
+            "cardinality": "many",
+            "type": "structure",
+            "role": "artifact",
+        }
+    }
+
+    roles = result_storyboard.declared_file_roles(
+        tree, ["item/predictions/item_sampled_0.cif", "item/predictions/item_sampled_0.pdf"]
+    )
+
+    assert roles == {"item/predictions/item_sampled_0.cif": "artifact"}

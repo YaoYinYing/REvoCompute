@@ -197,6 +197,18 @@ def _enabled_scope(state) -> set[str] | None:
     return names or None
 
 
+def selector_contract(selector) -> dict[str, Any]:
+    """Serialize one result selector for the live-test identity.
+
+    ``extensions`` is omitted when undeclared, so a family that never declares
+    one hashes byte-identically to the identity it had before the field existed.
+    """
+    contract = {"value": selector.value, "is_glob": selector.is_glob, "required": selector.required}
+    if selector.extensions:
+        contract["extensions"] = list(selector.extensions)
+    return contract
+
+
 def load_validation_identity(
     family: RuntimeFamily,
     *,
@@ -306,7 +318,7 @@ def load_validation_identity(
         return {
             "plugin": view.plugin,
             "sources": {
-                name: [asdict(selector) for selector in selectors]
+                name: [selector_contract(selector) for selector in selectors]
                 for name, selectors in sorted(view.sources.items())
             },
             "mapping": projected(view.mapping),

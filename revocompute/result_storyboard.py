@@ -61,6 +61,41 @@ class ResultContractError(ValueError):
     """A runner result declaration is malformed or unsafe."""
 
 
+def validate_artifact_extensions(value: Any) -> tuple[str, ...]:
+    """Validate a declared extension constraint, deduplicated in declaration order.
+
+    An absent or empty declaration means "no constraint". A suffix is a
+    lowercase filename ending that starts with one dot and contains no glob or
+    path characters -- it is a narrowing constraint, never a content check.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ResultContractError("Extension constraints must be a list of lowercase suffixes starting with '.'")
+    validated: list[str] = []
+    for item in value:
+        if (
+            not isinstance(item, str)
+            or len(item) < 2
+            or not item.startswith(".")
+            or item.startswith("..")
+            or item != item.lower()
+            or any(char in item for char in "\\/*?[]")
+        ):
+            raise ResultContractError(
+                "Extension constraints must be lowercase suffixes starting with '.' and containing no glob or "
+                "path characters"
+            )
+        if item not in validated:
+            validated.append(item)
+    return tuple(validated)
+
+
+def path_matches_extensions(path: str, extensions: tuple[str, ...] | list[str]) -> bool:
+    """True when ``path`` (case-insensitively) ends with a declared suffix."""
+    return not extensions or path.lower().endswith(tuple(extensions))
+
+
 def runner_root(task_type: Any, server_dir: str) -> Path:
     """Return the configured runner directory, never a task-output directory."""
     source_root = Path(__file__).resolve().parents[1]
@@ -147,11 +182,21 @@ def load_expected_file_tree(path: str | Path) -> dict[str, dict[str, Any]]:
     for logical_id, entry in files.items():
         if not isinstance(logical_id, str) or not _LOGICAL_FILE_ID.fullmatch(logical_id) or not isinstance(entry, dict):
             raise ResultContractError("Invalid logical result file")
-        if set(entry) - {"path", "pattern", "required", "type", "cardinality", "role"}:
+        if set(entry) - {"path", "pattern", "required", "type", "cardinality", "role", "extensions"}:
             raise ResultContractError(f"Unknown fields for result file {logical_id}")
         selector = entry.get("path", entry.get("pattern"))
         if ("path" in entry) == ("pattern" in entry) or not _safe_relative(selector):
             raise ResultContractError(f"Result file {logical_id} needs exactly one path or pattern")
+        if "extensions" in entry:
+            try:
+                extensions = validate_artifact_extensions(entry["extensions"])
+            except ResultContractError as exc:
+                raise ResultContractError(f"Result file {logical_id}: {exc}") from exc
+            if "path" in entry and not path_matches_extensions(entry["path"], extensions):
+                raise ResultContractError(
+                    f"Result file {logical_id} path {entry['path']!r} does not end with a declared extension"
+                )
+            entry = {**entry, "extensions": extensions}
         cardinality = entry.get("cardinality", "one")
         if cardinality not in {"one", "many"} or not isinstance(entry.get("required"), bool):
             raise ResultContractError(f"Result file {logical_id} has invalid cardinality or required")
@@ -195,6 +240,7 @@ def resolve_expected_files(
         # "expected one file, found 2". Entries that declare themselves
         # provenance or diagnostic still address those server-owned paths.
         record_eligible = definition.get("role") in RECORD_FILE_ROLES
+        extensions = definition.get("extensions", ())
         matches = [
             {
                 **by_path[path],
@@ -203,6 +249,7 @@ def resolve_expected_files(
             }
             for path in sorted(by_path)
             if fnmatchcase(path, selector)
+            and path_matches_extensions(path, extensions)
             and by_path[path]["size"] > 0
             and (record_eligible or not is_server_record(path))
         ]
@@ -247,8 +294,9 @@ def declared_file_roles(tree: dict[str, dict[str, Any]], paths: list[str]) -> di
                 roles[definition["path"]] = declared
             continue
         selector = definition["pattern"]
+        extensions = definition.get("extensions", ())
         for path in paths:
-            if fnmatchcase(path, selector):
+            if fnmatchcase(path, selector) and path_matches_extensions(path, extensions):
                 roles[path] = declared
     return roles
 
@@ -336,8 +384,10 @@ __all__ = [
     "is_server_record",
     "expected_file_tree",
     "load_expected_file_tree",
+    "path_matches_extensions",
     "resolve_expected_files",
     "runner_root",
     "storyboard_asset_root",
     "storyboard_declaration",
+    "validate_artifact_extensions",
 ]

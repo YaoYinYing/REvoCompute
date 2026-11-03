@@ -101,8 +101,10 @@ result_workspace:
       candidates:
       # One sequence per work item: `<item>/predictions_*/...`. The bare form
       # still matches a flat single-item output tree. `output_format` selects
-      # mmcif or pdb, so the character class accepts either observed suffix.
+      # mmcif or pdb, so `extensions` bounds the glob to those two declared
+      # structure formats.
       - glob: '*_sampled_*.[cp][id][bf]'
+        extensions: ['.cif', '.pdb']
         required: true
     mapping:
       confidence_encoding: plddt_bfactor

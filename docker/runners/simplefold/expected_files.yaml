@@ -2,11 +2,12 @@ result:
   files:
     # `output_format` is a task parameter (mmcif|pdb), so either suffix is
     # valid per run but exactly one structure format is always published as
-    # `<item>/predictions_*/<item>_sampled_<n>.cif|pdb`. The character class
-    # matches both observed suffixes while excluding `structures/*.npz` and
-    # `confidence/*_sampled_*.json`.
+    # `<item>/predictions_*/<item>_sampled_<n>.cif|pdb`. `extensions` bounds the
+    # glob to the two declared formats, so a `.pdf` or `.cdb` name the glob
+    # happens to match is never a structure.
     structures:
       pattern: '*_sampled_*.[cp][id][bf]'
+      extensions: ['.cif', '.pdb']
       cardinality: many
       required: true
       type: structure

@@ -2381,6 +2381,45 @@ def test_a_retry_after_a_failed_publication_leaves_no_false_published_state(monk
     )
 
 
+def test_extension_constraint_filters_the_primary_candidate_source() -> None:
+    """A declared extension bounds a glob that would otherwise match other files."""
+    import revocompute.task_runtime as task_runtime
+
+    selector = ArtifactSelector(
+        value="*_sampled_*.[cp][id][bf]", is_glob=True, required=True, extensions=(".cif", ".pdb")
+    )
+    view = ResultView(
+        plugin="candidate-collection",
+        id="structures",
+        role="primary",
+        title="Structures",
+        description="Synthetic extension-constrained view.",
+        sources={"candidates": (selector,)},
+    )
+    task_type = type("TaskType", (), {"result_workspace": (view,)})()
+    artifacts = [
+        {"path": "item/predictions/item_sampled_0.cif", "size": 10, "role": "artifact"},
+        {"path": "item/predictions/item_sampled_1.pdb", "size": 10, "role": "artifact"},
+        {"path": "item/predictions/item_sampled_2.pdf", "size": 10, "role": "artifact"},
+        {"path": "item/predictions/item_sampled_3.cdb", "size": 10, "role": "artifact"},
+    ]
+
+    views, _checks, problems = task_runtime._resolve_result_views(task_type, artifacts, ".")
+
+    assert views[0]["sources"]["candidates"] == [
+        "item/predictions/item_sampled_0.cif",
+        "item/predictions/item_sampled_1.pdb",
+    ]
+    assert problems == []
+    roles = {artifact["path"]: artifact["role"] for artifact in artifacts}
+    assert roles["item/predictions/item_sampled_2.pdf"] == "artifact"
+    assert roles["item/predictions/item_sampled_3.cdb"] == "artifact"
+
+    views, _checks, problems = task_runtime._resolve_result_views(task_type, artifacts[2:3], ".")
+    assert views[0]["sources"]["candidates"] == []
+    assert problems == ["Structures: required candidates output is missing or empty"]
+
+
 def test_a_recorded_stage_projection_and_a_scientific_view_are_independent(monkeypatch, tmp_path) -> None:
     """Execution-stage state and result-view eligibility derive from one Task
     without either projection shadowing the other."""
