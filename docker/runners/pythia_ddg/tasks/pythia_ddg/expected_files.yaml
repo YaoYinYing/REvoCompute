@@ -2,9 +2,10 @@
 #
 # Derived from the Nov 3 2026 target-host Slurm/Apptainer live-test acceptance
 # result (live-test ce24912f795b88328d6b4268f0118368, SIF e7bc08014944). The
-# upstream scan writes the per-position stability-change matrix as both CSV and
-# TXT in the same unconditional branch, so both are required; the CSV is the
-# primary matrix the Task view renders.
+# CSV is the per-position stability-change matrix the Task view renders, so it
+# is the required scientific output. The upstream scan also writes the same
+# values as a TXT rendering, but no view consumes it and a single observed run
+# does not prove it is scientifically necessary, so it is a declared artifact.
 result:
   files:
     mutation_matrix:
@@ -16,7 +17,7 @@ result:
     mutation_matrix_text:
       pattern: '*_pred_mask.txt'
       cardinality: one
-      required: true
+      required: false
       type: text
       role: artifact
     input_structure:
