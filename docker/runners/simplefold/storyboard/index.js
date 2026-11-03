@@ -32,7 +32,7 @@ async function json(url, signal) { const response = window.REvoDesignAuth ? awai
 export default { async mount(host, context) {
   const S = window.REvoComputeScientific; if (!S) throw new Error("Scientific result components are unavailable.");
   const services = context.services || {};
-  const structures = list(context.files.get("structures_cif")).concat(list(context.files.get("structures_pdb"))).sort((left, right) => String(left.name).localeCompare(String(right.name))); const confidences = list(context.files.get("confidences")); let plot = null; let stageGeneration = 0;
+  const structures = list(context.files.get("structures")).sort((left, right) => String(left.name).localeCompare(String(right.name))); const confidences = list(context.files.get("confidences")); let plot = null; let stageGeneration = 0;
   const root = element("div", "simplefold-result"); const style = document.createElement("style"); style.textContent = STYLE;
   const head = element("header", "simplefold-head"); head.append(element("h2", "", "SimpleFold prediction"), element("p", "simplefold-note", "Independently sampled conformations with the selected sample's optional local confidence beside the structure."));
   // SimpleFold publishes no global scalar summary, so this page has no metric

@@ -1,0 +1,41 @@
+# Logical result files published by the ThermoMPNN Task.
+#
+# Derived from the Nov 3 2026 target-host live-test result (live-test
+# c677800a11695318aa414290ba7e90ec, SIF 6194a0e7768f). The ΔΔG table is the
+# primary view's source; the structure snapshot, submission, citations, and
+# execution records are provenance and diagnostics. The Core captures `debug/`
+# inputs and submission best-effort, so those two entries are optional: a
+# missing debug copy must not invalidate a complete scientific result. This
+# Task owns this tree; the other MPNN Tasks declare their own.
+result:
+  files:
+    stability_table:
+      path: thermompnn.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: false
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: false
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

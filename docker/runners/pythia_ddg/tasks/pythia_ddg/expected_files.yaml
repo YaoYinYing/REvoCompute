@@ -1,0 +1,48 @@
+# Logical result files published by the Pythia-ddG Task.
+#
+# Derived from the Nov 3 2026 target-host Slurm/Apptainer live-test acceptance
+# result (live-test ce24912f795b88328d6b4268f0118368, SIF e7bc08014944). The
+# CSV is the per-position stability-change matrix the Task view renders, so it
+# is the required scientific output. The upstream scan also writes the same
+# values as a TXT rendering, but no view consumes it and a single observed run
+# does not prove it is scientifically necessary, so it is a declared artifact.
+# The `debug/` input snapshot and submission copy are captured best-effort by
+# the Server, so their absence must not invalidate a complete scientific result.
+result:
+  files:
+    mutation_matrix:
+      pattern: '*_pred_mask.csv'
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    mutation_matrix_text:
+      pattern: '*_pred_mask.txt'
+      cardinality: one
+      required: false
+      type: text
+      role: artifact
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: false
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: false
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

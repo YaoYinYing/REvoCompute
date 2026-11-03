@@ -1,0 +1,67 @@
+# Logical result files published by the RFdiffusion2 ligand-binder Task.
+#
+# Derived from the Nov 3 2026 target-host live-test result (live-test
+# 2886dfa53326d5d884ae84443220e15a, SIF b730d95f44b8). The designed backbones
+# are the primary view's candidate source, one TRB per design carries the
+# upstream mapping, and the remaining files are provenance and diagnostics.
+# Trajectories exist only when `write_trajectory` is enabled, so they stay
+# optional; the upstream `.cache/` and `.hydra/` state is internal and is not
+# declared. The Core also captures `debug/` inputs and submission best-effort,
+# so those entries are optional too: a missing debug copy must not invalidate
+# a complete scientific result. This Task owns this tree: the sibling scaffold
+# Task has its own.
+result:
+  files:
+    designed_backbones:
+      pattern: 'design_*.pdb'
+      cardinality: many
+      required: true
+      type: structure
+      role: evidence
+    design_mappings:
+      pattern: 'design_*.trb'
+      cardinality: many
+      required: true
+      role: evidence
+    trajectories:
+      pattern: 'traj/*.pdb'
+      cardinality: many
+      required: false
+      type: structure
+      role: evidence
+    run_record:
+      path: rfdiffusion2-run.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    model_assets:
+      path: rfdiffusion2-model-assets.sha256
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: false
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: false
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic
