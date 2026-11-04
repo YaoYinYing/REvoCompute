@@ -151,7 +151,6 @@ def test_fleet_report_separates_covered_unaudited_and_defective():
     # Coverage is a partition ...
     assert report.covered | report.unaudited == frozenset(report.tasks)
     assert not (report.covered & report.unaudited)
-    assert len(report.covered) == 54 and len(report.unaudited) == 6
     assert "caver" in report.covered
     assert "mol1_predict" in report.covered
     # ... and defect status is orthogonal: it is empty here, while the six

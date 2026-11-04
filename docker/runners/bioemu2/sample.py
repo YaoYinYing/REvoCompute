@@ -6,8 +6,8 @@
 """BioEmu2 adapter for equilibrium sampling, structure prediction, and propagation.
 
 The Task manifest selects the mode; the adapter never infers it from a filename.
-All three modes share the same sequence-to-system construction upstream's Python
-API does not do for us:
+Equilibrium and structure prediction share the sequence-to-system construction
+upstream's Python API does not do for us:
 
 * ``equilibrium`` and ``structure`` build the ``System`` from the Task's named
   ``sequence`` role, call upstream's matching sampling entry point, and write
@@ -160,7 +160,13 @@ def propagate(manifest: dict, output_dir: Path, checkpoint: Path) -> None:
         "--lag-time-ns",
         f"{float(params['lag_time_ns']):g}",
     ]
-    for flag, key in (("--seed", "seed"), ("--num-steps", "num_steps"), ("--batch-size", "batch_size"), ("--sampler", "sampler")):
+    optional_flags = (
+        ("--seed", "seed"),
+        ("--num-steps", "num_steps"),
+        ("--batch-size", "batch_size"),
+        ("--sampler", "sampler"),
+    )
+    for flag, key in optional_flags:
         if params.get(key) is not None:
             command += [flag, str(params[key])]
     if params.get("physicality_mode") is not None:

@@ -397,7 +397,10 @@ def test_bioemu2_tasks_and_result_contracts_resolve(tmp_path):
         assert len(task.result_workspace) == 1
         view = task.result_workspace[0]
         assert view.plugin == "trajectory"
-        assert {selector.value for selectors in view.sources.values() for selector in selectors if selector.required} == {
+        required = {
+            selector.value for selectors in view.sources.values() for selector in selectors if selector.required
+        }
+        assert required == {
             "topology.pdb",
             "samples.xtc",
         }

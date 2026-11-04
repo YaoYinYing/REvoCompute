@@ -22,5 +22,5 @@ runtime:
   - /opt/revocompute/runtime/bioemu2/run.sh
 tasks:
 - tasks/bioemu2_equilibrium/task.yaml
-- tasks/bioemu2_predict/task.yaml
+- tasks/bioemu2_structure_prediction/task.yaml
 - tasks/bioemu2_propagate/task.yaml
