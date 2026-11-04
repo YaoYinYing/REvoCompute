@@ -468,23 +468,37 @@ def test_two_glob_tree_entries_with_disjoint_suffixes_are_not_ambiguous(tmp_path
     assert "result.ambiguous_logical_ownership" not in _codes(findings)
 
 
-def _trajectory_topology_view(topology: str) -> str:
+def _trajectory_topology_view(topology: str, *, topology_format: str | None = "mmcif") -> str:
+    format_line = f"      topology_format: {topology_format}\n" if topology_format else ""
     return (
         "result_workspace:\n  views:\n"
         "  - plugin: trajectory\n    id: m1\n    role: primary\n    title: M\n    description: d\n"
         f"    sources:\n      topology: [{{path: {topology}, required: true}}]\n"
         "      coordinates: [{path: samples.xtc, required: false}]\n"
-        "    mapping:\n      coordinate_format: xtc\n      topology_format: mmcif\n"
+        "    mapping:\n      coordinate_format: xtc\n"
+        f"{format_line}"
         "      frame_unit: sample\n      timestep: 1\n      association: single\n"
     )
 
 
 def test_trajectory_topology_format_governs_the_topology_source(tmp_path):
-    """mmcif may select a .cif topology, never a .pdb one."""
+    """mmcif may select a .cif/.mmcif topology, never a .pdb one."""
     bad = _write_family(tmp_path / "bad", view_yaml=_trajectory_topology_view("topology.pdb"))
     good = _write_family(tmp_path / "good", view_yaml=_trajectory_topology_view("topology.cif"))
+    compressed = _write_family(
+        tmp_path / "compressed", view_yaml=_trajectory_topology_view("topology.cif.gz")
+    )
     assert "result.format_source_mismatch" in _codes(_audit(bad, tmp_path / "bad"))
     assert "result.format_source_mismatch" not in _codes(_audit(good, tmp_path / "good"))
+    assert "result.format_source_mismatch" not in _codes(_audit(compressed, tmp_path / "compressed"))
+
+
+def test_an_absent_trajectory_topology_format_is_audited_as_pdb(tmp_path):
+    """The viewer default is PDB, so a key-less CIF topology is a mismatch."""
+    family = _write_family(
+        tmp_path, view_yaml=_trajectory_topology_view("topology.cif", topology_format=None)
+    )
+    assert "result.format_source_mismatch" in _codes(_audit(family, tmp_path))
 
 
 def test_json_format_cannot_select_a_csv_artifact(tmp_path):

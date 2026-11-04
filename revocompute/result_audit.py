@@ -315,13 +315,20 @@ def _audit_view(task: TaskType, view: ResultView, tree: Mapping[str, Mapping[str
     for mapping_key in ("format", "coordinate_format", "topology_format"):
         declared_format = view.mapping.get(mapping_key)
         if declared_format is None:
-            continue
+            # The loader and viewer both default an absent topology format to
+            # PDB, so audit that default rather than skipping the topology.
+            if (view.plugin, mapping_key) != ("trajectory", "topology_format"):
+                continue
+            declared_format = "pdb"
         extensions = _FORMAT_EXTENSIONS.get(str(declared_format), frozenset())
         governed = _FORMAT_SOURCES.get((view.plugin, mapping_key), frozenset())
         for source_name in governed:
             for selector in view.sources.get(source_name, ()):
-                suffix = os.path.splitext(selector.value)[1].lower()
-                if suffix and suffix not in extensions:
+                name = selector.value.lower()
+                if name.endswith(".gz"):
+                    name = name[:-3]
+                suffix = os.path.splitext(name)[1]
+                if suffix and "*" not in suffix and suffix not in extensions:
                     findings.append(
                         ContractFinding(
                             "result.format_source_mismatch",
