@@ -1639,7 +1639,7 @@ def _run_compute_workflow(
     if frozen is None:
         _record_workflow_refusal(task_id, tt.name, "execution_graph_unverified")
         return JobState.FAILED
-    graph = compile_graph(tt)
+    graph = compile_graph(tt, frozen.get("mode"))
     if frozen["digest"] != graph.digest:
         _record_workflow_refusal(task_id, tt.name, "execution_graph_changed")
         return JobState.FAILED

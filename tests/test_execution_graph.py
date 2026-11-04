@@ -8,8 +8,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from revocompute.execution_graph import GraphValidationError, canonical_digest, compile_graph
-from revocompute.task_types import StagePortSpec, WorkflowStage
+from revocompute.execution_graph import (
+    GraphValidationError,
+    canonical_digest,
+    compile_graph,
+    execution_graph_payload,
+)
+from revocompute.task_types import ExecutionMode, StagePortSpec, WorkflowStage, _load_execution_modes
 
 
 def stage(name, source=None, *, input_type="x", output_type="x"):
@@ -17,12 +22,17 @@ def stage(name, source=None, *, input_type="x", output_type="x"):
     return WorkflowStage(name, name, False, inputs=inputs, outputs=(StagePortSpec("out", output_type),))
 
 
-def graph(*stages):
+def graph(*stages, modes=()):
     return SimpleNamespace(
         workflow=stages,
+        execution_modes=modes,
         inputs=(SimpleNamespace(name="source", type="x"),),
         runtime=SimpleNamespace(name="owner_family"),
     )
+
+
+def modes(*entries):
+    return tuple(ExecutionMode(*entry) for entry in entries)
 
 
 def test_each_node_records_its_resolved_family():
@@ -148,6 +158,53 @@ def test_graph_bounds():
         compile_graph(graph(stage("a"), *(stage(str(i), "a:out") for i in range(9))))
     with pytest.raises(GraphValidationError, match="depth"):
         compile_graph(graph(stage("0"), *(stage(str(i), f"{i - 1}:out") for i in range(1, 17))))
+
+
+def test_a_declared_mode_selects_the_same_nodes_with_its_own_digest():
+    declared = modes(("full", "Full", ("a", "b")), ("prepare_only", "Preparation only", ("a",)))
+    task = graph(stage("a"), stage("b", "a:out"), modes=declared)
+    full = compile_graph(task)
+    prepared = compile_graph(task, "prepare_only")
+    assert [node.id for node in prepared.nodes] == ["a"]
+    assert prepared.document["mode"] == "prepare_only"
+    assert prepared.digest != full.digest
+    assert compile_graph(task, "full").digest == full.digest
+    assert execution_graph_payload(task, "prepare_only")["mode"] == "prepare_only"
+
+
+def test_an_undeclared_mode_is_refused():
+    declared = modes(("full", "Full", ("a",)))
+    task = graph(stage("a"), modes=declared)
+    with pytest.raises(GraphValidationError, match="unknown execution mode"):
+        compile_graph(task, "model_only")
+    with pytest.raises(GraphValidationError, match="does not declare execution mode"):
+        compile_graph(graph(stage("a")), "prepare_only")
+
+
+def test_a_mode_cannot_drop_a_required_producer():
+    declared = modes(("full", "Full", ("a", "b")), ("model_only", "Model only", ("b",)))
+    task = graph(stage("a"), stage("b", "a:out"), modes=declared)
+    with pytest.raises(GraphValidationError, match="unknown node"):
+        compile_graph(task, "model_only")
+
+
+def test_execution_modes_require_full_covering_every_stage():
+    stages = ("task.a", "task.b")
+    loaded = _load_execution_modes(
+        {"full": {"stages": ["a", "b"]}, "prepare_only": {"label": "Prep", "stages": ["a"]}},
+        "task",
+        stages,
+    )
+    assert [(mode.id, mode.stages) for mode in loaded] == [
+        ("full", stages),
+        ("prepare_only", ("task.a",)),
+    ]
+    with pytest.raises(ValueError, match="must declare 'full'"):
+        _load_execution_modes({"prepare_only": {"stages": ["a"]}}, "task", stages)
+    with pytest.raises(ValueError, match="must select every stage"):
+        _load_execution_modes({"full": {"stages": ["a"]}}, "task", stages)
+    with pytest.raises(ValueError, match="unknown stage"):
+        _load_execution_modes({"full": {"stages": ["a", "b", "c"]}}, "task", stages)
 
 
 def test_a_port_name_cannot_escape_the_stage_input_directory():

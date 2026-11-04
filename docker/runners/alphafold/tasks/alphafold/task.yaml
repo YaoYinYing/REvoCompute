@@ -145,6 +145,13 @@ workflow:
   stage_markers:
   - modeling
   - relaxing
+execution_modes:
+  full:
+    label: Full prediction
+    stages: [features, model]
+  prepare_only:
+    label: Preparation only
+    stages: [features]
 id: alphafold
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema

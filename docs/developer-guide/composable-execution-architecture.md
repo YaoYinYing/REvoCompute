@@ -145,6 +145,26 @@ downstream stages become eligible only when their *specific* required input
 artifacts are complete and authorized. A failed independent branch retains
 other branches' valid artifacts. Retry must never duplicate publication.
 
+### Execution modes (delivered contract)
+
+A Task whose upstream genuinely splits its science may declare manifest-owned stage subsets:
+
+~~~yaml
+execution_modes:
+  full:
+    label: Full prediction
+    stages: [features, model]
+  prepare_only:
+    label: Preparation only
+    stages: [features]
+~~~
+
+`full` is mandatory and must select every declared stage. A submission names one mode; compilation
+selects that subset of the same graph and records the mode in the frozen document and digest. A mode
+cannot drop a producer another selected stage requires. Admission, GPU entitlement and placement follow
+the selected stages, and an omitted stage opens no StageRun, reservation or allocation. A Task that
+declares no modes keeps its previous graph document and accepts only `full`.
+
 ### Cross-family stage references (delivered contract)
 
 A workflow stage may name the Runner Family that executes it:

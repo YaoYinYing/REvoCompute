@@ -27,18 +27,17 @@ earlier authorized run. One graph, one StageRun authority — no second DAG and 
 - [ ] Re-verify in the pinned AF2/AF3 source that `features` and `model` are independently runnable and
       that supplied MSA/templates bypass search without skipping mandatory featurization. Record the exact
       upstream files/commands in the PR thread.
-- [ ] Declare supported modes in the owning `task.yaml` (no Core mode registry): stage selection, the
-      artifact type each omitted producer would have supplied, and whether an external artifact is
-      accepted. Expose the declaration through the Task Type API.
+- [x] Declare supported modes in the owning `task.yaml` (no Core mode registry): stage selection and
+      project the declaration through the Task Type API. AF2/AF3 declare `full` and `prepare_only`.
 - [ ] Refuse MODEL_ONLY on a Task whose upstream cannot consume prepared features (for example OpenDDE)
       rather than inventing a split.
 
 ## M1 — one graph, selected subset
 
-- [ ] Extend graph compilation to accept a declared mode and omit only stages the manifest permits,
-      recording an auditable omission reason in the frozen `ExecutionPlan`. The graph digest must cover the
-      selection.
-- [ ] Omitted stages create no `StageRun`, no reservation, no allocation and no GPU accounting.
+- [x] Extend graph compilation to accept a declared mode and omit only stages the manifest permits. The
+      graph digest covers the selection; a mode that drops a required producer is refused.
+- [x] Omitted stages create no `StageRun`, no reservation, no allocation and no GPU requirement; admission
+      and placement follow the selected stages.
 - [ ] `FULL` must produce byte-identical stage inputs/parameters to today's all-stage path.
 - [ ] Keep `stage_runs` the sole writer; do not add a mode-specific status authority.
 

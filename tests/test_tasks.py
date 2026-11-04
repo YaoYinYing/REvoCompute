@@ -31,7 +31,7 @@ from conftest import (
     _task_owner,
 )
 from jsonschema import Draft202012Validator
-from revocompute.execution_graph import GraphValidationError, compile_graph
+from revocompute.execution_graph import GraphValidationError, compile_graph, execution_graph_payload
 from revocompute.resource_ledger import DataLifecycleState
 from revocompute.task_types import TaskInputRole
 from werkzeug.utils import secure_filename
@@ -430,16 +430,10 @@ def test_workflow_type_detail_projects_the_graph_submission_freezes(monkeypatch,
     assert response.status_code == 200
     execution_graph = response.get_json()["execution_graph"]
     task_type, _ = module.task_runtime._get_task_type("multistage_runner")
-    compiled = compile_graph(task_type)
     assert execution_graph == json.loads(
-        json.dumps(
-            {
-                "ir_version": compiled.ir_version,
-                "digest": compiled.digest,
-                "document": compiled.document,
-            }
-        )
+        json.dumps(execution_graph_payload(task_type))
     )
+    assert execution_graph["mode"] == "full"
     assert "execution_graph" not in client.get("/compute/api/types/cpu_runner").get_json()
 
 
@@ -453,7 +447,7 @@ def test_submission_refuses_a_task_whose_graph_cannot_run(monkeypatch, tmp_path)
     user = module.app.config["user_db"].get_user_by_username("tester")
     module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
     before = {task["md5sum"] for task in module.task_store.list_tasks()}
-    def refuse(_task_type):
+    def refuse(_task_type, _mode=None):
         raise GraphValidationError("graph contains a cycle")
 
     monkeypatch.setattr("revocompute.execution_graph.compile_graph", refuse)
@@ -472,6 +466,45 @@ def test_submission_refuses_a_task_whose_graph_cannot_run(monkeypatch, tmp_path)
 
     assert response.status_code == 400
     assert {task["md5sum"] for task in module.task_store.list_tasks()} == before
+
+
+def test_prepare_only_submission_freezes_the_declared_subset_without_gpu(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "multistage_runner"},
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+
+    class _Queued:
+        id = "queued-multistage_runner-prepare"
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: _Queued())
+    fasta_path = Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta"
+    with fasta_path.open("rb") as handle:
+        response = client.post(
+            "/compute/api/post",
+            headers=auth_header,
+            data={
+                "task_type": "multistage_runner",
+                "execution_mode": "prepare_only",
+                "file": (handle, fasta_path.name),
+                "input_roles": "sequence",
+            },
+            content_type="multipart/form-data",
+        )
+
+    # The fixture's model stage requires a GPU and the test user is not
+    # entitled; the preparation stage does not, so the submission is admitted.
+    assert response.status_code == 302, response.get_data(as_text=True)[:300]
+    task_id = response.headers["Location"].rsplit("/", 1)[-1]
+    task = module.task_store.get_task(task_id)
+    input_form = json.loads(task["input_form"])
+    frozen = input_form["execution_graph"]
+    assert frozen["mode"] == "prepare_only"
+    assert frozen["document"]["mode"] == "prepare_only"
+    assert [node["id"] for node in frozen["document"]["nodes"]] == ["multistage_runner.features"]
+    assert set(input_form["resource_policies"]) == {"multistage_runner.features"}
 
 
 def test_dashboard_serves_structure_preview_for_pdb_tasks(monkeypatch, tmp_path):

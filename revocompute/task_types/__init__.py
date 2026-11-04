@@ -172,6 +172,20 @@ class WorkflowStage:
 
 
 @dataclass(frozen=True)
+class ExecutionMode:
+    """One manifest-declared subset of a workflow's stages.
+
+    The mode never changes what a stage does; it selects which declared stages
+    a submission intends to run. ``stages`` are fully qualified stage names in
+    manifest order.
+    """
+
+    id: str
+    label: str
+    stages: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ExecutionSettings:
     """How a task's work items are executed inside one allocation.
 
@@ -251,6 +265,9 @@ class TaskType:
     requires_network: bool = False
     stage_markers: dict[str, str] = field(default_factory=dict)
     workflow: tuple[WorkflowStage, ...] = ()
+    #: Manifest-declared subsets a submission may run. Empty means the whole
+    #: workflow is the only supported intent.
+    execution_modes: tuple[ExecutionMode, ...] = ()
     execution: ExecutionSettings = field(default_factory=ExecutionSettings)
     execution_queue: ExecutionQueuePolicy = field(default_factory=ExecutionQueuePolicy)
     resource_adaptation: ResourceAdaptation = field(default_factory=ResourceAdaptation)
@@ -692,6 +709,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 descriptor.id for descriptor in manager.workspace_plugins() if descriptor.owner == workspace_owner
             )
             task_inputs = _load_task_inputs(raw.get("inputs"), task_id)
+            workflow = _load_workflow(raw.get("workflow"), task_id, dict(raw.get("stage_markers", {})))
             task = TaskType(
                 name=task_id,
                 display_name=str(raw.get("display_name", task_id)),
@@ -703,7 +721,10 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 gpus=bool(raw.get("gpus", False)),
                 requires_network=bool(raw.get("requires_network", False)),
                 stage_markers=dict(raw.get("stage_markers", {})),
-                workflow=_load_workflow(raw.get("workflow"), task_id, dict(raw.get("stage_markers", {}))),
+                workflow=workflow,
+                execution_modes=_load_execution_modes(
+                    raw.get("execution_modes"), task_id, tuple(stage.name for stage in workflow)
+                ),
                 execution=_load_execution(raw.get("execution"), task_id),
                 execution_queue=_load_execution_queue(raw.get("execution_queue"), task_id),
                 resource_adaptation=_load_resource_adaptation(raw.get("resource_adaptation"), task_id),
@@ -1380,6 +1401,53 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
             f"{', '.join(omitted)} is unassigned"
         )
     return tuple(stages)
+
+
+def _load_execution_modes(
+    raw: Any, task_name: str, stage_names: tuple[str, ...]
+) -> tuple[ExecutionMode, ...]:
+    """Load the manifest-declared execution-mode subsets of this workflow.
+
+    A mode names stages, never new behavior. ``full`` is mandatory and must
+    cover every declared stage, so a submission that omits the field keeps
+    today's meaning and no mode can quietly become the default.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(f"Task type {task_name!r} execution_modes must be a non-empty mapping")
+    ordered = tuple(stage_names)
+    known = set(ordered)
+    modes: list[ExecutionMode] = []
+    for mode_id, entry in raw.items():
+        if not isinstance(mode_id, str) or not _valid_identifier(mode_id):
+            raise ValueError(f"Task type {task_name!r} has an invalid execution mode id")
+        if not isinstance(entry, dict) or set(entry) - {"label", "stages"}:
+            raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} has invalid fields")
+        label = entry.get("label", mode_id.replace("_", " ").title())
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} needs a label")
+        stages = entry.get("stages")
+        if not isinstance(stages, list) or not stages or not all(isinstance(item, str) for item in stages):
+            raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} needs a stage list")
+        selected: set[str] = set()
+        for stage in stages:
+            qualified = stage if stage in known else f"{task_name}.{stage}"
+            if qualified not in known:
+                raise ValueError(
+                    f"Task type {task_name!r} execution mode {mode_id!r} names unknown stage {stage!r}"
+                )
+            selected.add(qualified)
+        modes.append(
+            ExecutionMode(mode_id, label.strip(), tuple(name for name in ordered if name in selected))
+        )
+    by_id = {mode.id: mode for mode in modes}
+    full = by_id.get("full")
+    if full is None:
+        raise ValueError(f"Task type {task_name!r} execution_modes must declare 'full'")
+    if set(full.stages) != known:
+        raise ValueError(f"Task type {task_name!r} execution mode 'full' must select every stage")
+    return tuple(modes)
 
 
 def _load_execution(raw: Any, task_name: str) -> ExecutionSettings:

@@ -52,8 +52,28 @@ class CompiledGraph:
     ir_version: int = GRAPH_IR_VERSION
 
 
-def compile_graph(task_type: Any) -> CompiledGraph:
-    stages = tuple(task_type.workflow)
+def compile_graph(task_type: Any, mode: str | None = None) -> CompiledGraph:
+    """Compile the manifest workflow, optionally restricted to one declared mode.
+
+    A mode is a manifest-owned subset of the same graph, never a second graph
+    language: a selected consumer must still have every required producer among
+    the selected stages, so a mode cannot silently drop an upstream stage that
+    the remaining science depends on.
+    """
+    modes = {item.id: item for item in getattr(task_type, "execution_modes", ())}
+    selected_mode = mode
+    if modes:
+        selected_mode = mode or "full"
+        if selected_mode not in modes:
+            raise GraphValidationError(f"unknown execution mode: {selected_mode}")
+        allowed = set(modes[selected_mode].stages)
+        stages = tuple(stage for stage in task_type.workflow if stage.name in allowed)
+        if len(stages) != len(allowed):
+            raise GraphValidationError(f"execution mode {selected_mode!r} names an unknown stage")
+    else:
+        if mode not in (None, "full"):
+            raise GraphValidationError(f"task type does not declare execution mode {mode!r}")
+        stages = tuple(task_type.workflow)
     if len(stages) > 32:
         raise GraphValidationError("graph exceeds node bound of 32")
     by_id = {}
@@ -138,16 +158,26 @@ def compile_graph(task_type: Any) -> CompiledGraph:
     inputs = tuple(graph_inputs[name] for name in sorted(graph_inputs))
     document = {"ir_version": GRAPH_IR_VERSION, "nodes": [asdict(node) for node in ordered_nodes],
                 "graph_inputs": [asdict(port) for port in inputs], "execution_order": order}
+    if modes:
+        document["mode"] = selected_mode
     digest = canonical_digest(document)
     return CompiledGraph(ordered_nodes, inputs, tuple(order), digest, document)
 
 
-def execution_graph_payload(task_type: Any) -> dict[str, Any] | None:
-    """The graph identity a workflow Task freezes at submission."""
+def execution_graph_payload(task_type: Any, mode: str | None = None) -> dict[str, Any] | None:
+    """The graph identity a workflow Task freezes at submission.
+
+    ``mode`` is recorded beside the digest only when the owning manifest
+    declares execution modes; a Task that declares none keeps the exact graph
+    document it had before modes existed.
+    """
     if not task_type.workflow:
         return None
-    graph = compile_graph(task_type)
-    return {"ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document}
+    graph = compile_graph(task_type, mode)
+    payload = {"ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document}
+    if getattr(task_type, "execution_modes", ()):
+        payload["mode"] = graph.document["mode"]
+    return payload
 
 
 def canonical_digest(document: dict[str, Any]) -> str:

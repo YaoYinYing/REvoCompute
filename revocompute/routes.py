@@ -23,7 +23,7 @@ import shutil
 import time
 import unicodedata
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -1380,6 +1380,14 @@ def task_type_form(name: str):
             }
             for stage in tt.workflow
         ],
+        "execution_modes": [
+            {
+                "id": mode.id,
+                "label": mode.label,
+                "stages": [stage.split(".", 1)[-1] for stage in mode.stages],
+            }
+            for mode in tt.execution_modes
+        ],
         "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
         "input_workspace": workspace_payload,
     }
@@ -2280,14 +2288,30 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         if enabled is False:
             return jsonify({"error": f"Task type {task_type!r} is currently disabled"}), 400
 
+    # The submission intent selects a manifest-declared subset of the same
+    # graph. Admission, GPU entitlement and placement follow the selected
+    # stages, so a preparation-only run neither needs GPU entitlement nor
+    # requires a family that only an omitted stage would execute.
+    try:
+        execution_graph = execution_graph_payload(tt, submission.execution_mode)
+    except GraphValidationError as exc:
+        return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
+    selected_stage_ids = (
+        {node["id"] for node in execution_graph["document"]["nodes"]} if execution_graph is not None else set()
+    )
+    selected_stages = tuple(stage for stage in tt.workflow if stage.name in selected_stage_ids)
+    graph_requires_gpu = (
+        bool(tt.gpus)
+        if execution_graph is None
+        else any(node["requires_gpu"] for node in execution_graph["document"]["nodes"])
+    )
     # A composed Task executes every family its graph names, so the submission
     # is admitted against each referenced family, never only the composing one.
     referenced_families: dict[str, RuntimeFamily] = {tt.runtime.name: tt.runtime}
-    for stage in tt.workflow:
+    for stage in selected_stages:
         family_id = stage.family or tt.runtime.name
         if family_id not in referenced_families:
             referenced_families[family_id] = get_runtime_family(family_id)
-    graph_requires_gpu = bool(tt.gpus) or any(stage.requires_gpu for stage in tt.workflow)
 
     abuse_scope = getattr(_get_user_db(), "path", "")
     checked_policies: set[str] = set()
@@ -2569,7 +2593,9 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     if graph_requires_gpu:
         _project_gpu_authorization(int(g.current_user["id"]))
     try:
-        placement = resolve_submission_placement(managedb, tt, runner)
+        placement = resolve_submission_placement(
+            managedb, replace(tt, workflow=selected_stages), runner
+        )
     except PlacementError as exc:
         logging.warning("Placement rejected submission for %s: %s", task_type, exc.reason_code)
         return jsonify({"error": "This task type cannot be placed on this deployment", "reason_code": exc.reason_code, "message": str(exc)}), 503
@@ -2578,11 +2604,6 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         return jsonify({"error": "This task type has an invalid resource policy; contact an administrator."}), 503
     resource_policy = placement.primary
     resource_policies = placement.stage_resources
-
-    try:
-        execution_graph = execution_graph_payload(tt)
-    except GraphValidationError as exc:
-        return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
 
     uploaded_inputs, upload_error = _validate_input_uploads(task_type)
     if upload_error is not None:
