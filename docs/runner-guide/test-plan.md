@@ -48,21 +48,21 @@ not a substitute for `smoke` and does not by itself satisfy the release gate.
 
 ## Scientific mode coverage
 
-`smoke` must represent every registered TaskType and the release-critical
-scientific paths actually advertised by that Task. A passing default case
-does not establish that a non-default input format or execution mode works.
-For material alternatives such as single-sequence inference, uploaded MSAs,
-side-chain packing, or all-atom starting structures, add a small real case
-with assertions about the *meaning* and integrity of its outputs. A cheap
-release-critical case belongs in `smoke`; a costly numerical or scientific
-reference case may belong in `scientific` and must be run explicitly before
-its capability is called verified. `scientific` is not promotion evidence.
+A passing default case does not establish that a non-default input format or
+execution mode works. Within each TaskType, cover the release-critical
+scientific paths the Task advertises: for material alternatives such as
+single-sequence inference, uploaded MSAs, side-chain packing, or all-atom
+starting structures, add a small real case that checks the meaning and
+integrity of its outputs, not only that the command exited. A cheap
+release-critical mode belongs in `smoke`; a costly numerical reference for it
+may live in `scientific`, whose role is defined under [Collections](#collections).
 
-Where a new upstream version changes scientific semantics, re-evaluate old
-goldens and output selectors against observed data rather than merely updating
-the expected string or weakening a result contract. Tests of command dispatch
-with a fake upstream program are useful, but they do not establish support for
-a scientific mode. An unexercised mode remains **unverified**, not certified.
+A mode is **verified** only when a real case exercised it and asserted its
+output semantics. Command-dispatch tests against a fake upstream program do
+not establish a mode, and an unexercised mode remains **unverified**. When an
+upstream change alters scientific semantics, re-evaluate old goldens and
+output selectors against observed data rather than editing an expected string
+or weakening the result contract.
 
 ## Evidence
 

@@ -41,55 +41,60 @@ scientific behavior; do not invent undocumented modes or dependency versions.
 
 ### Review upstream capabilities before adapting
 
-Read the scientific publication and supplement where relevant, the **exact pinned**
-upstream revision, its CLI/API help, examples, tests, release notes, and model
-documentation. Distinguish what the paper claims, what the pinned code can
-execute, and what a newer release adds. Record source URLs with revision-specific
-paths or line references for each user-relevant scientific operation.
+Read the publication and supplement where relevant, the **exact pinned**
+revision, its CLI/API help, examples, tests, release notes, and model
+documentation. Keep four evidence levels distinct: what the paper claims, what
+the pinned implementation can execute, what a newer release adds, and what a
+real run on the target host produced. Cite a revision-specific URL, path, or
+line reference for each user-relevant scientific operation.
 
-For each operation, establish its accepted input types (including alternative
-structures, alignments, and specifications), scientific mode, prerequisites,
-parameters that change the experiment, produced artifacts, and validation
-evidence. Compare it with the family's registered Task(s) and classify it as
-**exposed and verified**, **implemented but undiscoverable**, **missing from the
-adapter**, **deliberately omitted**, **unsupported by the pinned release**, or
-**unverified**. Give every omission a scientific, security, licensing, resource,
-or maintenance reason. CLI switches are not automatically scientific operations.
+For each operation, establish its accepted inputs, scientific mode,
+prerequisites, parameters that change the experiment, produced artifacts, and
+observed evidence. Compare that with the family's registered Task(s) and
+classify it as **exposed and verified**, **implemented but hidden**,
+**missing**, **intentionally excluded**, **unavailable at the pinned
+version**, **unverified**, or **broken**. Give every operation that is not
+exposed and verified a scientific, security, licensing, resource, or
+maintenance reason. A CLI switch is not automatically a scientific operation.
 
-Correct the owning family, not Core. Several modes of one experiment may share
-one `task.yaml` with validated parameters and conditional inputs; operations
-with different scientific meaning, required input roles, or outputs may need
-separate Task definitions within the same family. Tasks remain automatically
-registered through `plugin.yaml` when the family is enabled. Do **not** create
-a second capability registry, hardcode Runner knowledge in Core, mirror Task
-defaults in another schema, or expose arbitrary user CLI/shell commands.
+Operations with the same scientific meaning may share one `task.yaml` with
+validated parameters and conditional inputs; operations with different
+required input roles or outputs need their own Task in the same family. Keep
+the mapping in the owning family; [Runner Family Protocol](runner-family-protocol.md#ownership)
+owns the Core boundary and [Task Contract](task-contract.md) owns the manifest.
 
-Keep the investigation and disposition in the family-owned README or
-`SCIENTIFIC_TRACEABILITY.md` when the science warrants a durable explanation;
-otherwise keep the bounded evidence in the PR discussion. In either case,
-`task.yaml` remains authoritative for parameters, input semantics, and user
-help, and `test.yaml` and live receipts remain authoritative for executable
-acceptance. See [Test Plan](test-plan.md).
+For example, suppose the pinned upstream writes `predictions/<id>/scores.json`
+beside its structures, but the Task's `expected_files.yaml` matches only
+`predictions/**/*.cif`. The pinned code produces the scores, but the Task
+neither declares nor exposes them, so they are **implemented but hidden**.
+Read the output code to establish what the file contains, decide whether it
+carries scientific meaning, then either declare a result role and a smoke
+assertion for it or record why it is **intentionally excluded**. Apply the
+same check to a parameter: a flag the pinned CLI accepts but the Task never
+exposes is also **implemented but hidden**.
+
+Keep a durable investigation in the family `README.md` or
+`SCIENTIFIC_TRACEABILITY.md`; otherwise record it in the PR discussion.
+[Scientific traceability](index.md#scientific-traceability) owns that record
+pattern, and [Test Plan](test-plan.md#scientific-mode-coverage) owns the
+evidence that turns a classification into verified.
 
 ### Check versions before upgrading
 
-Find the deployed/pinned upstream commit or release and compare it with the
-latest relevant official stable release, not an assumed latest Git branch.
-Read intervening release notes and breaking changes, and account for the
-model weights, databases, terms of use, Python/CUDA/ABI dependencies, upstream
-output schemas, upstream API behavior, and available target-host resources.
-Where the family already carries `upstream.json`, reconcile it with the actual
-build inputs. A Git tag, package version, checkpoint and SIF are distinct
-identities; compare the ones the runtime truly uses.
+Compare the commit or release the runtime actually deploys with the latest
+official **stable** release, not an assumed latest branch. Read intervening
+release notes and breaking changes, and check weights, databases, terms,
+Python/CUDA/ABI dependencies, output schemas, API behavior, and target-host
+resources. Reconcile any `upstream.json` with the actual build inputs; a tag,
+package version, checkpoint, and SIF are distinct identities.
 
-An upgrade is a candidate, not an automatic update. Upgrade only when a
-useful and supportable improvement can be shown with compatible resources,
-real execution, and scientific result evidence. Record a **keep**, **upgrade**,
-**blocked**, or **deferred** disposition and its reason for every reviewed
-release. Preserve existing upstream pins when evidence is insufficient; do
-not claim that an available new release means production is outdated or unsafe.
-Version or capability changes must follow the existing Build / Runtime Bundle
-/ Execution impact and target-host acceptance gates below.
+An available release is a candidate, not a mandate. Record **upgrade now**,
+**retain**, **blocked**, or **defer**, with the reason, for every reviewed
+release. Upgrade only when a useful, supportable change is shown with
+compatible resources, real execution, and scientific result evidence;
+otherwise preserve the pin and state what evidence would reopen the decision.
+Every such change still follows the existing change-impact and target-host
+acceptance gates.
 
 ## 2. Define `plugin.yaml`
 
@@ -223,12 +228,10 @@ result time.
 
 ## 5. Define `test.yaml`
 
-Add a deterministic fixture under `tests/data/` and a required smoke case for
-every TaskType in the family. `test.yaml` declares only case IDs, the TaskType,
-fixtures grouped by named input role, and schema-valid parameters; output
-contracts, resources, weights, and defaults stay in their owning manifests.
-Keep the case small enough for routine target-host execution while exercising
-real parsing and artifact acceptance. See [Test Plan](test-plan.md).
+Add a deterministic fixture under `tests/data/` and the required smoke cases.
+[Test Plan](test-plan.md) owns the declaration and collection rules; keep each
+case small enough for routine target-host execution while exercising real
+parsing and artifact acceptance.
 
 Add pytest coverage only for executable family logic such as parsers, command
 builders, normalizers, or postprocessors. Do not write tests that merely read
