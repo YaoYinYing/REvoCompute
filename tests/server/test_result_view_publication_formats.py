@@ -39,6 +39,16 @@ def test_an_absent_topology_format_is_checked_as_pdb() -> None:
     assert _problems(definition, "topology.pdb", "samples.xtc") == []
 
 
-def test_a_gzipped_topology_and_coordinates_keep_their_underlying_format() -> None:
+def test_a_gzipped_text_topology_keeps_its_underlying_format() -> None:
     definition = _definition(topology_format="mmcif")
-    assert _problems(definition, "topology.cif.gz", "samples.xtc.gz") == []
+    assert _problems(definition, "topology.cif.gz", "samples.xtc") == []
+
+
+def test_a_gzipped_binary_coordinate_is_rejected_because_the_viewer_does_not_inflate_it() -> None:
+    definition = _definition(topology_format="mmcif")
+    assert any("coordinate format" in problem for problem in _problems(definition, "topology.cif", "samples.xtc.gz"))
+
+
+def test_a_gzipped_multi_model_pdb_coordinate_keeps_its_underlying_format() -> None:
+    definition = _definition(coordinate_format="pdb")
+    assert _problems(definition, "topology.pdb", "frames.pdb.gz") == []

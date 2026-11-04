@@ -325,7 +325,9 @@ def _audit_view(task: TaskType, view: ResultView, tree: Mapping[str, Mapping[str
         for source_name in governed:
             for selector in view.sources.get(source_name, ()):
                 name = selector.value.lower()
-                if name.endswith(".gz"):
+                # Only the text sources the viewer inflates keep their
+                # underlying format; gzipped XTC/DCD are not inflated.
+                if name.endswith(".gz") and os.path.splitext(name[:-3])[1] in {".pdb", ".cif", ".mmcif"}:
                     name = name[:-3]
                 suffix = os.path.splitext(name)[1]
                 if suffix and "*" not in suffix and suffix not in extensions:
