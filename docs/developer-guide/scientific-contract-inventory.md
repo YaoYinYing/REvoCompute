@@ -193,8 +193,8 @@ Two caveats are load-bearing and are carried in the report itself:
 ## Known defects
 
 The audit's defect set is orthogonal to its coverage partition, and it is
-currently **empty**: `defective: []`, `ok: true`, with the coverage partition
-at 54 covered / 6 unaudited. An empty defect set is not a clean bill of
+currently **empty**: `defective: []`, `ok: true`, with every Task covered that
+declares a result tree and the six disabled TaskTypes unaudited. An empty defect set is not a clean bill of
 health — the six unaudited TaskTypes (all in disabled families) still report
 `result.required_source_undeclared_tree`, because no shipped tree exists to check
 their required sources against. The partition and the defect set are read off the
