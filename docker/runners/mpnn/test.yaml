@@ -18,6 +18,10 @@ collections:
       task: ligandmpnn
       input: {roles: {structure: [tests/data/pdb/3fap_hf3_A_short_lig.pdb]}}
       parameters: {number_of_batches: 1, batch_size: 1, pack_side_chains: 0}
+    - id: packed-ligandmpnn
+      task: ligandmpnn
+      input: {roles: {structure: [tests/data/pdb/3fap_hf3_A_short_lig.pdb]}}
+      parameters: {number_of_batches: 1, batch_size: 1, pack_side_chains: 1}
     - id: minimal-lasermpnn
       task: lasermpnn
       input: {roles: {structure: [tests/data/pdb/2KL8.pdb]}}

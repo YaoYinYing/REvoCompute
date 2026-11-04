@@ -14,6 +14,12 @@ output_summary: Designed sequences, with optional packed structures and model st
 considerations:
 - Ligand identity, atom records, residue syntax, and structure preparation affect
   the design context.
+- Only the LigandMPNN v_32_010_25 design checkpoint and the LigandMPNN-SC packing
+  model are used; other upstream checkpoint variants are not selectable.
+- Side-chain packing writes its all-atom outputs under packed/; the backbone-only
+  structures under backbones/ are written for every design and are not published here.
+- The optional design statistics are upstream NumPy archives, intentionally not
+  part of the published result contract.
 inputs:
   structure:
     title: Protein-ligand structure
@@ -68,10 +74,11 @@ result_workspace:
     id: packed_structures
     role: evidence
     title: Packed structures
-    description: Structure outputs produced when side-chain packing is enabled.
+    description: All-atom structures produced by side-chain packing; published only
+      when packing is enabled. Backbone-only design structures are not packed.
     sources:
       candidates:
-      - glob: backbones/*.pdb
+      - glob: packed/*.pdb
         required: false
     mapping: {}
 stage_markers:
@@ -84,7 +91,8 @@ parameters:
   properties:
     number_of_batches:
       type: integer
-      description: Number of independent design batches generated for the input structure.
+      description: Number of design batches to run; total designs equal this value
+        multiplied by batch_size.
       default: 100
       minimum: 1
       maximum: 10000
