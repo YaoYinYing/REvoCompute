@@ -19,6 +19,9 @@ output_summary: Ranked predicted structures, confidence data, features, and opti
 considerations:
 - "MSA and template searches use the server\u2019s installed databases and can dominate\
   \ runtime."
+- The pinned upstream pipeline always searches for MSAs; no-MSA inference is unavailable.
+  Supplied alignments are supported upstream but not exposed because this Task has no
+  named chain-to-alignment input role.
 gpus: true
 inputs:
   sequence:
