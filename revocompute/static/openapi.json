@@ -2547,6 +2547,11 @@
           "inputs": {"type": "array", "items": {"$ref": "#/components/schemas/TaskInputRole"}},
           "citations": {"type": "array", "items": {"$ref": "#/components/schemas/TaskCitation"}},
           "workflow": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowStage"}},
+          "execution_modes": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/ExecutionMode"},
+            "description": "Manifest-declared stage subsets a submission may run; empty when the whole workflow is the only intent."
+          },
           "access": {"$ref": "#/components/schemas/RunnerAccess"},
           "submission": {"oneOf": [{"$ref": "#/components/schemas/TaskSubmissionState"}, {"type": "null"}]},
           "detail_url": {"type": "string"},
@@ -2567,6 +2572,16 @@
           "ir_version": {"type": "integer", "minimum": 1},
           "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Canonical sha256 of document."},
           "document": {"type": "object", "additionalProperties": true, "description": "Canonical execution graph document: nodes, graph inputs, and execution order."}
+        },
+        "additionalProperties": false
+      },
+      "ExecutionMode": {
+        "type": "object",
+        "required": ["id", "label", "stages"],
+        "properties": {
+          "id": {"type": "string"},
+          "label": {"type": "string"},
+          "stages": {"type": "array", "items": {"type": "string"}}
         },
         "additionalProperties": false
       },

@@ -2580,6 +2580,8 @@ export interface components {
             inputs: components["schemas"]["TaskInputRole"][];
             citations: components["schemas"]["TaskCitation"][];
             workflow: components["schemas"]["WorkflowStage"][];
+            /** @description Manifest-declared stage subsets a submission may run; empty when the whole workflow is the only intent. */
+            execution_modes?: components["schemas"]["ExecutionMode"][];
             access: components["schemas"]["RunnerAccess"];
             submission: components["schemas"]["TaskSubmissionState"] | null;
             detail_url: string;
@@ -2597,6 +2599,11 @@ export interface components {
             document: {
                 [key: string]: unknown;
             };
+        };
+        ExecutionMode: {
+            id: string;
+            label: string;
+            stages: string[];
         };
         TaskCitation: {
             num: number;
