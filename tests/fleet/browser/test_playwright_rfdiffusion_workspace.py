@@ -179,7 +179,12 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
     # structure through a retrying locator expectation instead, which polls from
     # Playwright's own injected script and is CSP-safe.
     expect(page.locator(".ct-structure-viewer")).to_have_attribute("data-label", "target.pdb")
-    page.evaluate("window.__emitViewerSelection([{chain: 'A', residue: 10}, {chain: 'A', residue: 11}])")
+    page.evaluate(
+        "window.__emitViewerSelection(["
+        "{chain: 'A', residue: 10, auth_chain: 'A', auth_seq_id: 10, label_seq_id: 10, residue_name: 'ALA', hetero: false},"
+        "{chain: 'A', residue: 11, auth_chain: 'A', auth_seq_id: 11, label_seq_id: 11, residue_name: 'GLY', hetero: false}"
+        "])"
+    )
     page.get_by_role("button", name="Use selection as target", exact=True).click()
     expect(page.locator(".rfd-feedback")).to_have_text("Target: A10–11")
     page.get_by_role("button", name="Use selection as hotspots", exact=True).click()

@@ -14,6 +14,14 @@ Status: M1 identity widening delivered; M2/M3 and CAVER picker remain. Base `6d7
 - Tests: auth-vs-label identity, insertion-code publication and HETATM classification; frontend
   typecheck passes.
 
+## Adviser findings applied
+
+- The existing PLACER/RFdiffusion regions consumer now addresses `auth_chain`/`auth_seq_id` and refuses
+  insertion-coded, hetero and chainless picks; the backend refuses the same references.
+- The submitted `selected_residues` value is authored-only (no viewer-local label numbering).
+- The fake viewer imports the real `SelectedResidue` type and the browser fixture emits the widened
+  identity; `.ent` parsing is covered by a pure-format test.
+
 ## Next action
 
 - Wire the CAVER picker to the canonical `starting_point_*` controls, add the parameter write accessor and

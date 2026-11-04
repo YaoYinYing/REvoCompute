@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseWorkspaceDescriptor } from '../src/features/create-task/api';
 import { parametersFromSchema, seedConstant } from '../src/features/create-task/parameter-controls';
 import { buildSubmissionFormData } from '../src/features/create-task/submission';
+import { structureFormat } from '../src/features/create-task/input-workspace/builtins';
 import type { ParameterDefinition, TaskFormDefinition } from '../src/features/create-task/types';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -130,3 +131,12 @@ describe('Create Task server contracts', () => {
   });
 });
 
+
+describe('structure viewer format', () => {
+  it('keeps .ent as PDB and treats CIF as mmCIF', () => {
+    expect(structureFormat('model.pdb')).toBe('pdb');
+    expect(structureFormat('MODEL.ENT')).toBe('pdb');
+    expect(structureFormat('model.cif')).toBe('mmcif');
+    expect(structureFormat('model.mmcif')).toBe('mmcif');
+  });
+});

@@ -6,6 +6,12 @@ import { t } from '../../../app/i18n';
 import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance } from './plugin-contract';
 import { element, filePath, formatBytes, matchesExtension, parseSequence } from './utils';
 
+/** The viewer format for an accepted structure filename; `.ent` is legacy PDB. */
+export function structureFormat(name: string): 'pdb' | 'mmcif' {
+  const lower = name.toLowerCase();
+  return lower.endsWith('.pdb') || lower.endsWith('.ent') ? 'pdb' : 'mmcif';
+}
+
 export function inputByParameter(name: string): HTMLInputElement | HTMLSelectElement | null {
   return document.querySelector(`[data-ct-parameter="${CSS.escape(name)}"]`);
 }
@@ -269,9 +275,7 @@ const structurePlugin: WorkspacePlugin = {
         }
         // ``.ent`` is the legacy PDB extension and must keep the viewer a Task
         // accepts it for; it is parsed as PDB, not as mmCIF.
-        const lower = file.name.toLowerCase();
-        const format = lower.endsWith('.pdb') || lower.endsWith('.ent') ? 'pdb' : 'mmcif';
-        await viewer.loadStructure({ data, format, label: filePath(file) });
+        await viewer.loadStructure({ data, format: structureFormat(file.name), label: filePath(file) });
         if (generation !== current) return; host.hidden = false; status.textContent = selectable ? t('ct.structure.selectResidues', { name: filePath(file) }) : t('ct.structure.inspection', { name: filePath(file) });
       } catch { if (generation === current) { host.hidden = true; status.textContent = t('ct.structure.failed'); } }
     };
@@ -282,7 +286,16 @@ const structurePlugin: WorkspacePlugin = {
       queue = queue.catch(() => undefined).then(() => render(current, file));
       return queue;
     };
-    return { refresh, readValue: () => ({ selected_residues: context.structureSelections() }), summarize: () => context.structureSelections().length ? { label: t('ct.summary.selection'), value: t('ct.sequence.residues', { count: context.structureSelections().length }) } : null, destroy: () => { generation++; selectedFile = null; removeListener?.(); removeListener = null; viewer?.dispose(); viewer = null; } };
+    // The submitted value carries the authored identity only: label numbering
+    // is viewer-local and must not become Runner meaning.
+    const authored = (item: import('../../structure/MolecularViewer').SelectedResidue) => ({
+      auth_chain: item.auth_chain,
+      auth_seq_id: item.auth_seq_id,
+      ...(item.insertion_code ? { insertion_code: item.insertion_code } : {}),
+      residue_name: item.residue_name,
+      hetero: item.hetero,
+    });
+    return { refresh, readValue: () => ({ selected_residues: context.structureSelections().map(authored) }), summarize: () => context.structureSelections().length ? { label: t('ct.summary.selection'), value: t('ct.sequence.residues', { count: context.structureSelections().length }) } : null, destroy: () => { generation++; selectedFile = null; removeListener?.(); removeListener = null; viewer?.dispose(); viewer = null; } };
   },
 };
 
