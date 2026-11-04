@@ -58,8 +58,9 @@ earlier authorized run. One graph, one StageRun authority — no second DAG and 
 
 ## M3 — UI and API
 
-- [ ] Create-Task exposes only manifest-declared modes, shows the required artifacts and compute before
-      submission, and offers the caller's validated reusable artifacts for MODEL_ONLY.
+- [x] Create-Task exposes only manifest-declared modes and submits the selected intent.
+- [ ] Show the required artifacts and compute before submission, and offer the caller's validated
+      reusable artifacts for MODEL_ONLY.
 - [ ] Result/API surface shows per-stage mode, omission reason, source artifact provenance and the reused
       identity.
 - [ ] Browser tests cover available/unavailable modes and refusal states.

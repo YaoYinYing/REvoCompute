@@ -57,10 +57,11 @@ describe('Create Task server contracts', () => {
     const definition = { name: 'method', inputs: [] } as unknown as TaskFormDefinition;
     const data = buildSubmissionFormData(definition, {
       inputFiles: () => [{ role: 'structure', file }], sequence: () => '', sequenceName: () => '', sequenceRole: () => null,
-      parameters: () => ({ models: '4', enabled: 'true' }),
+      parameters: () => ({ models: '4', enabled: 'true' }), executionMode: () => 'prepare_only',
     }, { selection: { chains: ['A'] } });
     expect(data.getAll('files')).toEqual([file]);
     expect(data.getAll('input_roles')).toEqual(['structure']);
+    expect(data.get('execution_mode')).toBe('prepare_only');
     expect(data.get('params[models]')).toBe('4');
     expect(JSON.parse(String(data.get('workspace')))).toEqual({ version: 2, capabilities: { selection: { chains: ['A'] } } });
   });

@@ -138,6 +138,16 @@ export async function getTaskDefinition(name: string, signal?: AbortSignal): Pro
       ? raw.submission as TaskFormDefinition['submission'] : null,
     inputs: Array.isArray(raw.inputs) ? raw.inputs as components['schemas']['TaskInputRole'][] : [],
     input_workspace: parseWorkspace(raw.input_workspace),
+    execution_modes: Array.isArray(raw.execution_modes) ? raw.execution_modes.flatMap((item) => {
+      if (!item || typeof item !== 'object') return [];
+      const mode = item as Record<string, unknown>;
+      if (typeof mode.id !== 'string' || typeof mode.label !== 'string') return [];
+      return [{
+        id: mode.id,
+        label: mode.label,
+        stages: Array.isArray(mode.stages) ? mode.stages.filter((stage): stage is string => typeof stage === 'string') : [],
+      }];
+    }) : [],
     max_request_bytes: typeof raw.max_request_bytes === 'number' ? raw.max_request_bytes : Number.MAX_SAFE_INTEGER,
     params: parametersFromSchema(schema),
   };

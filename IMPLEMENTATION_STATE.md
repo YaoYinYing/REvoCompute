@@ -11,12 +11,15 @@ Status: M1 delivered for PREPARE_ONLY; M2/M3 and UI remain. Base `6d726f54` + lo
 - Submission accepts `execution_mode`; admission, GPU entitlement, referenced families and placement
   follow the selected stages. Detail API projects `execution_modes`.
 - AF2 (`features -> model`) and AF3 (`features -> model`) declare `full` and `prepare_only`.
+- Create-Task renders a mode selector when a Task declares more than one mode and submits
+  `execution_mode`; the preflight path uses the same field.
 - Tests: graph/loader refusal cases, prepare-only submission freezes one node, opens no GPU requirement,
-  and places only the selected stage. 220 focused tests pass.
+  and places only the selected stage; frontend submission carries the selected mode. 129 Python focused
+  tests, 12 frontend tests and `tsc --noEmit` pass.
 
 ## Next action
 
-- Add the create-task mode selector and result/detail presentation, then implement MODEL_ONLY with
+- Result/detail presentation of the selected mode and omission reasons, then MODEL_ONLY with
   provenance-bound cross-Task artifact reuse (M2).
 
 ## Blockers

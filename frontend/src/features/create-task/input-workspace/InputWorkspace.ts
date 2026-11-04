@@ -89,6 +89,7 @@ export class InputWorkspace {
   private context: WorkspaceContext | null = null;
   private mounted: TaskFormDefinition | null = null;
   private generation = 0;
+  private executionIntent = 'full';
 
   constructor(private readonly root: HTMLElement, private readonly options: InputWorkspaceOptions) {}
 
@@ -105,6 +106,30 @@ export class InputWorkspace {
     this.destroy(); const generation = this.generation; const host = this.createHost(form); this.host = host; this.root.replaceChildren();
     await host.load(form.input_workspace.plugins);
     if (generation !== this.generation || host !== this.host) { host.destroy(); return; }
+    // A Task that declares more than one execution mode lets the scientist
+    // choose the intent before the inputs; the Server still refuses an
+    // undeclared or unsupported mode. One mode is the default and needs no
+    // control.
+    this.executionIntent = 'full';
+    if (form.execution_modes.length > 1) {
+      const section = element('section', 'ct-protocol-step');
+      section.dataset.content = 'input';
+      const heading = element('header', 'ct-step-heading');
+      heading.append(
+        element('p', 'ct-section-kicker', t('ct.executionMode')),
+        element('h2', 'ct-step-title', t('ct.executionMode')),
+      );
+      const select = element('select', 'ct-control');
+      select.dataset.ctExecutionMode = 'true';
+      form.execution_modes.forEach(mode => select.append(new Option(mode.label, mode.id)));
+      select.value = this.executionIntent;
+      select.addEventListener('change', () => {
+        this.executionIntent = select.value;
+        this.options.onChange();
+      });
+      section.append(heading, select);
+      this.root.append(section);
+    }
     const displayed = new Set(displaySteps(form.input_workspace.steps));
     const stepTargets = new Map<string, HTMLElement>();
     form.input_workspace.steps.forEach(step => {
@@ -251,6 +276,9 @@ export class InputWorkspace {
   sequenceRole(): string | null { return this.context?.sequenceRole() || null; }
   parameters(): Record<string, string> { return this.context?.parameters() || {}; }
   collect(): WorkspaceValues { return this.host.collect(); }
+
+  /** The submission intent the form currently holds. */
+  executionMode(): string { return this.executionIntent; }
   summaries(): WorkspaceSummary[] { return this.context ? this.context.summaries() : []; }
   validate(): string[] { return this.host.validate(); }
   destroy(): void { this.generation++; this.host.destroy(); this.context = null; this.mounted = null; this.root.replaceChildren(); }
