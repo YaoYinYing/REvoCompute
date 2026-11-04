@@ -50,7 +50,9 @@ ORIGIN = "https://revocompute.example"
 BUNDLE_PATH = ROOT / "tests" / "data" / "bioemu2_replay" / "2kl8_production_4d77ffcc.json"
 RESULT_DIST = ROOT / "frontend" / "dist"
 FAMILY = ROOT / "docker" / "runners" / "bioemu2"
-CONTRACT = FAMILY / "tasks" / "bioemu2_equilibrium"
+# The equilibrium and structure prediction Tasks share the family-scoped
+# contract, so the contract and its storyboard live at the family root.
+CONTRACT = FAMILY
 STORYBOARD = CONTRACT / "storyboard" / "index.js"
 
 if not BUNDLE_PATH.is_file():
@@ -98,7 +100,7 @@ def _served_manifest(replay: ReplayBundle) -> dict:
     artifact paths, payloads -- is the capture's.
     """
     declaration = storyboard_declaration(
-        SimpleNamespace(runtime=SimpleNamespace(root=str(FAMILY), definition=""), task_dir="tasks/bioemu2_equilibrium"),
+        SimpleNamespace(runtime=SimpleNamespace(root=str(FAMILY), definition=""), task_dir=""),
         str(ROOT), set(load_expected_file_tree(CONTRACT / "expected_files.yaml")),
     )
     assert declaration is not None

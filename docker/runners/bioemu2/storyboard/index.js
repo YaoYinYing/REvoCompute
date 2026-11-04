@@ -58,8 +58,11 @@ export default {
     const root = el('div', 'be2-result'), style = el('style'); style.textContent = STYLE; root.append(style);
 
     const head = el('header', 'be2-head');
+    // Equilibrium and structure prediction share this contract and storyboard;
+    // the resolved sampling system names which one produced the result.
+    const headline = el('h2', '', 'Equilibrium ensemble');
     head.append(
-      el('h2', '', 'Equilibrium ensemble'),
+      headline,
       el('p', 'be2-note', 'Each published sample is one conformation drawn by the released BioEmu2 checkpoint from the input sequence. Sample order is generation order, not physical time.'),
     );
 
@@ -176,7 +179,10 @@ export default {
       if (source == null) return;
       const entity = /entity_type:\s*(\S+)/.exec(source);
       const mode = /^mode:\s*(\S+)/m.exec(source);
-      if (mode) modeFact.lastElementChild.textContent = text(mode[1]);
+      if (mode) {
+        modeFact.lastElementChild.textContent = text(mode[1]);
+        if (mode[1] === 'structure') headline.textContent = 'Predicted structures';
+      }
       if (entity) entityFact.lastElementChild.textContent = text(entity[1]);
     }
 

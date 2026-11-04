@@ -4,10 +4,13 @@
 
 """BioEmu2 adapter and entrypoint contract.
 
-No GPU and no network: a fake ``bioemu2`` on ``PYTHONPATH`` mirrors the call
-seams the adapter binds to and writes the upstream output files, so the real
-``run.sh`` is exercised end to end -- including the model-asset check and the
-publication check -- against the calls it actually makes.
+No GPU and no network: a fake ``bioemu2`` module on ``PYTHONPATH`` mirrors the
+Python call seams the adapter binds to, and a fake ``bioemu2`` executable on
+``BIOEMU2_CLI`` records the propagation argv. Each writes the upstream output
+files, so the real ``run.sh`` is exercised end to end -- model-asset check,
+mode dispatch, and publication check -- against the calls it actually makes.
+The adapter's CIF-to-PDB conversion is served by a fake ``mdtraj`` module
+because the host test environment does not install mdtraj.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -58,7 +62,8 @@ class _Frame:
             handle.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\\n")
 
 
-def sample_equilibrium(system, *, model, output_dir, **kwargs):
+def _publish(entry_point, output_dir, kwargs):
+    _capture("entry_point", entry_point)
     _capture("sampling", kwargs)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -82,6 +87,46 @@ def sample_equilibrium(system, *, model, output_dir, **kwargs):
         if name != omit:
             (out / name).write_bytes(payload)
     return [_Frame() for _ in range(kwargs["num_samples"])]
+
+
+def sample_equilibrium(system, *, model, output_dir, **kwargs):
+    return _publish("sample_equilibrium", output_dir, kwargs)
+
+
+def predict_structure(system, *, model, output_dir, **kwargs):
+    return _publish("predict_structure", output_dir, kwargs)
+"""
+
+FAKE_MDTRAJ = """
+class _Trajectory:
+    def __init__(self, n_atoms):
+        self.n_atoms = n_atoms
+
+    def save_pdb(self, path):
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\\n")
+
+
+def load(path):
+    return _Trajectory(1)
+"""
+
+FAKE_CLI = """
+import json
+import os
+import sys
+from pathlib import Path
+
+Path(os.environ["BIOEMU2_CLI_CAPTURE"]).write_text(json.dumps(sys.argv[1:]))
+out = Path(sys.argv[sys.argv.index("--out") + 1])
+out.mkdir(parents=True, exist_ok=True)
+(out / "samples.xtc").write_bytes(b"xtc")
+(out / "topology.cif").write_bytes(b"data_topology\\n")
+(out / "system.yaml").write_text("entities: []\\n", encoding="utf-8")
+(out / "physicality.json").write_text(
+    json.dumps([{"frame": 0, "status": "passed", "reason": None}]), encoding="utf-8"
+)
+(out / "command.txt").write_text("bioemu2 propagate\\n", encoding="utf-8")
 """
 
 
@@ -93,7 +138,7 @@ def _adapter():
     return module
 
 
-def _workspace(tmp_path):
+def _workspace(tmp_path, *, with_cli=False):
     """A fake checkpoint, its verified asset manifest, and the fake modules."""
     asset_root = tmp_path / "weights"
     checkpoint_dir = asset_root / "checkpoints" / "bioemu2-preview"
@@ -112,12 +157,18 @@ def _workspace(tmp_path):
     modules = tmp_path / "modules"
     (modules / "bioemu2").mkdir(parents=True)
     (modules / "bioemu2" / "__init__.py").write_text(FAKE_BIOEMU2, encoding="utf-8")
+    (modules / "mdtraj.py").write_text(FAKE_MDTRAJ, encoding="utf-8")
     fasta = tmp_path / "input.fasta"
     fasta.write_text(">2KL8\nMEMDIRFRG\n", encoding="utf-8")
-    return asset_root, manifest, modules, fasta
+    if with_cli:
+        cli = tmp_path / "bioemu2"
+        cli.write_text(f"#!{sys.executable}\n{FAKE_CLI}", encoding="utf-8")
+        cli.chmod(cli.stat().st_mode | stat.S_IXUSR)
+        return asset_root, manifest, modules, fasta, cli
+    return asset_root, manifest, modules, fasta, None
 
 
-def _run(tmp_path, asset_root, manifest, modules, fasta, params, extra_env=None):
+def _run(tmp_path, asset_root, manifest, modules, input_file, params, extra_env=None, role="sequence"):
     from runner_protocol import run_with_manifest
 
     output_dir = tmp_path / "outputs"
@@ -134,12 +185,12 @@ def _run(tmp_path, asset_root, manifest, modules, fasta, params, extra_env=None)
         }
     )
     env.update(extra_env or {})
-    completed = run_with_manifest(RUNNER, fasta, output_dir, env, params=params, role="sequence")
+    completed = run_with_manifest(RUNNER, input_file, output_dir, env, params=params, role=role)
     return completed, output_dir, capture
 
 
 def test_bioemu2_parameters_and_sequence_reach_upstream(tmp_path):
-    asset_root, manifest, modules, fasta = _workspace(tmp_path)
+    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
     params = {
         "num_samples": 3,
         "sampler": "edm_fk",
@@ -153,6 +204,7 @@ def test_bioemu2_parameters_and_sequence_reach_upstream(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     calls = json.loads(capture.read_text(encoding="utf-8"))
+    assert calls["entry_point"] == "sample_equilibrium"
     assert calls["system"] == {"proteins": ["MEMDIRFRG"]}
     assert calls["checkpoint"].endswith("checkpoints/bioemu2-preview/checkpoint.ckpt")
     assert calls["sampling"] == {
@@ -168,8 +220,196 @@ def test_bioemu2_parameters_and_sequence_reach_upstream(tmp_path):
     assert (output_dir / "task_finished").is_file()
 
 
+def test_bioemu2_structure_mode_calls_predict_structure(tmp_path):
+    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
+    params = {"num_samples": 1, "num_steps": 4, "seed": 0}
+
+    completed, output_dir, capture = _run(
+        tmp_path,
+        asset_root,
+        manifest,
+        modules,
+        fasta,
+        params,
+        {"TASK_TYPE": "bioemu2_structure_prediction"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    calls = json.loads(capture.read_text(encoding="utf-8"))
+    assert calls["entry_point"] == "predict_structure"
+    assert calls["sampling"] == {"num_samples": 1, "num_steps": 4, "seed": 0}
+    assert calls["system"] == {"proteins": ["MEMDIRFRG"]}
+    assert (output_dir / "topology.pdb").is_file()
+    assert (output_dir / "sequence.fasta").is_file()
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu2_propagation_forwards_resolved_flags_and_publishes_outputs(tmp_path):
+    asset_root, manifest, modules, _fasta, cli = _workspace(tmp_path, with_cli=True)
+    starting = tmp_path / "starting.cif"
+    starting.write_text("data_test\n", encoding="utf-8")
+    argv_capture = tmp_path / "argv.json"
+    params = {
+        "num_samples": 2,
+        "lag_time_ns": 1.5,
+        "seed": 3,
+        "num_steps": 4,
+        "batch_size": 2,
+        "sampler": "edm_fk",
+        "physicality_mode": "no_violations",
+    }
+
+    completed, output_dir, _ = _run(
+        tmp_path,
+        asset_root,
+        manifest,
+        modules,
+        starting,
+        params,
+        {
+            "TASK_TYPE": "bioemu2_propagate",
+            "BIOEMU2_CLI": str(cli),
+            "BIOEMU2_CLI_CAPTURE": str(argv_capture),
+        },
+        role="starting_structure",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    forwards = json.loads(argv_capture.read_text(encoding="utf-8"))
+    assert forwards == [
+        "propagate",
+        "--x0-cif",
+        str(starting),
+        "--checkpoint-path",
+        str(asset_root / "checkpoints" / "bioemu2-preview" / "checkpoint.ckpt"),
+        "--out",
+        str(output_dir),
+        "--num-samples",
+        "2",
+        "--lag-time-ns",
+        "1.5",
+        "--seed",
+        "3",
+        "--num-steps",
+        "4",
+        "--batch-size",
+        "2",
+        "--sampler",
+        "edm_fk",
+        "--physicality-filter",
+        "no_violations",
+    ]
+    assert (output_dir / "topology.pdb").is_file()
+    assert (output_dir / "samples.xtc").is_file()
+    assert (output_dir / "topology.cif").is_file()
+    assert (output_dir / "system.yaml").is_file()
+    assert (output_dir / "physicality.json").is_file()
+    assert not (output_dir / "sequence.fasta").exists()
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu2_propagation_omits_unresolved_optional_flags(tmp_path):
+    asset_root, manifest, modules, _fasta, cli = _workspace(tmp_path, with_cli=True)
+    starting = tmp_path / "starting.cif"
+    starting.write_text("data_test\n", encoding="utf-8")
+    argv_capture = tmp_path / "argv.json"
+
+    completed, output_dir, _ = _run(
+        tmp_path,
+        asset_root,
+        manifest,
+        modules,
+        starting,
+        {"num_samples": 1, "lag_time_ns": 1},
+        {
+            "TASK_TYPE": "bioemu2_propagate",
+            "BIOEMU2_CLI": str(cli),
+            "BIOEMU2_CLI_CAPTURE": str(argv_capture),
+        },
+        role="starting_structure",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    forwards = json.loads(argv_capture.read_text(encoding="utf-8"))
+    assert forwards == [
+        "propagate",
+        "--x0-cif",
+        str(starting),
+        "--checkpoint-path",
+        str(asset_root / "checkpoints" / "bioemu2-preview" / "checkpoint.ckpt"),
+        "--out",
+        str(output_dir),
+        "--num-samples",
+        "1",
+        "--lag-time-ns",
+        "1",
+    ]
+    assert (output_dir / "topology.pdb").is_file()
+
+
+def test_bioemu2_propagation_requires_the_starting_structure_role(tmp_path):
+    asset_root, manifest, modules, fasta, cli = _workspace(tmp_path, with_cli=True)
+
+    completed, output_dir, _ = _run(
+        tmp_path,
+        asset_root,
+        manifest,
+        modules,
+        fasta,
+        {"num_samples": 1, "lag_time_ns": 1},
+        {"TASK_TYPE": "bioemu2_propagate", "BIOEMU2_CLI": str(cli)},
+        role="sequence",
+    )
+
+    assert completed.returncode != 0
+    assert "starting_structure" in completed.stderr
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_bioemu2_tasks_and_result_contracts_resolve(tmp_path):
+    from revocompute.result_storyboard import contract_dir, expected_file_tree, storyboard_declaration
+    from revocompute.task_types import isolated_discovery
+
+    with isolated_discovery(str(ROOT / "docker" / "runners"), enabled={"bioemu2"}) as manager:
+        tasks = {task.name: task for _identifier, task in manager.contributions.items("tasks")}
+
+    assert set(tasks) == {"bioemu2_equilibrium", "bioemu2_structure_prediction", "bioemu2_propagate"}
+    propagate_dir = FAMILY / "tasks" / "bioemu2_propagate"
+    assert contract_dir(tasks["bioemu2_equilibrium"], str(ROOT)) == FAMILY
+    assert contract_dir(tasks["bioemu2_structure_prediction"], str(ROOT)) == FAMILY
+    assert contract_dir(tasks["bioemu2_propagate"], str(ROOT)) == propagate_dir
+
+    shared = expected_file_tree(tasks["bioemu2_structure_prediction"], str(ROOT))
+    assert set(shared) == {"topology", "coordinates", "upstream_topology", "sequence", "physicality", "system"}
+    propagated = expected_file_tree(tasks["bioemu2_propagate"], str(ROOT))
+    assert {key for key, entry in propagated.items() if entry["required"]} == {
+        "topology",
+        "coordinates",
+        "upstream_topology",
+        "physicality",
+        "system",
+    }
+    assert propagated["command"]["required"] is False
+    assert "sequence" not in propagated
+
+    for task_name, tree in (("bioemu2_structure_prediction", shared), ("bioemu2_propagate", propagated)):
+        task = tasks[task_name]
+        assert len(task.result_workspace) == 1
+        view = task.result_workspace[0]
+        assert view.plugin == "trajectory"
+        assert {selector.value for selectors in view.sources.values() for selector in selectors if selector.required} == {
+            "topology.pdb",
+            "samples.xtc",
+        }
+        for selectors in view.sources.values():
+            assert {selector.value for selector in selectors} <= {entry["path"] for entry in tree.values()}
+
+    assert storyboard_declaration(tasks["bioemu2_equilibrium"], str(ROOT), set(shared)) is not None
+    assert storyboard_declaration(tasks["bioemu2_propagate"], str(ROOT), set(propagated)) is None
+
+
 def test_bioemu2_missing_published_output_fails_the_task(tmp_path):
-    asset_root, manifest, modules, fasta = _workspace(tmp_path)
+    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
 
     completed, output_dir, _ = _run(
         tmp_path,
@@ -195,7 +435,7 @@ def test_bioemu2_publication_check_covers_every_required_contract_file(tmp_path)
     for path in published:
         case = tmp_path / path
         case.mkdir()
-        asset_root, manifest, modules, fasta = _workspace(case)
+        asset_root, manifest, modules, fasta, _ = _workspace(case)
         completed, output_dir, _ = _run(
             case,
             asset_root,
@@ -212,7 +452,7 @@ def test_bioemu2_publication_check_covers_every_required_contract_file(tmp_path)
 
 def test_bioemu2_rejected_frames_are_reported_not_failed(tmp_path):
     """A rejected ensemble still succeeds, and its counts must reach the log."""
-    asset_root, manifest, modules, fasta = _workspace(tmp_path)
+    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
 
     completed, output_dir, _ = _run(
         tmp_path,
