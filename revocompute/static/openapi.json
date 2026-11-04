@@ -2722,7 +2722,7 @@
           "index": {"type": "integer", "minimum": 0},
           "name": {"type": "string", "description": "Manifest stage name (or the Task type itself for a single-stage Task)."},
           "display_name": {"type": "string"},
-          "status": {"type": "string", "enum": ["NOT_STARTED", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"], "description": "NOT_STARTED is reported for a declared stage with no attempt record; stored attempts open in QUEUED."},
+          "status": {"type": "string", "enum": ["NOT_STARTED", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED", "SKIPPED"], "description": "NOT_STARTED is reported for a declared stage with no attempt record; stored attempts open in QUEUED. SKIPPED is a declared stage the submission's execution mode omits and has no record."},
           "source": {"type": "string", "enum": ["record", "legacy", "definition"], "description": "record: durable StageRun evidence; legacy: the pre-StageRun workflow_state mirror; definition: the declared stage has no evidence yet."},
           "attempt": {"type": ["integer", "null"], "minimum": 1},
           "started_at": {"type": ["string", "null"], "format": "date-time"},
@@ -2736,8 +2736,8 @@
           },
           "dependency": {
             "type": "string",
-            "enum": ["completed", "blocked", "ready", "waiting"],
-            "description": "Graph dependency state, independent of scheduler status: completed (latest attempt completed and reuse-verified), blocked (this stage or an ancestor failed), ready (every producer completed), waiting otherwise."
+            "enum": ["completed", "blocked", "ready", "waiting", "skipped"],
+            "description": "Graph dependency state, independent of scheduler status: completed (latest attempt completed and reuse-verified), blocked (this stage or an ancestor failed), ready (every producer completed), skipped (omitted by the submission's execution mode), waiting otherwise."
           }
         },
         "additionalProperties": false
@@ -2749,6 +2749,7 @@
           "source": {"type": "string", "enum": ["record", "legacy"], "description": "record: durable StageRun evidence. legacy: the pre-StageRun workflow_state mirror, reported only for historical Tasks."},
           "total": {"type": "integer", "minimum": 0},
           "completed": {"type": "integer", "minimum": 0},
+          "skipped": {"type": "integer", "minimum": 0},
           "current": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/TaskStageItem"}], "description": "The running attempt, else the queued attempt, else null."},
           "items": {"type": "array", "items": {"$ref": "#/components/schemas/TaskStageItem"}}
         },
@@ -2855,6 +2856,7 @@
           "input_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding positionally to each multipart files part."},
           "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional relative paths corresponding to files, used by multi-file task types."},
           "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types; omitted when it is supplied by the request path."},
+          "execution_mode": {"type": "string", "description": "Manifest-declared execution mode from the Task Type projection; defaults to full."},
           "workspace": {"type": "string", "description": "Optional JSON-encoded version-2 workspace document."}
         },
         "additionalProperties": {"type": "string", "description": "Runner parameter field named params[parameter_name]."}
@@ -3077,6 +3079,7 @@
         "required": ["state", "checks", "problems"],
         "properties": {
           "state": {"type": "string", "enum": ["passed", "failed", "not_configured", "not_assessed"]},
+          "reason": {"type": "string", "description": "Why the full result contract was not assessed, for example preparation_only."},
           "checks": {
             "type": "array",
             "items": {

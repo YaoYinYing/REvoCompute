@@ -14,8 +14,20 @@ Status: M1 delivered for PREPARE_ONLY; M2/M3 and UI remain. Base `6d726f54` + lo
 - Create-Task renders a mode selector when a Task declares more than one mode and submits
   `execution_mode`; the preflight path uses the same field.
 - Tests: graph/loader refusal cases, prepare-only submission freezes one node, opens no GPU requirement,
-  and places only the selected stage; frontend submission carries the selected mode. 129 Python focused
-  tests, 12 frontend tests and `tsc --noEmit` pass.
+  and places only the selected stage; frontend submission carries the selected mode. 224 Python focused
+  tests, 17 frontend tests and `tsc --noEmit` pass.
+
+## Adviser findings applied
+
+- Task identity now includes the execution mode, so prepare_only and full never deduplicate.
+- Omitted stages project as `SKIPPED` (`stage_omitted_by_mode`, dependency `skipped`); no StageRun.
+- A preparation-only run reports `output_check.state = not_assessed` with `reason = preparation_only`
+  instead of failing the full result contract.
+- `execution_modes` participates in the live-test `configuration_digest`.
+- The top-level `mode` duplicate is gone; the digest-covered `document` is the authority and the worker
+  wraps mode resolution in the bounded `execution_graph_changed` refusal.
+- `execution_mode` is in the submission schema; mode stage names are fully qualified; ids must be
+  lowercase; the owner family is seeded only when a selected stage uses it.
 
 ## Next action
 

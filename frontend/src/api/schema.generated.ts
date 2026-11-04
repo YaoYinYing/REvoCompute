@@ -2693,10 +2693,10 @@ export interface components {
             name: string;
             display_name: string;
             /**
-             * @description NOT_STARTED is reported for a declared stage with no attempt record; stored attempts open in QUEUED.
+             * @description NOT_STARTED is reported for a declared stage with no attempt record; stored attempts open in QUEUED. SKIPPED is a declared stage the submission's execution mode omits and has no record.
              * @enum {string}
              */
-            status: "NOT_STARTED" | "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "INTERRUPTED";
+            status: "NOT_STARTED" | "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "INTERRUPTED" | "SKIPPED";
             /**
              * @description record: durable StageRun evidence; legacy: the pre-StageRun workflow_state mirror; definition: the declared stage has no evidence yet.
              * @enum {string}
@@ -2713,10 +2713,10 @@ export interface components {
                 [key: string]: unknown;
             };
             /**
-             * @description Graph dependency state, independent of scheduler status: completed (latest attempt completed and reuse-verified), blocked (this stage or an ancestor failed), ready (every producer completed), waiting otherwise.
+             * @description Graph dependency state, independent of scheduler status: completed (latest attempt completed and reuse-verified), blocked (this stage or an ancestor failed), ready (every producer completed), skipped (omitted by the submission's execution mode), waiting otherwise.
              * @enum {string}
              */
-            dependency: "completed" | "blocked" | "ready" | "waiting";
+            dependency: "completed" | "blocked" | "ready" | "waiting" | "skipped";
         };
         TaskStages: {
             /**
@@ -2726,6 +2726,7 @@ export interface components {
             source: "record" | "legacy";
             total: number;
             completed: number;
+            skipped?: number;
             /** @description The running attempt, else the queued attempt, else null. */
             current: null | components["schemas"]["TaskStageItem"];
             items: components["schemas"]["TaskStageItem"][];
@@ -2813,6 +2814,8 @@ export interface components {
             input_paths?: string[];
             /** @description Enabled task-type name from GET /compute/api/types; omitted when it is supplied by the request path. */
             task_type?: string;
+            /** @description Manifest-declared execution mode from the Task Type projection; defaults to full. */
+            execution_mode?: string;
             /** @description Optional JSON-encoded version-2 workspace document. */
             workspace?: string;
         } & {
@@ -3006,6 +3009,8 @@ export interface components {
         OutputCheck: {
             /** @enum {string} */
             state: "passed" | "failed" | "not_configured" | "not_assessed";
+            /** @description Why the full result contract was not assessed, for example preparation_only. */
+            reason?: string;
             checks: ({
                 view_id?: string;
                 source?: string;

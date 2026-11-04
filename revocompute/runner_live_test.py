@@ -353,6 +353,9 @@ def load_validation_identity(
                 "stage_markers": tuple(task_type.stage_markers),
                 "input_workspace": [capability(step) for step in task_type.input_workspace],
                 "workflow": [stage_contract(stage) for stage in task_type.workflow],
+                "execution_modes": [
+                    {"id": mode.id, "stages": tuple(mode.stages)} for mode in task_type.execution_modes
+                ],
                 "results": [result_contract(view) for view in task_type.result_workspace],
             }
         )

@@ -38,6 +38,8 @@ earlier authorized run. One graph, one StageRun authority — no second DAG and 
       graph digest covers the selection; a mode that drops a required producer is refused.
 - [x] Omitted stages create no `StageRun`, no reservation, no allocation and no GPU requirement; admission
       and placement follow the selected stages.
+- [x] A preparation-only run is `not_assessed` against the full result contract, and omitted stages
+      project as `SKIPPED`; a Task's identity includes its mode.
 - [ ] `FULL` must produce byte-identical stage inputs/parameters to today's all-stage path.
 - [ ] Keep `stage_runs` the sole writer; do not add a mode-specific status authority.
 

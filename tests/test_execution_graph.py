@@ -169,7 +169,7 @@ def test_a_declared_mode_selects_the_same_nodes_with_its_own_digest():
     assert prepared.document["mode"] == "prepare_only"
     assert prepared.digest != full.digest
     assert compile_graph(task, "full").digest == full.digest
-    assert execution_graph_payload(task, "prepare_only")["mode"] == "prepare_only"
+    assert execution_graph_payload(task, "prepare_only")["document"]["mode"] == "prepare_only"
 
 
 def test_an_undeclared_mode_is_refused():

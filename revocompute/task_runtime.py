@@ -432,6 +432,12 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
     except KeyError:
         tt = None
     declared = list(tt.workflow) if tt is not None else []
+    frozen = _frozen_execution_graph(task)
+    selected = (
+        {node["id"] for node in frozen["document"]["nodes"]}
+        if frozen is not None and "mode" in frozen["document"]
+        else None
+    )
     runs = task_store.list_stage_runs(task_id) if task_id else []
     if not runs:
         legacy = _workflow_state(task)
@@ -446,23 +452,33 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
         items = []
         for index, name in enumerate(names):
             step = legacy.get(name)
+            omitted = selected is not None and name not in selected
             items.append(
                 _stage_item(
                     index=index,
                     name=name,
                     display_name=displays.get(name, name),
-                    status=_LEGACY_STAGE_STATUS.get(
-                        str((step or {}).get("status") or "").lower(), stage_state.NOT_STARTED
+                    status=(
+                        stage_state.SKIPPED
+                        if omitted
+                        else _LEGACY_STAGE_STATUS.get(
+                            str((step or {}).get("status") or "").lower(), stage_state.NOT_STARTED
+                        )
                     ),
                     source="legacy" if step is not None else "definition",
                     attempt=(step or {}).get("attempt"),
                     started_at=(step or {}).get("started_at"),
                     ended_at=(step or {}).get("finished_at"),
-                    reason_code=(step or {}).get("reason_code"),
+                    reason_code=(
+                        "stage_omitted_by_mode" if omitted else (step or {}).get("reason_code")
+                    ),
                     planned=None,
                 )
             )
         _attach_stage_dependencies(task, tt, items, {}, None)
+        for item in items:
+            if item["status"] == stage_state.SKIPPED:
+                item["dependency"] = "skipped"
         return _stage_summary("legacy", items)
 
     legacy = _workflow_state(task)
@@ -512,19 +528,24 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
             # supplies that stage until a record exists for it; a record always
             # wins when one does.
             step = legacy.get(name) or {}
+            omitted = stage is not None and selected is not None and stage.name not in selected
             items.append(
                 _stage_item(
                     index=index,
                     name=name,
                     display_name=stage.display_name if stage else f"Stage {index + 1}",
-                    status=_LEGACY_STAGE_STATUS.get(
-                        str(step.get("status") or "").lower(), stage_state.NOT_STARTED
+                    status=(
+                        stage_state.SKIPPED
+                        if omitted
+                        else _LEGACY_STAGE_STATUS.get(
+                            str(step.get("status") or "").lower(), stage_state.NOT_STARTED
+                        )
                     ),
                     source="legacy" if step else "definition",
                     attempt=step.get("attempt"),
                     started_at=step.get("started_at"),
                     ended_at=step.get("finished_at"),
-                    reason_code=step.get("reason_code"),
+                    reason_code="stage_omitted_by_mode" if omitted else step.get("reason_code"),
                 )
             )
             continue
@@ -551,6 +572,9 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
     except (OSError, ValueError):
         output_dir = None
     _attach_stage_dependencies(task, tt, items, latest_by_name, output_dir)
+    for item in items:
+        if item["status"] == stage_state.SKIPPED:
+            item["dependency"] = "skipped"
     return _stage_summary("record", items)
 
 
@@ -695,6 +719,7 @@ def _stage_summary(source: str, items: list[dict[str, Any]]) -> dict[str, Any]:
         "source": source,
         "total": len(items),
         "completed": sum(1 for item in items if item["status"] == stage_state.COMPLETED),
+        "skipped": sum(1 for item in items if item["status"] == stage_state.SKIPPED),
         "current": current,
         "items": items,
     }
@@ -1639,7 +1664,14 @@ def _run_compute_workflow(
     if frozen is None:
         _record_workflow_refusal(task_id, tt.name, "execution_graph_unverified")
         return JobState.FAILED
-    graph = compile_graph(tt, frozen.get("mode"))
+    frozen_mode = frozen["document"].get("mode")
+    try:
+        graph = compile_graph(tt, frozen_mode)
+    except GraphValidationError:
+        # A manifest that removed or renamed the declared mode between
+        # submission and execution has changed the contract this Task froze.
+        _record_workflow_refusal(task_id, tt.name, "execution_graph_changed")
+        return JobState.FAILED
     if frozen["digest"] != graph.digest:
         _record_workflow_refusal(task_id, tt.name, "execution_graph_changed")
         return JobState.FAILED
@@ -2881,7 +2913,14 @@ def _finalize_results_manifest(
                 storyboard = declaration
         except ResultContractError as exc:
             problems.append(f"Result contract is invalid: {exc}")
-    if execution_state == "failed":
+    frozen = _frozen_execution_graph(task)
+    execution_mode = str(frozen["document"].get("mode") or "full") if frozen else "full"
+    # A declared full result contract is not the contract of a preparation-only
+    # run: the omitted stage's outputs are absent by design, not missing. The
+    # run is reported as not assessed rather than failed, and the reason is
+    # machine-readable.
+    preparation_only = execution_mode != "full"
+    if execution_state == "failed" or preparation_only:
         output_state = "not_assessed"
     elif task_type is None or (not task_type.result_workspace and not logical_files and not problems):
         output_state = "not_configured"
@@ -2893,7 +2932,12 @@ def _finalize_results_manifest(
         "task_type": task.get("task_type") or default_task_type(),
         "created_at": _iso_timestamp(finished_at),
         "run": _public_run_record(task, task_type, finished_at),
-        "output_check": {"state": output_state, "checks": checks, "problems": problems},
+        "output_check": {
+            "state": output_state,
+            "checks": checks,
+            "problems": problems,
+            **({"reason": "preparation_only"} if preparation_only else {}),
+        },
         "limitations": list(task_type.considerations) if task_type else [],
         "artifacts": artifacts,
         "views": views,

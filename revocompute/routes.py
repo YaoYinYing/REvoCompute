@@ -1384,7 +1384,7 @@ def task_type_form(name: str):
             {
                 "id": mode.id,
                 "label": mode.label,
-                "stages": [stage.split(".", 1)[-1] for stage in mode.stages],
+                "stages": list(mode.stages),
             }
             for mode in tt.execution_modes
         ],
@@ -1748,8 +1748,14 @@ def _derive_task_id(
     task_type: str,
     params: dict[str, Any],
     user_storage_key: str,
+    execution_mode: str = "full",
 ) -> str:
-    """Derive the prospective Task ID after security and contract normalization."""
+    """Derive the prospective Task ID after security and contract normalization.
+
+    The execution mode is part of the identity: the same bytes submitted as
+    ``prepare_only`` and as ``full`` are different scientific requests and must
+    not deduplicate onto one Task.
+    """
     identity_inputs: dict[str, list[dict[str, str]]] = {}
     for item in saved:
         identity_inputs.setdefault(item["role"], []).append(
@@ -1762,6 +1768,7 @@ def _derive_task_id(
     identity = json.dumps(
         {
             "task_type": task_type,
+            "execution_mode": execution_mode,
             "params": params,
             "inputs": identity_inputs,
         },
@@ -2307,7 +2314,11 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     )
     # A composed Task executes every family its graph names, so the submission
     # is admitted against each referenced family, never only the composing one.
-    referenced_families: dict[str, RuntimeFamily] = {tt.runtime.name: tt.runtime}
+    referenced_families: dict[str, RuntimeFamily] = {}
+    if execution_graph is None or any(
+        (stage.family or tt.runtime.name) == tt.runtime.name for stage in selected_stages
+    ):
+        referenced_families[tt.runtime.name] = tt.runtime
     for stage in selected_stages:
         family_id = stage.family or tt.runtime.name
         if family_id not in referenced_families:
@@ -2634,7 +2645,9 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                         normalized,
                         {role: tuple(paths) for role, paths in input_paths.items()},
                     )
-        md5sum = _derive_task_id(saved_inputs, task_type, coerced_params, workspace_key)
+        md5sum = _derive_task_id(
+            saved_inputs, task_type, coerced_params, workspace_key, submission.execution_mode
+        )
         if managedb is not None and managedb.slurm_enabled():
             readiness_service = current_app.config["infrastructure_readiness"]
             infrastructure = readiness_service.report()

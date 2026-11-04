@@ -175,8 +175,6 @@ def execution_graph_payload(task_type: Any, mode: str | None = None) -> dict[str
         return None
     graph = compile_graph(task_type, mode)
     payload = {"ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document}
-    if getattr(task_type, "execution_modes", ()):
-        payload["mode"] = graph.document["mode"]
     return payload
 
 

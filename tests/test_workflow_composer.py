@@ -19,6 +19,7 @@ from revocompute.job import JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
 from revocompute.resource_policy import ResolvedResources
 from revocompute.task_types import (
+    ExecutionMode,
     RuntimeFamily,
     StagePortSpec,
     TaskType,
@@ -1614,3 +1615,47 @@ def test_restricted_runner_running_trace_represents_every_phase_in_order(monkeyp
         assert lines[index].endswith("[running]")
         assert all(line.endswith("[done]") for line in lines[:index])
         assert all(line.endswith("[pending]") for line in lines[index + 1 :])
+
+
+def test_stage_projection_marks_a_mode_omitted_stage_skipped(monkeypatch):
+    """A declared stage the frozen mode omits is SKIPPED, not NOT_STARTED."""
+    task_runtime = _live_task_runtime()
+    runtime = RuntimeFamily("synthetic", ("bash", "run.sh"), "runner.def", "image.sif")
+    features = WorkflowStage(
+        "synthetic.features", "Features", False, ("-s", "features"), ("features",),
+        outputs=(StagePortSpec("out", "x"),),
+    )
+    model = WorkflowStage(
+        "synthetic.model", "Model", True, ("-s", "model"), ("model",),
+        inputs=(StagePortSpec("features", "x", source="synthetic.features:out"),),
+    )
+    task_type = TaskType(
+        "synthetic", "Synthetic", runtime, (),
+        workflow=(features, model),
+        execution_modes=(
+            ExecutionMode("full", "Full", ("synthetic.features", "synthetic.model")),
+            ExecutionMode("prepare_only", "Preparation only", ("synthetic.features",)),
+        ),
+    )
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (task_type, object()))
+    run = {
+        "stage_name": "synthetic.features", "stage_index": 0, "attempt": 1, "status": "COMPLETED",
+        "started_at": 1, "ended_at": 2, "reason_code": None, "planned_resources": None,
+        "runtime_image_sha256": None, "output_identity": None,
+    }
+    monkeypatch.setattr(task_runtime.task_store, "list_stage_runs", lambda task_id: [run])
+    graph = compile_graph(task_type, "prepare_only")
+    task = {
+        "md5sum": "task", "task_type": "synthetic",
+        "input_form": json.dumps({
+            "execution_graph": {
+                "ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document,
+            },
+        }),
+    }
+    projection = task_runtime.stage_projection(task)
+    model_item = next(item for item in projection["items"] if item["name"] == "synthetic.model")
+    assert model_item["status"] == "SKIPPED"
+    assert model_item["reason_code"] == "stage_omitted_by_mode"
+    assert model_item["dependency"] == "skipped"
+    assert projection["skipped"] == 1

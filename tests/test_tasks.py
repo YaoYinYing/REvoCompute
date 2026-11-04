@@ -433,7 +433,7 @@ def test_workflow_type_detail_projects_the_graph_submission_freezes(monkeypatch,
     assert execution_graph == json.loads(
         json.dumps(execution_graph_payload(task_type))
     )
-    assert execution_graph["mode"] == "full"
+    assert execution_graph["document"]["mode"] == "full"
     assert "execution_graph" not in client.get("/compute/api/types/cpu_runner").get_json()
 
 
@@ -501,8 +501,8 @@ def test_prepare_only_submission_freezes_the_declared_subset_without_gpu(monkeyp
     task = module.task_store.get_task(task_id)
     input_form = json.loads(task["input_form"])
     frozen = input_form["execution_graph"]
-    assert frozen["mode"] == "prepare_only"
     assert frozen["document"]["mode"] == "prepare_only"
+    assert "mode" not in frozen
     assert [node["id"] for node in frozen["document"]["nodes"]] == ["multistage_runner.features"]
     assert set(input_form["resource_policies"]) == {"multistage_runner.features"}
 
@@ -1500,6 +1500,65 @@ def test_result_output_check_reports_missing_required_artifact(monkeypatch, tmp_
     assert any("structure output is missing or empty" in problem for problem in manifest["output_check"]["problems"])
     assert module.task_store.get_task(md5sum)["status"] == "finished"
     assert next(item for item in manifest["artifacts"] if item["path"] == "active_sites.csv")["role"] == "primary"
+
+
+def test_preparation_only_result_is_not_assessed_against_the_full_contract(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "profile_runner"},
+    )
+    md5sum = uuid.uuid4().hex
+    result_dir = tmp_path / "prepare_only_results"
+    result_dir.mkdir()
+    (result_dir / "active_sites.csv").write_text(
+        "chain,residue_index,site_class,site_name,probabilities\nA,28,active,Binding site,[]\n",
+        encoding="utf-8",
+    )
+    _upsert_task_for_user(
+        module,
+        md5sum,
+        filename="enzyme.pdb",
+        file_path=result_dir / "missing.pdb",
+        result_dir=result_dir,
+        username="tester",
+        status="finished",
+    )
+    from revocompute.execution_graph import canonical_digest
+
+    document = {
+        "ir_version": 1, "nodes": [], "graph_inputs": [], "execution_order": [],
+        "mode": "prepare_only",
+    }
+    module.task_store.update_task(
+        md5sum,
+        task_type="profile_runner",
+        input_form=json.dumps({
+            "execution_graph": {
+                "ir_version": 1, "digest": canonical_digest(document), "document": document,
+            },
+        }),
+    )
+    manifest = module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
+    )
+
+    assert manifest["output_check"]["state"] == "not_assessed"
+    assert manifest["output_check"]["reason"] == "preparation_only"
+    assert any("structure output is missing or empty" in problem for problem in manifest["output_check"]["problems"])
+
+
+def test_task_identity_distinguishes_execution_modes(monkeypatch, tmp_path):
+    _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    from revocompute.routes import _derive_task_id
+
+    saved = [{
+        "role": "sequence", "relative_path": "input.fasta", "hash": "a" * 64,
+        "validation_receipt": None,
+    }]
+    prepare = _derive_task_id(saved, "multistage_runner", {}, "owner", "prepare_only")
+    full = _derive_task_id(saved, "multistage_runner", {}, "owner", "full")
+    assert prepare != full
 
 
 def test_invalid_expected_file_tree_contract_marks_output_check_failed(monkeypatch, tmp_path):

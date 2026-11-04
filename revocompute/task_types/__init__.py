@@ -1420,7 +1420,13 @@ def _load_execution_modes(
     known = set(ordered)
     modes: list[ExecutionMode] = []
     for mode_id, entry in raw.items():
-        if not isinstance(mode_id, str) or not _valid_identifier(mode_id):
+        if (
+            not isinstance(mode_id, str)
+            or not _valid_identifier(mode_id)
+            or mode_id != mode_id.lower()
+        ):
+            # Submission normalizes the field to lowercase, so an uppercase id
+            # would be unaddressable.
             raise ValueError(f"Task type {task_name!r} has an invalid execution mode id")
         if not isinstance(entry, dict) or set(entry) - {"label", "stages"}:
             raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} has invalid fields")

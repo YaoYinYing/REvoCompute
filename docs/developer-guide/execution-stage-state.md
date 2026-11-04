@@ -52,6 +52,11 @@ itself at ``stage_index = 0``. stdout markers stay optional progress detail
 (``tasks.run_stage``, execution-progress rows); they never create, advance, or
 settle a StageRun.
 
+A declared stage that the submission's frozen execution mode omits is projected
+as ``SKIPPED`` with ``reason_code = stage_omitted_by_mode``. It has no StageRun:
+the frozen graph document is the only writer of that projection, and an omitted
+stage never becomes ``QUEUED`` or consumes a reservation.
+
 ## Statuses and transitions
 
 ```text
