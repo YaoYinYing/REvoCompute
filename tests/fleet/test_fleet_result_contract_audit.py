@@ -167,10 +167,10 @@ def test_fleet_audit_surfaces_the_families_with_no_declared_result_tree():
     """The uncovered set is explicit: required sources that no tree can be checked against.
 
     The required-source and renderer-kind invariants are statements about a view
-    and the ``expected_files.yaml`` identities a family publishes. Of the 60 Tasks,
-    54 are covered (a declared tree lets their required sources be evaluated) and
-    the six disabled Tasks are unaudited -- each declaring a required view source
-    with no shipped tree to check it against. This test names that gap rather than
+    and the ``expected_files.yaml`` identities a family publishes. Most Tasks are
+    covered (a declared tree lets their required sources be evaluated) while the
+    disabled Tasks are unaudited -- each declaring a required view source with no
+    shipped tree to check it against. This test names that gap rather than
     letting the audit report those Tasks green, and it fails if the set changes --
     either a family gained a tree (good; update the expected set) or a required
     source appeared where nothing can validate it.

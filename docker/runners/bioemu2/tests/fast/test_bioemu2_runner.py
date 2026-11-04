@@ -98,11 +98,26 @@ def predict_structure(system, *, model, output_dir, **kwargs):
 """
 
 FAKE_MDTRAJ = """
+class _Atom:
+    # Upstream's CIF writer stores _atom_site.id as text, which mdtraj keeps as
+    # a string serial; this double mirrors that, including the PDB writer's
+    # refusal to format a non-integer serial.
+    serial = "1"
+
+
+class _Topology:
+    def __init__(self):
+        self.atoms = [_Atom()]
+
+
 class _Trajectory:
     def __init__(self, n_atoms):
         self.n_atoms = n_atoms
+        self.topology = _Topology()
 
     def save_pdb(self, path):
+        if any(not isinstance(atom.serial, int) for atom in self.topology.atoms):
+            raise TypeError("not all arguments converted during string formatting")
         with open(path, "w", encoding="utf-8") as handle:
             handle.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\\n")
 

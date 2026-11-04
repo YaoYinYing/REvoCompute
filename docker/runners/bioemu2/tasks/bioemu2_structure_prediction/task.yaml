@@ -9,8 +9,9 @@ input_summary: One protein sequence as FASTA.
 output_summary: Predicted all-atom structures, the matching topology, per-sample
   physicality results, and the resolved sampling system.
 considerations:
-- Structure prediction uses upstream's folded-structure conditioning, which applies a
-  sharpening factor; it is not an equilibrium ensemble and does not represent populations.
+- Structure prediction uses upstream's folded-structure conditioning, which sharpens
+  the edm, edm_gd, and edm_fk samplers by a step scale; edm_fkc does not apply that
+  scale. It is not an equilibrium ensemble and does not represent populations.
 - Sample order is generation order, not physical time or a kinetic trajectory.
 - Physicality checking reports per-sample results in physicality.json; every generated
   structure is retained and none is removed because of the report.

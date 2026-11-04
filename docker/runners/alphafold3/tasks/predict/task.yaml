@@ -59,7 +59,9 @@ considerations:
 - "Empty inline `unpairedMsa` and `pairedMsa` fields select single-sequence inference:
   the data pipeline materializes a query-only MSA, and a real production result
   completed with this input. File-referenced `unpairedMsaPath`, `pairedMsaPath`, and
-  `templates[].mmcifPath` assets are not exposed by this Task."
+  `templates[].mmcifPath` assets are not named Task input roles: the JSON document is
+  passed through to AlphaFold 3, so it can reference paths, but this Task neither
+  provides nor validates those assets."
 - Predictions are computational estimates whose confidence measures and biological
   context require scientific interpretation.
 - Use of the mounted model parameters and generated output remains subject to the

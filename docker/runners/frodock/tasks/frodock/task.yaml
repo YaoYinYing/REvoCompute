@@ -126,7 +126,7 @@ parameters:
       maximum: 20.0
     bandwidth:
       type: integer
-      description: Spherical-harmonic bandwidth that sets the rotational search step to 180/bandwidth degrees; lower values search coarser and faster, higher values search finer and slower.
+      description: Spherical-harmonic bandwidth; the shipped executable reports a rotational search step near 11 degrees at the default 32, with lower values searching coarser and faster and higher values finer and slower.
       default: 32
       minimum: 4
       maximum: 128

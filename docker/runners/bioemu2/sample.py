@@ -180,6 +180,11 @@ def propagate(manifest: dict, output_dir: Path, checkpoint: Path) -> None:
     import mdtraj
 
     samples = mdtraj.load(str(topology))
+    # Upstream's CIF writer stores ``_atom_site.id`` as text, so mdtraj loads
+    # each serial as a string; its PDB writer formats serials as integers and
+    # raises TypeError. Renumber before writing the declared PDB topology.
+    for serial, atom in enumerate(samples.topology.atoms, start=1):
+        atom.serial = serial
     pdb = output_dir / "topology.pdb"
     samples.save_pdb(str(pdb))
     written = mdtraj.load(str(pdb))
