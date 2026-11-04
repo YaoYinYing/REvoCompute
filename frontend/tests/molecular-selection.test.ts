@@ -57,6 +57,11 @@ describe('authoredResidue identity', () => {
     expect(identity({ insCode: '  ' })).not.toHaveProperty('insertion_code');
   });
 
+  it('falls back to the authored number when a ligand has no label sequence id', () => {
+    expect(identity({ labelSeqId: Number.NaN, authSeqId: 501, groupPDB: 'HETATM' }))
+      .toMatchObject({ residue: 501, label_seq_id: 501, auth_seq_id: 501, hetero: true });
+  });
+
   it('marks HETATM residues as hetero and ATOM residues as polymer', () => {
     expect(identity({ groupPDB: 'HETATM', residueName: 'HEM' })).toMatchObject({ hetero: true, residue_name: 'HEM' });
     expect(identity({ groupPDB: 'ATOM' })).toMatchObject({ hetero: false });

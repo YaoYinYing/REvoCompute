@@ -118,12 +118,16 @@ export interface ResidueIdentity {
  */
 export function authoredResidue(properties: ResidueIdentity): SelectedResidue {
   const insCode = String(properties.insCode || '').trim();
+  // Non-polymer residues (ligands, waters) may carry no label_seq_id. The
+  // authored number is the address that matters; fall back to it rather than
+  // publishing NaN as a label. Auth identity stays the Runner-facing value.
+  const label = Number.isFinite(properties.labelSeqId) ? properties.labelSeqId : properties.authSeqId;
   return {
     chain: properties.labelChain,
-    residue: properties.labelSeqId,
+    residue: label,
     auth_chain: properties.authChain,
     auth_seq_id: properties.authSeqId,
-    label_seq_id: properties.labelSeqId,
+    label_seq_id: label,
     ...(insCode ? { insertion_code: insCode } : {}),
     residue_name: String(properties.residueName || '').trim(),
     hetero: String(properties.groupPDB || '').trim().toUpperCase() === 'HETATM',
