@@ -23,8 +23,8 @@ function trajectoryViewer(overrides: Partial<MolecularViewer> = {}): MolecularVi
     captureImage: async () => '',
     dispose: () => {},
     loadStructure: async () => {},
-    loadTrajectory: async (source: { topology: string; coordinates: string | Uint8Array; coordinateFormat: string }) => {
-      loads.push({ topology: source.topology, coordinates: source.coordinates, format: source.coordinateFormat });
+    loadTrajectory: async (source: { topology: string; topologyFormat?: string; coordinates: string | Uint8Array; coordinateFormat: string }) => {
+      loads.push({ topology: source.topology, topologyFormat: source.topologyFormat, coordinates: source.coordinates, format: source.coordinateFormat });
       return { frame: 0, frameCount: 24 };
     },
     setTrajectoryFrame: async (action: 'set' | 'advance', value: number) => ({
@@ -37,17 +37,17 @@ describe('StructureController trajectory loading', () => {
   it('reads the topology as text and the coordinates as bytes, then steps one stage', async () => {
     const viewer = trajectoryViewer();
     const fetchMock = vi.fn(async (url: string) => new Response(
-      url === '/topology.pdb' ? 'ATOM      1  N   MET A   1' : new Uint8Array([1, 2, 3, 4]),
+      url === '/topology.cif' ? 'data_1' : new Uint8Array([1, 2, 3, 4]),
     ));
     vi.stubGlobal('fetch', fetchMock);
     const controller = new StructureController(async () => viewer);
 
     const info = await controller.mountTrajectory(
-      {} as HTMLElement, file('topology.pdb'), file('samples.xtc'), 'xtc', 'light',
+      {} as HTMLElement, file('topology.cif'), file('samples.xtc'), 'xtc', 'mmcif', 'light',
     );
     expect(info).toEqual({ frame: 0, frameCount: 24 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(viewer.loads).toEqual([{ topology: 'ATOM      1  N   MET A   1', coordinates: new Uint8Array([1, 2, 3, 4]), format: 'xtc' }]);
+    expect(viewer.loads).toEqual([{ topology: 'data_1', topologyFormat: 'mmcif', coordinates: new Uint8Array([1, 2, 3, 4]), format: 'xtc' }]);
     await expect(controller.setTrajectoryFrame('advance', 1)).resolves.toEqual({ frame: 1, frameCount: 24 });
   });
 
@@ -57,7 +57,7 @@ describe('StructureController trajectory loading', () => {
     const controller = new StructureController(createViewer);
 
     await expect(controller.mountTrajectory(
-      {} as HTMLElement, file('topology.pdb'), file('samples.xtc', 64 * 1024 * 1024 + 1), 'xtc', 'light',
+      {} as HTMLElement, file('topology.pdb'), file('samples.xtc', 64 * 1024 * 1024 + 1), 'xtc', 'pdb', 'light',
     )).rejects.toThrow('safe inline preview limit');
     expect(createViewer).not.toHaveBeenCalled();
   });
@@ -69,7 +69,7 @@ describe('StructureController trajectory loading', () => {
     const controller = new StructureController(async () => trajectoryViewer());
 
     await expect(controller.mountTrajectory(
-      {} as HTMLElement, file('topology.pdb'), file('samples.xtc'), 'xtc', 'light',
+      {} as HTMLElement, file('topology.pdb'), file('samples.xtc'), 'xtc', 'pdb', 'light',
     )).rejects.toThrow('Coordinate download failed (HTTP 404)');
   });
 

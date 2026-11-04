@@ -806,7 +806,7 @@ _RESULT_VIEW_MAPPING_KEYS = {
     },
     "evidence-bundle": set(),
     "alignment": {"format", "numbering"},
-    "trajectory": {"coordinate_format", "frame_unit", "timestep", "alignment", "association"},
+    "trajectory": {"coordinate_format", "topology_format", "frame_unit", "timestep", "alignment", "association"},
     "metric-series": {
         "format",
         "x_column",
@@ -862,6 +862,7 @@ _RESULT_DATA_FORMATS = {"csv", "json"}
 _RESULT_DIRECTIONS = {"higher", "lower", "neutral"}
 _RESULT_MATRIX_SCALES = {"sequential", "diverging"}
 _RESULT_TRAJECTORY_FORMATS = {"pdb", "xtc", "dcd"}
+_RESULT_TOPOLOGY_FORMATS = {"pdb", "mmcif"}
 
 
 def get(name: str) -> tuple[TaskType, RunnerConfig]:
@@ -1139,6 +1140,8 @@ def _validate_result_mapping(plugin: str, mapping: Any, view_id: str) -> dict[st
     elif plugin == "trajectory":
         if mapping.get("coordinate_format") not in _RESULT_TRAJECTORY_FORMATS:
             raise ValueError(f"Invalid trajectory coordinate format for result view {view_id!r}")
+        if "topology_format" in mapping and mapping["topology_format"] not in _RESULT_TOPOLOGY_FORMATS:
+            raise ValueError(f"Invalid trajectory topology format for result view {view_id!r}")
         if not isinstance(mapping.get("frame_unit"), str) or not mapping["frame_unit"]:
             raise ValueError(f"Result view {view_id!r} frame_unit must be non-empty text")
         if not isinstance(mapping.get("timestep"), (int, float)) or isinstance(mapping["timestep"], bool):

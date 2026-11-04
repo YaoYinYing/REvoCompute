@@ -108,8 +108,7 @@ export default {
       downloads.append(button);
     };
     download('coordinates', 'Download sampled frames (XTC)');
-    download('topology', 'Download topology (PDB)');
-    download('upstream_topology', 'Download upstream topology (CIF)');
+    download('topology', 'Download topology (CIF)');
     download('physicality', 'Download physicality report (JSON)');
     download('system', 'Download sampling system (YAML)');
     download('sequence', 'Download input sequence (FASTA)');

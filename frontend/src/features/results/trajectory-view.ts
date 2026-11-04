@@ -8,11 +8,12 @@ import type { ResultFile, ResultView } from '../../api/result-types';
 import { resultFileName } from '../../api/result-types';
 import { t } from '../../app/i18n';
 import { StructureController } from './molecular/structure-controller';
-import type { MolecularViewerFactory, TrajectoryInfo } from './molecular/viewer-contract';
+import type { MolecularViewerFactory, TrajectoryInfo, TrajectoryTopologyFormat } from './molecular/viewer-contract';
 import type { ResolvedViewSources, ViewRenderer } from './renderer-registry';
 
 export interface TrajectoryMapping {
   coordinate_format?: string;
+  topology_format?: string;
   frame_unit?: string;
   timestep?: number;
   association?: string;
@@ -51,6 +52,18 @@ export function associatedCoordinates(
   return coordinates.find((file) => (resultFileName(file).split('/').pop() || '').startsWith(`${stem}_`));
 }
 
+/**
+ * The topology format a view declares, or PDB for a view written before the
+ * mapping field existed. Anything outside the supported pair is refused rather
+ * than handed to Mol* as a format the task never declared.
+ */
+function topologyFormatOf(declared: unknown): TrajectoryTopologyFormat {
+  const value = typeof declared === 'string' ? declared.trim().toLowerCase() : '';
+  if (value === 'mmcif') return 'mmcif';
+  if (!value || value === 'pdb') return 'pdb';
+  throw new Error(t('results.trajectory.topologyFormatUnsupported', { format: value }));
+}
+
 /** Render a declared `trajectory` view through the shared bounded structure stage. */
 export function createTrajectoryViewRenderer(
   createViewer: MolecularViewerFactory,
@@ -72,6 +85,9 @@ export function createTrajectoryViewRenderer(
       }
       const format = String(mapping.coordinate_format || '').toLowerCase();
       if (!format) throw new Error(t('results.trajectory.formatMissing'));
+      // Views written before the mapping field default to the PDB topology they
+      // declared; a newer Task states its topology's real format (mmCIF).
+      const topologyFormat = topologyFormatOf(mapping.topology_format);
 
       const controller = new StructureController(createViewer, { controlsCollapsed: true });
       const stage = element('section', 'structure-viewport trajectory-viewport');
@@ -200,7 +216,7 @@ export function createTrajectoryViewRenderer(
         }
         status.textContent = '';
         try {
-          const info = await controller.mountTrajectory(viewerHost, topology, coordinates, format, getTheme());
+          const info = await controller.mountTrajectory(viewerHost, topology, coordinates, format, topologyFormat, getTheme());
           if (!destroyed && current === request) show(info);
         } catch (error) {
           // A superseded mount aborts; its failure belongs to the old selection.

@@ -9,8 +9,6 @@ Python call seams the adapter binds to, and a fake ``bioemu2`` executable on
 ``BIOEMU2_CLI`` records the propagation argv. Each writes the upstream output
 files, so the real ``run.sh`` is exercised end to end -- model-asset check,
 mode dispatch, and publication check -- against the calls it actually makes.
-The adapter's CIF-to-PDB conversion is served by a fake ``mdtraj`` module
-because the host test environment does not install mdtraj.
 """
 
 from __future__ import annotations
@@ -54,14 +52,6 @@ def load_model(*, checkpoint_path):
     return object()
 
 
-class _Frame:
-    def save_pdb(self, path):
-        if os.environ.get("BIOEMU2_OMIT_OUTPUT") == Path(path).name:
-            return
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\\n")
-
-
 def _publish(entry_point, output_dir, kwargs):
     _capture("entry_point", entry_point)
     _capture("sampling", kwargs)
@@ -86,7 +76,7 @@ def _publish(entry_point, output_dir, kwargs):
     for name, payload in published.items():
         if name != omit:
             (out / name).write_bytes(payload)
-    return [_Frame() for _ in range(kwargs["num_samples"])]
+    return []
 
 
 def sample_equilibrium(system, *, model, output_dir, **kwargs):
@@ -95,35 +85,6 @@ def sample_equilibrium(system, *, model, output_dir, **kwargs):
 
 def predict_structure(system, *, model, output_dir, **kwargs):
     return _publish("predict_structure", output_dir, kwargs)
-"""
-
-FAKE_MDTRAJ = """
-class _Atom:
-    # Upstream's CIF writer stores _atom_site.id as text, which mdtraj keeps as
-    # a string serial; this double mirrors that, including the PDB writer's
-    # refusal to format a non-integer serial.
-    serial = "1"
-
-
-class _Topology:
-    def __init__(self):
-        self.atoms = [_Atom()]
-
-
-class _Trajectory:
-    def __init__(self, n_atoms):
-        self.n_atoms = n_atoms
-        self.topology = _Topology()
-
-    def save_pdb(self, path):
-        if any(not isinstance(atom.serial, int) for atom in self.topology.atoms):
-            raise TypeError("not all arguments converted during string formatting")
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\\n")
-
-
-def load(path):
-    return _Trajectory(1)
 """
 
 FAKE_CLI = """
@@ -172,7 +133,6 @@ def _workspace(tmp_path, *, with_cli=False):
     modules = tmp_path / "modules"
     (modules / "bioemu2").mkdir(parents=True)
     (modules / "bioemu2" / "__init__.py").write_text(FAKE_BIOEMU2, encoding="utf-8")
-    (modules / "mdtraj.py").write_text(FAKE_MDTRAJ, encoding="utf-8")
     fasta = tmp_path / "input.fasta"
     fasta.write_text(">2KL8\nMEMDIRFRG\n", encoding="utf-8")
     if with_cli:
@@ -230,7 +190,8 @@ def test_bioemu2_parameters_and_sequence_reach_upstream(tmp_path):
         "physicality_mode": "no_violations",
         "seed": 11,
     }
-    assert (output_dir / "topology.pdb").is_file()
+    assert (output_dir / "topology.cif").is_file()
+    assert not (output_dir / "topology.pdb").exists()
     assert (output_dir / "sequence.fasta").read_text(encoding="utf-8") == ">input\nMEMDIRFRG\n"
     assert (output_dir / "task_finished").is_file()
 
@@ -254,7 +215,8 @@ def test_bioemu2_structure_mode_calls_predict_structure(tmp_path):
     assert calls["entry_point"] == "predict_structure"
     assert calls["sampling"] == {"num_samples": 1, "num_steps": 4, "seed": 0}
     assert calls["system"] == {"proteins": ["MEMDIRFRG"]}
-    assert (output_dir / "topology.pdb").is_file()
+    assert (output_dir / "topology.cif").is_file()
+    assert not (output_dir / "topology.pdb").exists()
     assert (output_dir / "sequence.fasta").is_file()
     assert (output_dir / "task_finished").is_file()
 
@@ -314,9 +276,9 @@ def test_bioemu2_propagation_forwards_resolved_flags_and_publishes_outputs(tmp_p
         "--physicality-filter",
         "no_violations",
     ]
-    assert (output_dir / "topology.pdb").is_file()
-    assert (output_dir / "samples.xtc").is_file()
     assert (output_dir / "topology.cif").is_file()
+    assert not (output_dir / "topology.pdb").exists()
+    assert (output_dir / "samples.xtc").is_file()
     assert (output_dir / "system.yaml").is_file()
     assert (output_dir / "physicality.json").is_file()
     assert not (output_dir / "sequence.fasta").exists()
@@ -359,7 +321,7 @@ def test_bioemu2_propagation_omits_unresolved_optional_flags(tmp_path):
         "--lag-time-ns",
         "1",
     ]
-    assert (output_dir / "topology.pdb").is_file()
+    assert (output_dir / "topology.cif").is_file()
 
 
 def test_bioemu2_propagation_requires_the_starting_structure_role(tmp_path):
@@ -395,15 +357,16 @@ def test_bioemu2_tasks_and_result_contracts_resolve(tmp_path):
     assert contract_dir(tasks["bioemu2_propagate"], str(ROOT)) == propagate_dir
 
     shared = expected_file_tree(tasks["bioemu2_structure_prediction"], str(ROOT))
-    assert set(shared) == {"topology", "coordinates", "upstream_topology", "sequence", "physicality", "system"}
+    assert set(shared) == {"topology", "coordinates", "sequence", "physicality", "system"}
+    assert shared["topology"]["path"] == "topology.cif"
     propagated = expected_file_tree(tasks["bioemu2_propagate"], str(ROOT))
     assert {key for key, entry in propagated.items() if entry["required"]} == {
         "topology",
         "coordinates",
-        "upstream_topology",
         "physicality",
         "system",
     }
+    assert propagated["topology"]["path"] == "topology.cif"
     assert propagated["command"]["required"] is False
     assert "sequence" not in propagated
 
@@ -416,9 +379,10 @@ def test_bioemu2_tasks_and_result_contracts_resolve(tmp_path):
             selector.value for selectors in view.sources.values() for selector in selectors if selector.required
         }
         assert required == {
-            "topology.pdb",
+            "topology.cif",
             "samples.xtc",
         }
+        assert view.mapping["topology_format"] == "mmcif"
         for selectors in view.sources.values():
             assert {selector.value for selector in selectors} <= {entry["path"] for entry in tree.values()}
 
@@ -446,10 +410,10 @@ def test_bioemu2_missing_published_output_fails_the_task(tmp_path):
 
 def test_bioemu2_publication_check_covers_every_required_contract_file(tmp_path):
     """The entrypoint fails when any file the fake upstream publishes is missing."""
-    # The paths the fake upstream (and the adapter's own PDB export) actually
-    # write. sequence.fasta is written by the adapter itself, so the fake has no
-    # seam to omit it; it is covered by the success-path test.
-    published = ["samples.xtc", "topology.cif", "system.yaml", "physicality.json", "topology.pdb"]
+    # The paths the fake upstream actually writes. sequence.fasta is written by
+    # the adapter itself, so the fake has no seam to omit it; it is covered by
+    # the success-path test.
+    published = ["samples.xtc", "topology.cif", "system.yaml", "physicality.json"]
     for path in published:
         case = tmp_path / path
         case.mkdir()

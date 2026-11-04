@@ -41,7 +41,9 @@ afterEach(() => vi.unstubAllGlobals());
 function installGlobals(): TestNode {
   const host = new TestNode();
   vi.stubGlobal('document', { createElement: () => new TestNode() });
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(url === '/topology.pdb' ? 'ATOM' : new Uint8Array([1, 2]))));
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(
+    /\.(pdb|cif)$/.test(url) ? 'ATOM' : new Uint8Array([1, 2]),
+  )));
   return host;
 }
 
@@ -69,16 +71,54 @@ function nodes(host: TestNode): { scrubber: TestNode; previous: TestNode; next: 
 describe('trajectory view renderer', () => {
   it('feeds both declared sources to one stage and labels the axis Sample index, not time', async () => {
     const host = installGlobals();
-    const renderer = createTrajectoryViewRenderer(async () => viewer(), () => 'light');
+    const formats: Array<string | undefined> = [];
+    const renderer = createTrajectoryViewRenderer(async () => viewer({
+      loadTrajectory: async (options: { topologyFormat?: string }) => {
+        formats.push(options.topologyFormat);
+        return { frame: 0, frameCount: 23 };
+      },
+    }), () => 'light');
     const handle = await renderer.render(view as never, { topology: [source('topology.pdb')], coordinates: [source('samples.xtc')] }, host as never, {
       signal: new AbortController().signal, taskId: 'a'.repeat(32),
     });
+    // A view that predates the field keeps the PDB topology it declared.
+    expect(formats).toEqual(['pdb']);
     const parts = nodes(host);
     expect(parts.scrubber.disabled).toBe(false);
     expect(parts.scrubber.max).toBe('23');
     expect(parts.position.textContent).toBe('Sample index 1 of 23');
     expect(parts.status.textContent).toBe('23 frames loaded. Sample order is not physical time.');
     expect((handle as { destroy(): void }).destroy).toBeTypeOf('function');
+  });
+
+  it('passes the declared mmCIF topology format to the viewer', async () => {
+    const host = installGlobals();
+    const formats: Array<string | undefined> = [];
+    const renderer = createTrajectoryViewRenderer(async () => viewer({
+      loadTrajectory: async (options: { topologyFormat?: string }) => {
+        formats.push(options.topologyFormat);
+        return { frame: 0, frameCount: 23 };
+      },
+    }), () => 'light');
+    const cif = {
+      ...view,
+      sources: { topology: ['topology.cif'], coordinates: ['samples.xtc'] },
+      mapping: { ...view.mapping, topology_format: 'mmcif' },
+    };
+    await renderer.render(cif as never, {
+      topology: [source('topology.cif')], coordinates: [source('samples.xtc')],
+    }, host as never, { signal: new AbortController().signal, taskId: 'a'.repeat(32) });
+    expect(formats).toEqual(['mmcif']);
+  });
+
+  it('refuses a topology format outside pdb and mmcif instead of guessing', async () => {
+    installGlobals();
+    const renderer = createTrajectoryViewRenderer(async () => viewer(), () => 'light');
+    const gro = { ...view, mapping: { ...view.mapping, topology_format: 'gro' } };
+    await expect(renderer.render(gro as never, {
+      topology: [source('topology.pdb')], coordinates: [source('samples.xtc')],
+    }, new TestNode() as never, { signal: new AbortController().signal, taskId: 'a'.repeat(32) }))
+      .rejects.toThrow('unsupported topology format: gro');
   });
 
   it('labels a declared diffusion-step axis as diffusion steps, with no physical-time claim', async () => {

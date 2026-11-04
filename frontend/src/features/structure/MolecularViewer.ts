@@ -221,6 +221,7 @@ export class MolecularViewer {
 
   loadTrajectory(source: {
     topology: string;
+    topologyFormat?: 'pdb' | 'mmcif';
     coordinates: string | Uint8Array;
     coordinateFormat: string;
     label?: string;
@@ -242,7 +243,7 @@ export class MolecularViewer {
         await this.plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default');
       } else {
         const loaded = await loadPluginTrajectory(this.plugin, {
-          model: { kind: 'model-data', data: source.topology, format: 'pdb' },
+          model: { kind: 'model-data', data: source.topology, format: source.topologyFormat || 'pdb' },
           modelLabel: 'Declared topology',
           coordinates: {
             kind: 'coordinates-data',

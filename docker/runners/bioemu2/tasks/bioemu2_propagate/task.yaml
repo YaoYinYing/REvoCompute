@@ -76,13 +76,14 @@ result_workspace:
       structure; frame order is input order, not physical time.
     sources:
       topology:
-      - path: topology.pdb
+      - path: topology.cif
         required: true
       coordinates:
       - path: samples.xtc
         required: true
     mapping:
       coordinate_format: xtc
+      topology_format: mmcif
       frame_unit: endpoint
       timestep: 1
       association: single

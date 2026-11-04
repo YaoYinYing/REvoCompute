@@ -3,15 +3,15 @@
 # sampling entry point with an identical output set.
 #
 # The Runner owns this judgement. Allowed `role:` values are evidence |
-# provenance | diagnostic | artifact. `topology.pdb` is the adapter's PDB form of
-# upstream `topology.cif` (the trajectory view parses its topology as PDB);
-# `samples.xtc`, `physicality.json`, and `system.yaml` are written by upstream
+# provenance | diagnostic | artifact. `topology.cif` is upstream's topology for
+# `samples.xtc`; the declared trajectory view reads it as mmCIF. `samples.xtc`,
+# `physicality.json`, and `system.yaml` are written by upstream
 # `sample_equilibrium` or `predict_structure`; `sequence.fasta` echoes the named
 # input sequence.
 result:
   files:
     topology:
-      path: topology.pdb
+      path: topology.cif
       cardinality: one
       required: true
       type: structure
@@ -20,12 +20,6 @@ result:
       path: samples.xtc
       cardinality: one
       required: true
-      role: evidence
-    upstream_topology:
-      path: topology.cif
-      cardinality: one
-      required: true
-      type: structure
       role: evidence
     sequence:
       path: sequence.fasta

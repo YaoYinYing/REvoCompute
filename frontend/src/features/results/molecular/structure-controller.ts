@@ -1,6 +1,6 @@
 import { resultFileName, type ResultFile } from '../../../api/result-types';
 import { t } from '../../../app/i18n';
-import type { MolecularViewer, MolecularViewerFactory, TrajectoryInfo } from './viewer-contract';
+import type { MolecularViewer, MolecularViewerFactory, TrajectoryInfo, TrajectoryTopologyFormat } from './viewer-contract';
 
 const MAX_STRUCTURE_BYTES = 64 * 1024 * 1024;
 
@@ -267,6 +267,7 @@ export class StructureController {
     topology: ResultFile,
     coordinates: ResultFile,
     format: string,
+    topologyFormat: TrajectoryTopologyFormat,
     theme: 'light' | 'dark',
   ): Promise<TrajectoryInfo> {
     if (topology.size > MAX_STRUCTURE_BYTES || coordinates.size > MAX_STRUCTURE_BYTES) {
@@ -301,7 +302,7 @@ export class StructureController {
         await viewer.setRepresentation(this.representation);
         await viewer.setColor(this.color === 'confidence' ? 'plddt' : this.color);
         const info = await viewer.loadTrajectory!({
-          topology: topologyText, coordinates: frames, coordinateFormat: format.toLowerCase(), label: coordinateName,
+          topology: topologyText, topologyFormat, coordinates: frames, coordinateFormat: format.toLowerCase(), label: coordinateName,
         });
         if (generation !== this.generation || viewer !== this.viewer) throw aborted();
         if (!info || !(info.frameCount > 0)) throw new Error(t('results.trajectory.empty'));

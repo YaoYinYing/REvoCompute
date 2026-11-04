@@ -7,4 +7,3 @@ requires:
 optional:
   - sequence
   - system
-  - upstream_topology

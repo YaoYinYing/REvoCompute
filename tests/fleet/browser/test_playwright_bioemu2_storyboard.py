@@ -9,8 +9,10 @@ reader -- against the captured production result ``4d77ffcc...``. The capture's
 manifest predates the Task's Storyboard declaration, so the test serves the
 replayed manifest with the declaration read by the Server's own
 ``storyboard_declaration`` and the logical files resolved by the Server's own
-``resolve_expected_files`` from the capture's published artifacts. Every other
-byte -- views, artifact paths, payloads -- is the capture's.
+``resolve_expected_files`` from the capture's published artifacts. The capture's
+view also predates the Task's mmCIF topology, so the test overlays the
+equilibrium Task's current declared view (``topology.cif`` read as mmCIF).
+Every other byte -- artifact paths, payloads -- is the capture's.
 
 Expected values are read from the bundle (``ReplayBundle``), not retyped: sample
 count, physicality verdicts, file URLs and served bytes all come from the
@@ -36,6 +38,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
+import yaml
 from frontend_fixtures import ReplayBundle, RunnerDefinition, mount_scenario, replay_scenario
 from revocompute.replay_bundle import project_manifest_for_serve
 from playwright.sync_api import Page, expect
@@ -53,6 +56,7 @@ FAMILY = ROOT / "docker" / "runners" / "bioemu2"
 # The equilibrium and structure prediction Tasks share the family-scoped
 # contract, so the contract and its storyboard live at the family root.
 CONTRACT = FAMILY
+EQUILIBRIUM_TASK = FAMILY / "tasks" / "bioemu2_equilibrium" / "task.yaml"
 STORYBOARD = CONTRACT / "storyboard" / "index.js"
 
 if not BUNDLE_PATH.is_file():
@@ -88,16 +92,37 @@ def _runner() -> RunnerDefinition:
     )
 
 
+def _current_views() -> list[dict]:
+    """The equilibrium Task's declared views in the served manifest's shape."""
+    task = yaml.safe_load(EQUILIBRIUM_TASK.read_text(encoding="utf-8"))
+    return [
+        {
+            "id": view["id"],
+            "plugin": view["plugin"],
+            "role": view["role"],
+            "title": view["title"],
+            "description": view["description"],
+            "sources": {
+                name: [selector["path"] for selector in selectors]
+                for name, selectors in view["sources"].items()
+            },
+            "mapping": view["mapping"],
+        }
+        for view in task["result_workspace"]["views"]
+    ]
+
+
 def _served_manifest(replay: ReplayBundle) -> dict:
-    """The replayed manifest with the Task's Storyboard and logical files served.
+    """The replayed manifest with the Task's Storyboard, views, and logical files served.
 
     The capture carries its resolved logical files, but the Server's serving
     projection rebuilds ``result.files`` from the published artifact list and
     the Task's ``expected_files.yaml``. The test goes through that same
     projection (``resolve_expected_files`` then ``project_manifest_for_serve``)
-    with the capture's own artifacts, and adds the Storyboard declaration read
-    by the Server's own ``storyboard_declaration``. Every other byte -- views,
-    artifact paths, payloads -- is the capture's.
+    with the capture's own artifacts; it adds the Storyboard declaration read by
+    the Server's own ``storyboard_declaration`` and the equilibrium Task's
+    current declared view, which reads the mmCIF topology the capture also
+    carries. Every other byte -- artifact paths, payloads -- is the capture's.
     """
     declaration = storyboard_declaration(
         SimpleNamespace(runtime=SimpleNamespace(root=str(FAMILY), definition=""), task_dir=""),
@@ -109,6 +134,7 @@ def _served_manifest(replay: ReplayBundle) -> dict:
     assert not problems
     published = json.loads(json.dumps(replay.manifest))
     published["result"] = {"files": resolved}
+    published["views"] = _current_views()
     published["storyboard"] = declaration
     return project_manifest_for_serve(published)
 
@@ -116,8 +142,16 @@ def _served_manifest(replay: ReplayBundle) -> dict:
 def _open(page: Page, overrides: list[tuple[str, bytes]] | None = None) -> tuple[object, ReplayBundle]:
     """Open the real result page with the storyboard declared over the replay."""
     replay = _replay()
-    router = mount_scenario(page, replay_scenario(_runner(), replay))
     served = _served_manifest(replay)
+    # The capture's logical-file map predates the mmCIF contract (``topology``
+    # points at ``topology.pdb``). Point each current logical file at the
+    # artifact the served manifest resolves, so the replay router answers that
+    # URL with the same bytes the current contract names.
+    replay.bundle["logical_files"] = {
+        file_id: [{"path": entry["path"]} for entry in entries]
+        for file_id, entries in served["result"]["files"].items()
+    }
+    router = mount_scenario(page, replay_scenario(_runner(), replay))
     # Registered after the router: Playwright matches routes in reverse order.
     page.route(
         f"{ORIGIN}/compute/api/results/{replay.task_id}",
@@ -175,7 +209,7 @@ def _sample_count(replay: ReplayBundle) -> int:
 
 def test_the_hero_stage_mounts_the_declared_trajectory_view(page: Page) -> None:
     router, replay = _open(page)
-    (view,) = replay.manifest["views"]
+    (view,) = _served_manifest(replay)["views"]
     assert (view["id"], view["plugin"], view["role"]) == ("conformational_ensemble", "trajectory", "primary")
 
     # The stage is the declared view mounted through the workspace's own
@@ -271,11 +305,11 @@ def test_the_hero_stage_and_the_verdict_table_share_the_first_screen(page: Page)
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 
-def test_the_six_downloads_serve_the_captured_bytes(page: Page) -> None:
+def test_the_five_downloads_serve_the_captured_bytes(page: Page) -> None:
     _, replay = _open(page)
-    files = replay.manifest["result"]["files"]
+    files = _served_manifest(replay)["result"]["files"]
     buttons = page.locator(".be2-downloads button")
-    expect(buttons).to_have_count(6)
+    expect(buttons).to_have_count(5)
     assert set(files) == {
         button.get_attribute("data-download") for button in buttons.all()
     }
@@ -285,9 +319,7 @@ def test_the_six_downloads_serve_the_captured_bytes(page: Page) -> None:
         with page.expect_download() as download:
             button.click()
         assert download.value.url == f"{ORIGIN}{file['url']}", file_id
-        path = replay.logical_artifact_path(file_id, 0)
-        assert path is not None, file_id
-        expected = hashlib.sha256(replay.payload(path)[0]).hexdigest()
+        expected = hashlib.sha256(replay.payload(file["path"])[0]).hexdigest()
         served = page.evaluate(SHA256_JS, file["url"])
         assert served == expected, file_id
 

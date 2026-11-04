@@ -66,17 +66,18 @@ result_workspace:
     id: predicted_structures
     role: primary
     title: Predicted structures
-    description: Predicted structures associated with the declared PDB topology; sample
-      order is generation order, not physical time.
+    description: Predicted structures associated with the declared mmCIF topology;
+      sample order is generation order, not physical time.
     sources:
       topology:
-      - path: topology.pdb
+      - path: topology.cif
         required: true
       coordinates:
       - path: samples.xtc
         required: true
     mapping:
       coordinate_format: xtc
+      topology_format: mmcif
       frame_unit: sample
       timestep: 1
       association: single

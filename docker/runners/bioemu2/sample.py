@@ -10,12 +10,9 @@ Equilibrium and structure prediction share the sequence-to-system construction
 upstream's Python API does not do for us:
 
 * ``equilibrium`` and ``structure`` build the ``System`` from the Task's named
-  ``sequence`` role, call upstream's matching sampling entry point, and write
-  ``topology.pdb`` from the returned sample set because the declared trajectory
-  view parses its topology as PDB;
+  ``sequence`` role and call upstream's matching sampling entry point;
 * ``propagate`` runs upstream's own ``bioemu2 propagate`` command against the
-  named ``starting_structure`` CIF, then writes the same PDB topology from the
-  CIF upstream wrote.
+  named ``starting_structure`` CIF.
 
 Everything else -- MSA acquisition, embedding, denoising, physicality checking,
 ``samples.xtc``/``topology.cif``/``system.yaml``/``physicality.json`` -- is
@@ -122,12 +119,7 @@ def sample(manifest: dict, output_dir: Path, checkpoint: Path, mode: str) -> Non
     system = bioemu2.System.from_description(proteins=[sequence])
     model = bioemu2.load_model(checkpoint_path=checkpoint)
     entry_point = bioemu2.sample_equilibrium if mode == "equilibrium" else bioemu2.predict_structure
-    trajectory = entry_point(
-        system, model=model, output_dir=output_dir, **sampling_kwargs(manifest["params"])
-    )
-    # The declared topology is parsed as PDB by the trajectory view; the
-    # returned trajectory is the same sample set upstream just saved.
-    trajectory[0].save_pdb(str(output_dir / "topology.pdb"))
+    entry_point(system, model=model, output_dir=output_dir, **sampling_kwargs(manifest["params"]))
     (output_dir / "sequence.fasta").write_text(f">input\n{sequence}\n", encoding="utf-8")
 
 
@@ -172,28 +164,6 @@ def propagate(manifest: dict, output_dir: Path, checkpoint: Path) -> None:
     if params.get("physicality_mode") is not None:
         command += ["--physicality-filter", str(params["physicality_mode"])]
     subprocess.run(command, check=True)
-
-    topology = output_dir / "topology.cif"
-    if not topology.is_file():
-        raise SystemExit(f"BioEmu2 propagation did not write {topology.name}")
-
-    import mdtraj
-
-    samples = mdtraj.load(str(topology))
-    # Upstream's CIF writer stores ``_atom_site.id`` as text, so mdtraj loads
-    # each serial as a string; its PDB writer formats serials as integers and
-    # raises TypeError. Renumber before writing the declared PDB topology.
-    for serial, atom in enumerate(samples.topology.atoms, start=1):
-        atom.serial = serial
-    pdb = output_dir / "topology.pdb"
-    samples.save_pdb(str(pdb))
-    written = mdtraj.load(str(pdb))
-    if written.n_atoms != samples.n_atoms:
-        pdb.unlink(missing_ok=True)
-        raise SystemExit(
-            f"topology.pdb represents {written.n_atoms} of {samples.n_atoms} atoms; "
-            "the propagation trajectory has no usable PDB topology"
-        )
 
 
 def main() -> int:

@@ -17,8 +17,11 @@ store and its server-owned publication anchor.
 - Manifest sha256
   `8e7f9314dd185d436a8998357bbdff7cb0aa941f0bc2e1cc6e3ebbfc2f88d2b3`
   (10213 bytes), publication revision 1
-- Declared view: `conformational_ensemble` (`trajectory`, primary) over
-  `topology.pdb` and `samples.xtc`, `frame_unit: sample`
+- Captured view: `conformational_ensemble` (`trajectory`, primary) over
+  `topology.pdb` and `samples.xtc`, `frame_unit: sample`. This is the historical
+  manifest: the current Task declares `topology.cif` with
+  `topology_format: mmcif`, and the browser acceptance test overlays that view
+  and contract on this capture.
 
 ## Payload inventory
 
