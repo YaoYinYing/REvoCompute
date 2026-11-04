@@ -20,6 +20,15 @@ input contract, the owning `plugin.yaml` and `.def` are the family identity, the
 deployed `runner.yaml` is the machine-local configuration, and exactly one page
 in this site explains each human-facing contract.
 
+The family author must substantiate the user-relevant operations offered by
+each registered Task against the **pinned upstream** implementation, and
+review meaningful upstream releases before upgrading. This is a
+**development and acceptance practice**, not a new runtime scientific
+capability registry: Core discovers Task definitions without knowing the
+scientific meaning of a particular Runner. The investigation procedure is in
+[Adding a Runner](adding-a-runner.md#review-upstream-capabilities-before-adapting)
+and mode-level evidence belongs to [Test Plan](test-plan.md#scientific-mode-coverage).
+
 ## Identity classes
 
 A family change moves one or more of four independent identities. Classify every
