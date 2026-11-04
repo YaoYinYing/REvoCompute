@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { MolecularViewer } from '../src/features/structure/MolecularViewer';
+import { MolecularViewer, authoredResidue } from '../src/features/structure/MolecularViewer';
 
 // The residue matcher is the generic selection contract every storyboard shares.
 // These cases pin its insertion-code semantics without mounting a viewer.
@@ -36,6 +36,30 @@ describe('MolecularViewer.matchesResidue insertion-code semantics', () => {
   it('still constrains chain and residue number', () => {
     expect(MolecularViewer.matchesResidue(residue({ authChain: 'B' }), { chain: 'A', residue: 42, numbering: 'auth_seq_id' })).toBe(false);
     expect(MolecularViewer.matchesResidue(residue({ authSeqId: 43 }), { chain: 'A', residue: 42, numbering: 'auth_seq_id' })).toBe(false);
+  });
+});
+
+describe('authoredResidue identity', () => {
+  const identity = (overrides: Partial<Parameters<typeof authoredResidue>[0]> = {}) => authoredResidue({
+    authChain: 'A', labelChain: 'B', authSeqId: 42, labelSeqId: 7, insCode: '', residueName: 'ALA',
+    groupPDB: 'ATOM', ...overrides,
+  });
+
+  it('keeps auth and label identities distinct', () => {
+    expect(identity()).toEqual({
+      chain: 'B', residue: 7, auth_chain: 'A', auth_seq_id: 42, label_seq_id: 7,
+      residue_name: 'ALA', hetero: false,
+    });
+  });
+
+  it('publishes an insertion code only when the source has one', () => {
+    expect(identity({ insCode: 'A' })).toMatchObject({ insertion_code: 'A' });
+    expect(identity({ insCode: '  ' })).not.toHaveProperty('insertion_code');
+  });
+
+  it('marks HETATM residues as hetero and ATOM residues as polymer', () => {
+    expect(identity({ groupPDB: 'HETATM', residueName: 'HEM' })).toMatchObject({ hetero: true, residue_name: 'HEM' });
+    expect(identity({ groupPDB: 'ATOM' })).toMatchObject({ hetero: false });
   });
 });
 

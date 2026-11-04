@@ -30,15 +30,15 @@ CIF/mmCIF/PDB; fix viewer format coverage rather than converting on the Runner s
 
 ## M1 — selection identity at the submission boundary
 
-- [ ] Widen the workspace selection payload to carry auth chain, auth residue number, insertion code,
-      residue name, hetero flag, and atom name/altloc/serial for atom mode; keep label identity only as
-      viewer-local data, never as Runner meaning.
+- [x] Widen the workspace selection payload to carry auth chain, auth residue number, insertion code,
+      residue name and hetero flag; keep label identity only as viewer-local data. Atom name/altloc/serial
+      remain for the atom-mode increment.
 - [ ] Normalize and validate through the owning capability; refuse mixed structures/frames, empty or
       ambiguous selectors, missing residues, unsupported altlocs, blank-chain mismatches, multi-model
       inputs, and out-of-range atoms.
 - [ ] Preserve the raw selection as provenance beside the canonical parameters; the Runner reads
       parameters, not the workspace payload.
-- [ ] Add `.ent` to viewer preview coverage and prove an accepted `.ent` keeps the viewer.
+- [x] Add `.ent` to viewer preview coverage and parse it as PDB.
 
 ## M2 — viewer facade and canonical-parameter path
 

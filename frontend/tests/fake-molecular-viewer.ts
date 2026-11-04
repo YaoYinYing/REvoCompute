@@ -1,11 +1,11 @@
 export class MolecularViewer {
   private disposed = false;
-  private selectionListener: ((residues: Array<{ chain: string; residue: number }>) => void) | null = null;
+  private selectionListener: ((residues: Array<{ chain: string; residue: number; auth_chain: string; auth_seq_id: number; label_seq_id: number; residue_name: string; hetero: boolean; insertion_code?: string }>) => void) | null = null;
   private constructor(private readonly host: HTMLElement) {}
   static async mount(host: HTMLElement): Promise<MolecularViewer> {
     const viewer = new MolecularViewer(host); const state = window as any;
     state.__viewerMounts = (state.__viewerMounts || 0) + 1; host.dataset.viewer = String(state.__viewerMounts);
-    state.__emitViewerSelection = (residues: Array<{ chain: string; residue: number }>) => {
+    state.__emitViewerSelection = (residues: Array<{ chain: string; residue: number; auth_chain: string; auth_seq_id: number; label_seq_id: number; residue_name: string; hetero: boolean; insertion_code?: string }>) => {
       viewer.selectionListener?.(residues);
     };
     return viewer;
@@ -41,7 +41,7 @@ export class MolecularViewer {
   async setRepresentation(value: string): Promise<void> { this.host.dataset.representation = value; }
   async setColor(value: string): Promise<void> { this.host.dataset.color = value; }
   async clear(): Promise<void> { this.host.removeAttribute('data-label'); }
-  onSelectionChanged(listener: (residues: Array<{ chain: string; residue: number }>) => void): () => void {
+  onSelectionChanged(listener: (residues: Array<{ chain: string; residue: number; auth_chain: string; auth_seq_id: number; label_seq_id: number; residue_name: string; hetero: boolean; insertion_code?: string }>) => void): () => void {
     this.selectionListener = listener;
     return () => { if (this.selectionListener === listener) this.selectionListener = null; };
   }

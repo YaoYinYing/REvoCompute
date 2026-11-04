@@ -131,7 +131,7 @@ export class InputWorkspace {
     });
     const definitions: WorkspaceCapability[] = form.input_workspace.steps.flatMap(step => step.capabilities.map(capability => ({ ...capability, stepId: step.id })));
     const roleFiles = new Map<string, File[]>(); const primaryIndexes = new Map<string, number>();
-    let sequenceRole: string | null = null; let selections: Array<{ chain: string; residue: number }> = [];
+    let sequenceRole: string | null = null; let selections: import('../../structure/MolecularViewer').SelectedResidue[] = [];
     const context: WorkspaceContext = {
       form,
       roleFiles: role => [...(roleFiles.get(role) || [])],

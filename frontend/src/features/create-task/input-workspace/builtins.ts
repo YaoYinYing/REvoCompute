@@ -255,7 +255,7 @@ const structurePlugin: WorkspacePlugin = {
     const render = async (current: number, file: File | null) => {
       if (generation !== current) return;
       context.setStructureSelections([]);
-      if (!file || !matchesExtension(file, ['.pdb', '.cif', '.mmcif'])) { host.hidden = true; status.textContent = prompt; await viewer?.clear(); return; }
+      if (!file || !matchesExtension(file, ['.pdb', '.ent', '.cif', '.mmcif'])) { host.hidden = true; status.textContent = prompt; await viewer?.clear(); return; }
       status.textContent = t('ct.structure.reading', { name: filePath(file) });
       try {
         const data = await file.text(); if (generation !== current) return;
@@ -267,7 +267,11 @@ const structurePlugin: WorkspacePlugin = {
           viewer = mounted;
           if (selectable) removeListener = mounted.onSelectionChanged(residues => { context.setStructureSelections(residues); context.changed(); });
         }
-        await viewer.loadStructure({ data, format: file.name.toLowerCase().endsWith('.pdb') ? 'pdb' : 'mmcif', label: filePath(file) });
+        // ``.ent`` is the legacy PDB extension and must keep the viewer a Task
+        // accepts it for; it is parsed as PDB, not as mmCIF.
+        const lower = file.name.toLowerCase();
+        const format = lower.endsWith('.pdb') || lower.endsWith('.ent') ? 'pdb' : 'mmcif';
+        await viewer.loadStructure({ data, format, label: filePath(file) });
         if (generation !== current) return; host.hidden = false; status.textContent = selectable ? t('ct.structure.selectResidues', { name: filePath(file) }) : t('ct.structure.inspection', { name: filePath(file) });
       } catch { if (generation === current) { host.hidden = true; status.textContent = t('ct.structure.failed'); } }
     };

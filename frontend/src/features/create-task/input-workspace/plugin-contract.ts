@@ -1,4 +1,5 @@
 import type { TaskFormDefinition, WorkspaceCapability, WorkspaceSummary } from '../types';
+import type { SelectedResidue } from '../../structure/MolecularViewer';
 
 export interface WorkspaceContext {
   form: TaskFormDefinition;
@@ -14,8 +15,8 @@ export interface WorkspaceContext {
   sequence(): string;
   sequenceName(): string;
   parameters(): Record<string, string>;
-  structureSelections(): Array<{ chain: string; residue: number }>;
-  setStructureSelections(value: Array<{ chain: string; residue: number }>): void;
+  structureSelections(): SelectedResidue[];
+  setStructureSelections(value: SelectedResidue[]): void;
   summaries(): WorkspaceSummary[];
   changed(): void;
   filesChanged(): void;
