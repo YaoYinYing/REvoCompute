@@ -35,9 +35,61 @@ Before implementation, record:
 - CPU, GPU, host-memory, GPU-memory, walltime, and network requirements;
 - one canonical, minimal scientific test case.
 
-These are also the minimum facts an AI coding agent needs. Give the agent those
-facts and direct it to the Example Runner; do not ask it to infer contracts from
-an upstream README or invent dependency versions.
+These are the minimum facts an AI coding agent must establish from primary
+sources and present for review. A README alone is not sufficient evidence for
+scientific behavior; do not invent undocumented modes or dependency versions.
+
+### Review upstream capabilities before adapting
+
+Read the scientific publication and supplement where relevant, the **exact pinned**
+upstream revision, its CLI/API help, examples, tests, release notes, and model
+documentation. Distinguish what the paper claims, what the pinned code can
+execute, and what a newer release adds. Record source URLs with revision-specific
+paths or line references for each user-relevant scientific operation.
+
+For each operation, establish its accepted input types (including alternative
+structures, alignments, and specifications), scientific mode, prerequisites,
+parameters that change the experiment, produced artifacts, and validation
+evidence. Compare it with the family's registered Task(s) and classify it as
+**exposed and verified**, **implemented but undiscoverable**, **missing from the
+adapter**, **deliberately omitted**, **unsupported by the pinned release**, or
+**unverified**. Give every omission a scientific, security, licensing, resource,
+or maintenance reason. CLI switches are not automatically scientific operations.
+
+Correct the owning family, not Core. Several modes of one experiment may share
+one `task.yaml` with validated parameters and conditional inputs; operations
+with different scientific meaning, required input roles, or outputs may need
+separate Task definitions within the same family. Tasks remain automatically
+registered through `plugin.yaml` when the family is enabled. Do **not** create
+a second capability registry, hardcode Runner knowledge in Core, mirror Task
+defaults in another schema, or expose arbitrary user CLI/shell commands.
+
+Keep the investigation and disposition in the family-owned README or
+`SCIENTIFIC_TRACEABILITY.md` when the science warrants a durable explanation;
+otherwise keep the bounded evidence in the PR discussion. In either case,
+`task.yaml` remains authoritative for parameters, input semantics, and user
+help, and `test.yaml` and live receipts remain authoritative for executable
+acceptance. See [Test Plan](test-plan.md).
+
+### Check versions before upgrading
+
+Find the deployed/pinned upstream commit or release and compare it with the
+latest relevant official stable release, not an assumed latest Git branch.
+Read intervening release notes and breaking changes, and account for the
+model weights, databases, terms of use, Python/CUDA/ABI dependencies, upstream
+output schemas, upstream API behavior, and available target-host resources.
+Where the family already carries `upstream.json`, reconcile it with the actual
+build inputs. A Git tag, package version, checkpoint and SIF are distinct
+identities; compare the ones the runtime truly uses.
+
+An upgrade is a candidate, not an automatic update. Upgrade only when a
+useful and supportable improvement can be shown with compatible resources,
+real execution, and scientific result evidence. Record a **keep**, **upgrade**,
+**blocked**, or **deferred** disposition and its reason for every reviewed
+release. Preserve existing upstream pins when evidence is insufficient; do
+not claim that an available new release means production is outdated or unsafe.
+Version or capability changes must follow the existing Build / Runtime Bundle
+/ Execution impact and target-host acceptance gates below.
 
 ## 2. Define `plugin.yaml`
 
