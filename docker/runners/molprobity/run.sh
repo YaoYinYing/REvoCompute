@@ -55,7 +55,7 @@ python3 /app/revocompute/validate.py \
     --output-dir "$output_dir" \
     --asset-root "$asset_root" \
     --asset-manifest "$asset_manifest" \
-    --source-revision a978d97aad5efd33b594591fb1cfb0f7fa4f5b24
+    --runtime-distribution cctbx-base==2025.11
 
 test -s "$output_dir/molprobity.json" || { echo "MolProbity produced no validation summary" >&2; exit 1; }
 test -s "$output_dir/validation_residues.csv" || { echo "MolProbity produced no per-residue table" >&2; exit 1; }

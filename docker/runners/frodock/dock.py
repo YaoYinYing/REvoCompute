@@ -44,7 +44,7 @@ def _load_manifest(path: Path) -> dict[str, object]:
         raise SystemExit("Task params must be an object")
     if params.get("interaction_type") not in (None, "O", "E", "A"):
         raise SystemExit("interaction_type must be one of O, E, A")
-    unsupported = sorted(set(params) - {"pose_count", "clustering_rmsd", "interaction_type"})
+    unsupported = sorted(set(params) - {"pose_count", "clustering_rmsd", "bandwidth", "interaction_type"})
     if unsupported:
         raise SystemExit(f"Unsupported FRODOCK parameters: {', '.join(unsupported)}")
     return params
@@ -68,6 +68,9 @@ def main() -> None:
     clustering_rmsd = params.get("clustering_rmsd", 5.0)
     if not isinstance(clustering_rmsd, (int, float)) or isinstance(clustering_rmsd, bool):
         raise SystemExit("clustering_rmsd must be a number")
+    bandwidth = params.get("bandwidth", 32)
+    if not isinstance(bandwidth, int) or isinstance(bandwidth, bool) or not 4 <= bandwidth <= 128:
+        raise SystemExit("bandwidth must be an integer between 4 and 128")
     interaction_type = params.get("interaction_type") or "O"
 
     binaries = {
@@ -110,6 +113,7 @@ def main() -> None:
         "-d", "receptor_DS.mrc,ligand_DS.mrc",
         "-t", interaction_type,
         "-s", str(soap),
+        "--bw", str(bandwidth),
         "-o", "solutions.dat",
     ], "docking search", work / "solutions.dat")
     if not (work / "solutions.dat").is_file() or not (work / "solutions.dat").stat().st_size:
@@ -186,6 +190,7 @@ def main() -> None:
                 "parameters": {
                     "pose_count": pose_count,
                     "clustering_rmsd": float(clustering_rmsd),
+                    "bandwidth": bandwidth,
                     "interaction_type": interaction_type,
                 },
                 "executables": {name: str(path.name) for name, path in binaries.items()},
