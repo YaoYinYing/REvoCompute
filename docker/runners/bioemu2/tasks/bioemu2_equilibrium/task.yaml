@@ -60,17 +60,18 @@ result_workspace:
     id: conformational_ensemble
     role: primary
     title: Sampled conformational ensemble
-    description: BioEmu2 samples associated with the declared PDB topology; sample order
-      is not physical time.
+    description: BioEmu2 samples associated with the declared mmCIF topology; sample
+      order is not physical time.
     sources:
       topology:
-      - path: topology.pdb
+      - path: topology.cif
         required: true
       coordinates:
       - path: samples.xtc
         required: true
     mapping:
       coordinate_format: xtc
+      topology_format: mmcif
       frame_unit: sample
       timestep: 1
       association: single

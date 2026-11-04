@@ -50,10 +50,18 @@ workflow:
   - output_validation
 use_when: Use this for protein, nucleic-acid, ligand, ion, or modified-residue complexes
   expressed in the upstream AlphaFold 3 JSON format.
-input_summary: One current upstream AlphaFold 3 JSON input document.
+input_summary: One current upstream AlphaFold 3 JSON input document; the document is
+  authoritative for sequence, MSA, and template content. Empty `unpairedMsa` and
+  `pairedMsa` fields are a supported single-sequence path.
 output_summary: Ranked mmCIF structures, confidence data, ranking scores, and the
   processed data-pipeline input.
 considerations:
+- "Empty inline `unpairedMsa` and `pairedMsa` fields select single-sequence inference:
+  the data pipeline materializes a query-only MSA, and a real production result
+  completed with this input. File-referenced `unpairedMsaPath`, `pairedMsaPath`, and
+  `templates[].mmcifPath` assets are not named Task input roles: the JSON document is
+  passed through to AlphaFold 3, so it can reference paths, but this Task neither
+  provides nor validates those assets."
 - Predictions are computational estimates whose confidence measures and biological
   context require scientific interpretation.
 - Use of the mounted model parameters and generated output remains subject to the

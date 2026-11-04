@@ -14,10 +14,10 @@ citations:
   bibtex: >-
     @article{Mirdita_2022, title={ColabFold: making protein folding accessible to all}, volume={19}, ISSN={1548-7105}, url={http://dx.doi.org/10.1038/s41592-022-01488-1}, DOI={10.1038/s41592-022-01488-1}, number={6}, journal={Nature Methods}, publisher={Springer Science and Business Media LLC}, author={Mirdita, Milot and Schütze, Konstantin and Moriwaki, Yoshitaka and Heo, Lim and Ovchinnikov, Sergey and Steinegger, Martin}, year={2022}, month=May, pages={679–682} }
 
-summary: ColabFold AlphaFold2 prediction with online MMseqs2 MSA search and local
-  GPU inference.
-use_when: Use this for AlphaFold2 prediction with public MMseqs2 MSA search and local
-  model inference.
+summary: ColabFold AlphaFold2 prediction with optional online MMseqs2 MSA search and
+  local GPU inference.
+use_when: Use this for AlphaFold2 prediction with public MMseqs2 MSA search or
+  single-sequence inference and local model inference.
 input_summary: One FASTA file; each record is predicted as an independent job, so multiple
   records produce independent predictions. Headers must be non-empty and sanitize to unique
   job names; empty or colliding headers are rejected. Chain complexes are not accepted by
@@ -25,8 +25,14 @@ input_summary: One FASTA file; each record is predicted as an independent job, s
 output_summary: The searched alignment, ranked predicted structures, scores, and optional
   relaxed models.
 considerations:
-- MSA generation depends on the external ColabFold service unless single-sequence
-  mode is selected.
+- In the pinned upstream code, `single_sequence` skips MSA search and the
+  `api.colabfold.com` query, synthesizing an alignment from the input sequence. The
+  Task's features stage conservatively declares network access because `mmseqs2_*`
+  modes, including the declared default, use the service and network policy is not
+  parameter-conditioned. The smoke plan now includes that default mode; it has not yet
+  been run on the target host.
+- Upstream template search (`--templates`) and custom templates are not exposed by
+  this Task.
 gpus: true
 inputs:
   sequence:
@@ -216,7 +222,9 @@ parameters:
       - alphafold2_multimer_v3
     msa_mode:
       type: string
-      description: Multiple-sequence-alignment search strategy, including environmental sequences or single-sequence inference.
+      description: Multiple-sequence-alignment strategy. The `mmseqs2_*` values query
+        the public ColabFold service; `single_sequence` skips MSA search and infers
+        from the query alone.
       default: mmseqs2_uniref_env
       enum:
       - mmseqs2_uniref_env

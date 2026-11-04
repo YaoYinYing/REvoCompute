@@ -3,21 +3,22 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""BioEmu2 equilibrium-ensemble adapter.
+"""BioEmu2 adapter for equilibrium sampling, structure prediction, and propagation.
 
-The adapter does three things upstream's Python API does not do for us:
+The Task manifest selects the mode; the adapter never infers it from a filename.
+Equilibrium and structure prediction share the sequence-to-system construction
+upstream's Python API does not do for us:
 
-* it builds the ``System`` from the Task's named ``sequence`` role instead of a
-  PDB ID or a hand-written system YAML;
-* it writes ``topology.pdb`` from the returned sample set, because the
-  declared trajectory view parses its topology as PDB;
-* it echoes the input sequence as ``sequence.fasta``.
+* ``equilibrium`` and ``structure`` build the ``System`` from the Task's named
+  ``sequence`` role and call upstream's matching sampling entry point;
+* ``propagate`` runs upstream's own ``bioemu2 propagate`` command against the
+  named ``starting_structure`` CIF.
 
 Everything else -- MSA acquisition, embedding, denoising, physicality checking,
-``samples.xtc``/``system.yaml``/``physicality.json`` -- is upstream
-``sample_equilibrium`` writing into the output directory. An optional parameter
-the manifest did not resolve is not passed, so upstream's own preset applies
-rather than a copy of its default kept here.
+``samples.xtc``/``topology.cif``/``system.yaml``/``physicality.json`` -- is
+upstream writing into the output directory. An optional parameter the manifest
+did not resolve is not passed, so upstream's own preset applies rather than a
+copy of its default kept here.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections import Counter
@@ -36,6 +38,11 @@ from pathlib import Path
 #: B, Z, J, and O and the stop/gap spells -- none of which names a residue
 #: BioEmu2 can sample. The Task input role declares this stricter set.
 PROTEIN_CHARS = frozenset("ACDEFGHIKLMNPQRSTVWYX")
+
+#: Propagation outputs upstream refuses to overwrite. Clearing exactly these
+#: before the call keeps a re-run in the same directory deterministic without
+#: deleting anything the Server published.
+PROPAGATION_OUTPUTS = ("samples.xtc", "physicality.json")
 
 
 def query_sequence(path: Path) -> str:
@@ -104,38 +111,87 @@ def physicality_summary(path: Path) -> str:
     return summary
 
 
+def sample(manifest: dict, output_dir: Path, checkpoint: Path, mode: str) -> None:
+    """Run upstream's equilibrium sampler or folded-structure predictor."""
+    import bioemu2
+
+    sequence = query_sequence(input_path(manifest, "sequence"))
+    system = bioemu2.System.from_description(proteins=[sequence])
+    model = bioemu2.load_model(checkpoint_path=checkpoint)
+    entry_point = bioemu2.sample_equilibrium if mode == "equilibrium" else bioemu2.predict_structure
+    entry_point(system, model=model, output_dir=output_dir, **sampling_kwargs(manifest["params"]))
+    (output_dir / "sequence.fasta").write_text(f">input\n{sequence}\n", encoding="utf-8")
+
+
+def propagate(manifest: dict, output_dir: Path, checkpoint: Path) -> None:
+    """Run upstream's ``bioemu2 propagate`` command from one starting CIF.
+
+    The upstream command infers the molecular system from ``--x0-cif`` and saves
+    one independent endpoint per requested sample at a single lag. It refuses to
+    overwrite its own coordinate and physicality files, so only those are
+    cleared before the call; every other output is upstream's to replace.
+    """
+    starting_structure = input_path(manifest, "starting_structure")
+    params = manifest["params"]
+    for name in PROPAGATION_OUTPUTS:
+        (output_dir / name).unlink(missing_ok=True)
+    for stale in output_dir.glob("samples_*.xtc"):
+        stale.unlink()
+
+    command = [
+        os.environ.get("BIOEMU2_CLI", "bioemu2"),
+        "propagate",
+        "--x0-cif",
+        str(starting_structure),
+        "--checkpoint-path",
+        str(checkpoint),
+        "--out",
+        str(output_dir),
+        "--num-samples",
+        str(int(params["num_samples"])),
+        "--lag-time-ns",
+        f"{float(params['lag_time_ns']):g}",
+    ]
+    optional_flags = (
+        ("--seed", "seed"),
+        ("--num-steps", "num_steps"),
+        ("--batch-size", "batch_size"),
+        ("--sampler", "sampler"),
+    )
+    for flag, key in optional_flags:
+        if params.get(key) is not None:
+            command += [flag, str(params[key])]
+    if params.get("physicality_mode") is not None:
+        command += ["--physicality-filter", str(params["physicality_mode"])]
+    subprocess.run(command, check=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task-manifest", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--checkpoint-dir", required=True, type=Path)
+    parser.add_argument("--mode", required=True, choices=("equilibrium", "structure", "propagate"))
     args = parser.parse_args()
 
     manifest = json.loads(args.task_manifest.read_text(encoding="utf-8"))
-    sequence = query_sequence(input_path(manifest, "sequence"))
     checkpoint = args.checkpoint_dir / "checkpoint.ckpt"
     if not checkpoint.is_file():
         raise SystemExit(f"BioEmu2 checkpoint not found: {checkpoint}")
 
     # Keep the raw ColabFold response in task-local scratch: a cache in the
-    # weight namespace would be mutable shared state.
+    # weight namespace would be mutable shared state. Every mode queries the
+    # hosted MMseqs2 service for the system's alignment.
     scratch = Path(tempfile.mkdtemp(prefix="revodesign-bioemu2."))
     os.environ["BIOEMU2_MSA_CACHE"] = str(scratch / "colabfold_msa")
     try:
-        import bioemu2
-
-        system = bioemu2.System.from_description(proteins=[sequence])
-        model = bioemu2.load_model(checkpoint_path=checkpoint)
-        trajectory = bioemu2.sample_equilibrium(
-            system, model=model, output_dir=args.output_dir, **sampling_kwargs(manifest["params"])
-        )
-        # The declared topology is parsed as PDB by the trajectory view; the
-        # returned trajectory is the same sample set upstream just saved.
-        trajectory[0].save_pdb(str(args.output_dir / "topology.pdb"))
+        if args.mode == "propagate":
+            propagate(manifest, args.output_dir, checkpoint)
+        else:
+            sample(manifest, args.output_dir, checkpoint, args.mode)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
-    (args.output_dir / "sequence.fasta").write_text(f">input\n{sequence}\n", encoding="utf-8")
     print(physicality_summary(args.output_dir / "physicality.json"))
     return 0
 

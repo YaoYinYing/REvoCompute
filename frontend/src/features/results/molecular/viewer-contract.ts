@@ -4,9 +4,14 @@ export interface StructureSource {
   label?: string;
 }
 
+/** Topology formats a trajectory view may declare. */
+export type TrajectoryTopologyFormat = 'pdb' | 'mmcif';
+
 export interface TrajectorySource {
   /** Topology text the coordinate frames are read against. */
   topology: string;
+  /** Format of the topology text; defaults to PDB for views that predate the field. */
+  topologyFormat?: TrajectoryTopologyFormat;
   /** Coordinate frames, kept binary (XTC/DCD) or text (multi-model PDB). */
   coordinates: string | Uint8Array;
   coordinateFormat: string;

@@ -1,0 +1,39 @@
+# Logical result files published by the BioEmu2 propagation Task.
+#
+# The Runner owns this judgement. Allowed `role:` values are evidence |
+# provenance | diagnostic | artifact. Upstream's `bioemu2 propagate` command
+# writes `samples.xtc`, `topology.cif`, `system.yaml`, `physicality.json`, and
+# `command.txt`; the declared trajectory view reads the topology as mmCIF.
+# Propagation publishes no input sequence: it starts from a structure, not a
+# sequence.
+result:
+  files:
+    topology:
+      path: topology.cif
+      cardinality: one
+      required: true
+      type: structure
+      role: artifact
+    coordinates:
+      path: samples.xtc
+      cardinality: one
+      required: true
+      role: evidence
+    physicality:
+      path: physicality.json
+      cardinality: one
+      required: true
+      type: json
+      role: diagnostic
+    system:
+      path: system.yaml
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    command:
+      path: command.txt
+      cardinality: one
+      required: false
+      type: text
+      role: diagnostic

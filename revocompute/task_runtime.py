@@ -2457,6 +2457,19 @@ def _json_path(value: Any, path: str) -> Any:
     return value
 
 
+def _format_suffix(relative_path: str, *, allow_gzip: bool) -> str:
+    """The extension a declared format governs, optionally after one ``.gz``.
+
+    Only a text source the viewer inflates (structure topology, multi-model PDB
+    coordinates) keeps its underlying format; a gzipped XTC/DCD is still a
+    binary payload the viewer does not inflate.
+    """
+    name = os.path.basename(relative_path).lower()
+    if allow_gzip and name.endswith(".gz"):
+        name = name[:-3]
+    return os.path.splitext(name)[1]
+
+
 def _validate_scientific_view(
     definition: Any,
     sources: dict[str, list[str]],
@@ -2506,8 +2519,15 @@ def _validate_scientific_view(
                 if not any(name.startswith(f"{stem}_") for stem in stems):
                     problems.append(f"{definition.title}: coordinate {path} has no declared topology association")
         expected_suffix = f".{definition.mapping['coordinate_format']}"
-        if any(not path.lower().endswith(expected_suffix) for path in coordinates):
+        if any(
+            _format_suffix(path, allow_gzip=expected_suffix == ".pdb") != expected_suffix for path in coordinates
+        ):
             problems.append(f"{definition.title}: coordinate format does not match the declared artifacts")
+        topology_suffixes = (
+            {".pdb"} if definition.mapping.get("topology_format", "pdb") == "pdb" else {".cif", ".mmcif"}
+        )
+        if any(_format_suffix(path, allow_gzip=True) not in topology_suffixes for path in topologies):
+            problems.append(f"{definition.title}: topology format does not match the declared artifacts")
         return problems
 
     paths = sources.get("series", []) if definition.plugin == "metric-series" else sources.get("matrices", [])

@@ -17,8 +17,11 @@ store and its server-owned publication anchor.
 - Manifest sha256
   `8e7f9314dd185d436a8998357bbdff7cb0aa941f0bc2e1cc6e3ebbfc2f88d2b3`
   (10213 bytes), publication revision 1
-- Declared view: `conformational_ensemble` (`trajectory`, primary) over
-  `topology.pdb` and `samples.xtc`, `frame_unit: sample`
+- Captured view: `conformational_ensemble` (`trajectory`, primary) over
+  `topology.pdb` and `samples.xtc`, `frame_unit: sample`. This is the historical
+  manifest: the current Task declares `topology.cif` with
+  `topology_format: mmcif`, and the browser acceptance test overlays that view
+  and contract on this capture.
 
 ## Payload inventory
 
@@ -67,10 +70,11 @@ payload hash and size, the task identity, and the publication anchor on load.
   accepted on a 40 GB host, so it is outside upstream's tested envelope.
 - **No storyboard in the served manifest.** The production manifest was
   published before this Task declared a Storyboard, so `response.storyboard` is
-  `null`. The manifest does carry the six logical `result.files` entries this
-  Task resolves; the browser test adds only the Storyboard declaration (through
-  the Server's own resolver) and serves the capture's own views, file URLs, and
-  artifact bytes.
+  `null`. The capture carries the six logical `result.files` entries its own
+  manifest resolved, including the adapter-era `topology.pdb` and
+  `upstream_topology`. The browser test overlays the Task's current five-file
+  contract (`topology.cif` read as mmCIF) and its current Storyboard and view,
+  while every artifact path and payload remains the capture's.
 - **Not scientific validation.** The bundle asserts what the run published, not
   that the sampled conformations are correct.
 

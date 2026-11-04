@@ -35,9 +35,66 @@ Before implementation, record:
 - CPU, GPU, host-memory, GPU-memory, walltime, and network requirements;
 - one canonical, minimal scientific test case.
 
-These are also the minimum facts an AI coding agent needs. Give the agent those
-facts and direct it to the Example Runner; do not ask it to infer contracts from
-an upstream README or invent dependency versions.
+These are the minimum facts an AI coding agent must establish from primary
+sources and present for review. A README alone is not sufficient evidence for
+scientific behavior; do not invent undocumented modes or dependency versions.
+
+### Review upstream capabilities before adapting
+
+Read the publication and supplement where relevant, the **exact pinned**
+revision, its CLI/API help, examples, tests, release notes, and model
+documentation. Keep four evidence levels distinct: what the paper claims, what
+the pinned implementation can execute, what a newer release adds, and what a
+real run on the target host produced. Cite a revision-specific URL, path, or
+line reference for each user-relevant scientific operation.
+
+For each operation, establish its accepted inputs, scientific mode,
+prerequisites, parameters that change the experiment, produced artifacts, and
+observed evidence. Compare that with the family's registered Task(s) and
+classify it as **exposed and verified**, **implemented but hidden**,
+**missing**, **intentionally excluded**, **unavailable at the pinned
+version**, **unverified**, or **broken**. Give every operation that is not
+exposed and verified a scientific, security, licensing, resource, or
+maintenance reason. A CLI switch is not automatically a scientific operation.
+
+Operations with the same scientific meaning may share one `task.yaml` with
+validated parameters and conditional inputs; operations with different
+required input roles or outputs need their own Task in the same family. Keep
+the mapping in the owning family; [Runner Family Protocol](runner-family-protocol.md#ownership)
+owns the Core boundary and [Task Contract](task-contract.md) owns the manifest.
+
+For example, suppose the pinned upstream writes `predictions/<id>/scores.json`
+beside its structures, but the Task's `expected_files.yaml` matches only
+`predictions/**/*.cif`. The pinned code produces the scores, but the Task
+neither declares nor exposes them, so they are **implemented but hidden**.
+Read the output code to establish what the file contains, decide whether it
+carries scientific meaning, then either declare a result role and a smoke
+assertion for it or record why it is **intentionally excluded**. Apply the
+same check to a parameter: a flag the pinned CLI accepts but the Task never
+exposes is also **implemented but hidden**.
+
+Keep a durable investigation in the family `README.md` or
+`SCIENTIFIC_TRACEABILITY.md`; otherwise record it in the PR discussion.
+[Scientific traceability](index.md#scientific-traceability) owns that record
+pattern, and [Test Plan](test-plan.md#scientific-mode-coverage) owns the
+evidence that turns a classification into verified.
+
+### Check versions before upgrading
+
+Compare the commit or release the runtime actually deploys with the latest
+official **stable** release, not an assumed latest branch. Read intervening
+release notes and breaking changes, and check weights, databases, terms,
+Python/CUDA/ABI dependencies, output schemas, API behavior, and target-host
+resources. Reconcile any `upstream.json` with the actual build inputs; a tag,
+package version, checkpoint, and SIF are distinct identities.
+
+An available release is a candidate, not a mandate. Record **upgrade now**,
+**retain**, **blocked**, or **defer**, with the reason, for every reviewed
+release. Upgrade only when a useful, supportable change is shown with
+compatible resources, real execution, and scientific result evidence;
+otherwise preserve the pin and state what evidence would reopen the decision.
+Every such change still follows the existing change-impact and target-host
+acceptance gates.
 
 ## 2. Define `plugin.yaml`
 
@@ -171,12 +228,10 @@ result time.
 
 ## 5. Define `test.yaml`
 
-Add a deterministic fixture under `tests/data/` and a required smoke case for
-every TaskType in the family. `test.yaml` declares only case IDs, the TaskType,
-fixtures grouped by named input role, and schema-valid parameters; output
-contracts, resources, weights, and defaults stay in their owning manifests.
-Keep the case small enough for routine target-host execution while exercising
-real parsing and artifact acceptance. See [Test Plan](test-plan.md).
+Add a deterministic fixture under `tests/data/` and the required smoke cases.
+[Test Plan](test-plan.md) owns the declaration and collection rules; keep each
+case small enough for routine target-host execution while exercising real
+parsing and artifact acceptance.
 
 Add pytest coverage only for executable family logic such as parsers, command
 builders, normalizers, or postprocessors. Do not write tests that merely read

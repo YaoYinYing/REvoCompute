@@ -83,7 +83,9 @@ stem-prefix` pairs a topology with the coordinate artifact whose basename starts
 with the topology's own stem, as the server validates it at publication, rather
 than with whichever coordinate the manifest lists first. A topology with no
 matching coordinate states that instead of showing another design's frames. The
-frame axis is labelled with the mapping's own `frame_unit`.
+mapping's `topology_format` declares how the topology is parsed (`pdb` when
+absent, or `mmcif`); it does not infer a format from the file name. The frame
+axis is labelled with the mapping's own `frame_unit`.
 
 ## Matrix view
 

@@ -12,3 +12,16 @@ collections:
         pose_count: 5
         clustering_rmsd: 5.0
         interaction_type: O
+    # Exercises the revalidated non-default search effort when the rebuilt
+    # candidate SIF is accepted; declared here so the revalidation is runnable.
+    - id: minimal-frodock-pair-bandwidth-64
+      task: frodock
+      input:
+        roles:
+          receptor: [tests/data/geodock/partner_a.pdb]
+          ligand: [tests/data/geodock/partner_b.pdb]
+      parameters:
+        pose_count: 5
+        clustering_rmsd: 5.0
+        interaction_type: O
+        bandwidth: 64

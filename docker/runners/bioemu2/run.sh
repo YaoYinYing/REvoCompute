@@ -33,15 +33,29 @@ for relative in checkpoints/bioemu2-preview/checkpoint.ckpt checkpoints/bioemu2-
   verify_model_asset "$asset_manifest" "$asset_root" "$relative" BioEmu2 || exit 1
 done
 
-echo "REVODESIGN_STAGE:bioemu2_equilibrium"
+# The Task manifest's own type selects the adapter mode; nothing here looks at
+# an input filename.
+task_type="${TASK_TYPE:-bioemu2_equilibrium}"
+case "$task_type" in
+  bioemu2_equilibrium) mode=equilibrium ;;
+  bioemu2_structure_prediction) mode=structure ;;
+  bioemu2_propagate) mode=propagate ;;
+  *) echo "Unknown BioEmu2 task type: $task_type" >&2; exit 2 ;;
+esac
+
+echo "REVODESIGN_STAGE:${task_type}"
 "${BIOEMU2_PYTHON:-python}" "${BIOEMU2_SAMPLE_SCRIPT:-$runtime_root/bioemu2/sample.py}" \
   --task-manifest "$task_file" \
   --output-dir "$output_dir" \
-  --checkpoint-dir "$checkpoint_dir"
+  --checkpoint-dir "$checkpoint_dir" \
+  --mode "$mode"
 
 # The task's own contract is the single list of required outputs; the server
 # repeats this check, so a success here must mean the server's check will pass.
-contract="${runtime_root}/bioemu2/tasks/bioemu2_equilibrium/expected_files.yaml"
+# A Task-scoped contract wins; equilibrium and structure prediction share the
+# family-scoped one.
+contract="${runtime_root}/bioemu2/tasks/${task_type}/expected_files.yaml"
+[[ -f "$contract" ]] || contract="${runtime_root}/bioemu2/expected_files.yaml"
 required=$("${BIOEMU2_PYTHON:-python}" -c '
 import sys, yaml
 for entry in yaml.safe_load(open(sys.argv[1]))["result"]["files"].values():

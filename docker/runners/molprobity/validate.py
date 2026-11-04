@@ -107,7 +107,7 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--asset-root", required=True, type=Path)
     parser.add_argument("--asset-manifest", required=True, type=Path)
-    parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--runtime-distribution", required=True)
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -177,7 +177,7 @@ def main() -> None:
                 "ran": list(ANALYSES),
                 "provenance": {
                     "task_type": "molprobity",
-                    "upstream_revision": args.source_revision,
+                    "upstream_distribution": args.runtime_distribution,
                     "runtime_network": False,
                     "input_structure": {"name": args.input.name, "sha256": _sha256(args.input)},
                     "reference_data": {

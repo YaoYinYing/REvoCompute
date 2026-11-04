@@ -124,6 +124,12 @@ parameters:
       default: 5.0
       minimum: 0.5
       maximum: 20.0
+    bandwidth:
+      type: integer
+      description: Spherical-harmonic bandwidth; the shipped executable reports a rotational search step near 11 degrees at the default 32, with lower values searching coarser and faster and higher values finer and slower.
+      default: 32
+      minimum: 4
+      maximum: 128
     interaction_type:
       type: string
       description: Interaction class that selects the electrostatic potential parameters used for the receptor map.

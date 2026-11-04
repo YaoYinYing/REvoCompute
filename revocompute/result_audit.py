@@ -90,15 +90,16 @@ _REQUIRED_SOURCE_KIND: dict[str, dict[str, str | tuple[str, ...] | None]] = {
 #: its declared topology.
 _COVERAGE_EXEMPT_SOURCES: frozenset[tuple[str, str]] = frozenset({("evidence-bundle", "items")})
 
-#: File extensions a declared ``format``/``coordinate_format`` may address, and
-#: the source it governs. A format is checked only against the source it
-#: describes; the trajectory topology is a coordinate file, not the trajectory.
+#: File extensions a declared ``format``/``coordinate_format``/``topology_format``
+#: may address, and the source it governs. A format is checked only against the
+#: source it describes; a trajectory's topology and coordinates are separate
+#: sources with separate formats.
 #:
-#: Only these four plugin/mapping pairs can declare a format: the loader's
+#: Only these five plugin/mapping pairs can declare a format: the loader's
 #: own ``_RESULT_VIEW_MAPPING_KEYS`` accepts a ``format`` for exactly
-#: ``matrix``, ``metric-series`` and ``alignment`` (and ``coordinate_format``
-#: for ``trajectory``), so no other view class can carry one to check. The check
-#: is necessarily selector-based -- a static audit has only the declared pattern,
+#: ``matrix``, ``metric-series`` and ``alignment``, ``coordinate_format`` and
+#: ``topology_format`` for ``trajectory``, so no other view class can carry one
+#: to check. The check is necessarily selector-based -- a static audit has only the declared pattern,
 #: not the artifact a run publishes -- so it catches a declaration that cannot
 #: match its own format, not a Runner that writes a different format than it
 #: declared.
@@ -109,6 +110,7 @@ _FORMAT_EXTENSIONS: dict[str, frozenset[str]] = {
     "fasta": frozenset({".fasta", ".fa", ".fas"}),
     "stockholm": frozenset({".sto", ".stockholm"}),
     "pdb": frozenset({".pdb"}),
+    "mmcif": frozenset({".cif", ".mmcif"}),
     "xtc": frozenset({".xtc"}),
     "dcd": frozenset({".dcd"}),
 }
@@ -118,6 +120,7 @@ _FORMAT_SOURCES: dict[tuple[str, str], frozenset[str]] = {
     ("metric-series", "format"): frozenset({"series"}),
     ("alignment", "format"): frozenset({"alignment"}),
     ("trajectory", "coordinate_format"): frozenset({"coordinates"}),
+    ("trajectory", "topology_format"): frozenset({"topology"}),
 }
 
 
@@ -309,16 +312,25 @@ def _declared_capability(definition: Mapping[str, Any]) -> str:
 def _audit_view(task: TaskType, view: ResultView, tree: Mapping[str, Mapping[str, Any]] | None) -> list[ContractFinding]:
     findings: list[ContractFinding] = []
     expectations = _REQUIRED_SOURCE_KIND.get(view.plugin, {})
-    for mapping_key in ("format", "coordinate_format"):
+    for mapping_key in ("format", "coordinate_format", "topology_format"):
         declared_format = view.mapping.get(mapping_key)
         if declared_format is None:
-            continue
+            # The loader and viewer both default an absent topology format to
+            # PDB, so audit that default rather than skipping the topology.
+            if (view.plugin, mapping_key) != ("trajectory", "topology_format"):
+                continue
+            declared_format = "pdb"
         extensions = _FORMAT_EXTENSIONS.get(str(declared_format), frozenset())
         governed = _FORMAT_SOURCES.get((view.plugin, mapping_key), frozenset())
         for source_name in governed:
             for selector in view.sources.get(source_name, ()):
-                suffix = os.path.splitext(selector.value)[1].lower()
-                if suffix and suffix not in extensions:
+                name = selector.value.lower()
+                # Only the text sources the viewer inflates keep their
+                # underlying format; gzipped XTC/DCD are not inflated.
+                if name.endswith(".gz") and os.path.splitext(name[:-3])[1] in {".pdb", ".cif", ".mmcif"}:
+                    name = name[:-3]
+                suffix = os.path.splitext(name)[1]
+                if suffix and "*" not in suffix and suffix not in extensions:
                     findings.append(
                         ContractFinding(
                             "result.format_source_mismatch",

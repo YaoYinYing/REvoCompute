@@ -94,6 +94,17 @@ case "${task_type}" in
       --number_of_batches "${NUMBER_OF_BATCHES}"
       --temperature "${SAMPLING_TEMP}"
     )
+    # Upstream defaults --checkpoint_path_sc to ./model_params relative to the
+    # workdir; the mounted checkpoint directory is not the workdir, so pass it
+    # explicitly whenever packing runs.
+    if [[ "$(_parse_param pack_side_chains)" == "1" ]]; then
+      sc_checkpoint="${ligand_checkpoint_dir}/ligandmpnn_sc_v_32_002_16.pt"
+      [[ -s "${sc_checkpoint}" ]] || {
+        echo "LigandMPNN side-chain packing checkpoint is missing: ${sc_checkpoint}" >&2
+        exit 1
+      }
+      ligand_args+=(--checkpoint_path_sc "${sc_checkpoint}")
+    fi
     for key in seed batch_size verbose fasta_seq_separation homo_oligomer zero_indexed \
       save_stats ligand_mpnn_use_atom_context ligand_mpnn_cutoff_for_score \
       ligand_mpnn_use_side_chain_context parse_atoms_with_zero_occupancy pack_side_chains \

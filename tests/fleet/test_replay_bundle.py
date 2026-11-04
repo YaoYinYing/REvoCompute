@@ -1454,8 +1454,10 @@ def test_real_bioemu2_bundle_round_trips_with_its_published_verdicts() -> None:
         (0, "rejected", "bad_bonds_sidechain"),
         (1, "rejected", "bad_bonds_sidechain"),
     ]
-    # The published logical files are the six this Task declares, each resolving
-    # to a captured payload whose bytes still match its recorded digest.
+    # The capture's logical files are the six its historical manifest resolved,
+    # each resolving to a captured payload whose bytes still match its digest.
+    # The current Task contract resolves five (topology.cif, no upstream_topology);
+    # the browser storyboard test overlays that contract.
     assert set(replay.bundle["logical_files"]) == {
         "coordinates", "topology", "upstream_topology", "physicality", "system", "sequence",
     }
