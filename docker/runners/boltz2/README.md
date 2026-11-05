@@ -88,10 +88,12 @@ download assets. No receipt or ready state exists.
    target Slurm/Apptainer host. Record each fact where it is actually carried:
    the live-test receipt carries the SIF and Runtime Bundle identities, execution
    account, `resource_observations`, `output_check`, `artifact_count`, and
-   `gpu_accounting`; source commit, seed, and parameters are in the immutable
-   `task.json`/input snapshot; consumed MSA paths and hashes are in the accepted
-   `boltz2-input-provenance.json`; model-asset digests are in the accepted
-   `boltz2-model-assets.sha256`; and runtime provenance is
+   `gpu_accounting`; the pinned source revision is in the build input
+   `upstream.json` and the accepted `boltz2-upstream.json`, while seed and
+   parameters are in the immutable `task.json`/input snapshot; consumed MSA
+   paths and hashes are in the accepted `boltz2-input-provenance.json`;
+   model-asset digests are in the accepted `boltz2-model-assets.sha256`; and
+   runtime provenance is
    `boltz2-upstream.json` (`asset_status: verified`). The accepted artifact tree
    is the evidence for the published outputs. Do not attribute facts to the
    receipt that it does not carry. Absent the required build or smoke evidence,
