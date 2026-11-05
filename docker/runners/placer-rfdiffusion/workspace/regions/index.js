@@ -62,10 +62,22 @@
 
       var fixed = []; var hotspots = []; var controller = null; var normalizationError = null;
 
+      // The contig addresses authored PDB chain/residue numbers. A pick whose
+      // authored identity cannot be expressed (insertion code, hetero residue,
+      // no chain) is refused rather than silently remapped from label numbering.
+      function selectionProblem() {
+        var picked = context.structureSelections ? context.structureSelections() : [];
+        var bad = picked.filter(function (item) {
+          return String(item.insertion_code || "").trim() || item.hetero === true || !String(item.auth_chain || "").trim();
+        });
+        return bad.length
+          ? "RFdiffusion cannot use insertion-coded, hetero, or chainless selections. Pick standard protein residues."
+          : null;
+      }
       function selections() {
         return (context.structureSelections ? context.structureSelections() : []).map(function (item) {
-          return { chain: String(item.chain || item.auth_asym_id || "A"), residue: Number(item.residue || item.auth_seq_id || item.label_seq_id) };
-        }).filter(function (item) { return Number.isInteger(item.residue); });
+          return { chain: String(item.auth_chain || ""), residue: Number(item.auth_seq_id) };
+        }).filter(function (item) { return item.chain && Number.isInteger(item.residue); });
       }
       function selectedRanges() {
         var ranges = [];
@@ -120,6 +132,8 @@
           });
       }
       function useFixed() {
+        var problem = selectionProblem();
+        if (problem) { feedback.textContent = problem; feedback.className = "rfd-feedback rfd-feedback-error"; return; }
         var ranges = selectedRanges();
         if (!ranges.length) { feedback.textContent = "Select residues in the viewer first."; feedback.className = "rfd-feedback rfd-feedback-error"; return; }
         fixed = ranges;
@@ -128,6 +142,8 @@
         context.changed(); normalize();
       }
       function useHotspots() {
+        var problem = selectionProblem();
+        if (problem) { feedback.textContent = problem; feedback.className = "rfd-feedback rfd-feedback-error"; return; }
         var picked = selections();
         if (!picked.length) { feedback.textContent = "Select residues in the viewer first."; feedback.className = "rfd-feedback rfd-feedback-error"; return; }
         hotspots = picked;
