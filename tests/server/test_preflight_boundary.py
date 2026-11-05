@@ -17,7 +17,7 @@ import pytest
 import conftest
 from conftest import _load_pssm_module, _pin_runtime_image, _test_client_auth
 from revocompute.admission import AdmissionEvidence
-from revocompute.task_types import TaskInputRole
+from revocompute.task_types import InputCapability, InputStep, TaskInputRole
 
 
 
@@ -239,6 +239,11 @@ def test_successful_preflight_never_invokes_runner_owned_workspace_code(monkeypa
     [
         ([{"auth_chain": "A", "auth_seq_id": 7, "residue_name": "ALA", "hetero": False}] * 2, 400),
         ([{"auth_chain": "A", "auth_seq_id": 7, "residue_name": "ALA", "hetero": False}], 302),
+        ([], 302),
+        ([
+            {"auth_chain": "A", "auth_seq_id": 7, "residue_name": "ALA", "hetero": False},
+            {"auth_chain": "B", "auth_seq_id": 8, "residue_name": "GLY", "hetero": False},
+        ], 302),
     ],
 )
 def test_submission_validates_authored_selection_shapes_at_workspace_boundary(
@@ -298,6 +303,47 @@ def test_submission_validates_authored_selection_shapes_at_workspace_boundary(
         assert response.status_code == 302
         assert len(calls) == 1
         assert calls[0]["selected_residues"] == residues
+
+
+def test_inspection_only_structure_submission_accepts_empty_selection(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "workspace_runner"},
+    )
+    base, runner = module.task_runtime._get_task_type("workspace_task")
+    workspace = (
+        InputStep(
+            id="structure",
+            title="Inspect structure",
+            description="",
+            capabilities=(InputCapability("structure", "structure_summary", "Inspect structure"),),
+        ),
+        InputStep(
+            id="review",
+            title="Review",
+            description="",
+            capabilities=(InputCapability("review", "submission_review", "Review"),),
+        ),
+    )
+    conftest._inject_task_type(module, replace(base, name="inspect_only", input_workspace=workspace), runner)
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_args, **_kwargs: SimpleNamespace(id="queued"))
+    pdb = Path(__file__).resolve().parents[2] / "tests" / "data" / "3fap_hf3_A_short.pdb"
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=_test_client_auth(module),
+        data={
+            "task_type": "inspect_only",
+            "workspace": json.dumps({"version": 2, "capabilities": {"structure_summary": {"selected_residues": []}}}),
+            "files": (io.BytesIO(pdb.read_bytes()), "complex.pdb"),
+            "input_roles": "structure",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302, response.get_data(as_text=True)
+    assert len(module.task_store.list_tasks()) == 1
 
 
 def test_submission_runs_runner_workspace_code_as_task_preparation(monkeypatch, tmp_path):

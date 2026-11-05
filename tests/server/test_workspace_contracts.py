@@ -16,7 +16,6 @@ def test_workspace_selection_accepts_authored_identity_with_different_viewer_num
 
 
 @pytest.mark.parametrize("value", [
-    {"selected_residues": []},
     {"selected_residues": [None]},
     selection(auth_chain=""),
     selection(auth_seq_id=True),
@@ -24,7 +23,6 @@ def test_workspace_selection_accepts_authored_identity_with_different_viewer_num
     selection(residue_name=None),
     selection(hetero="false"),
     {"selected_residues": [selection()["selected_residues"][0], selection()["selected_residues"][0]]},
-    {"selected_residues": [selection()["selected_residues"][0], {"auth_chain": "B", "auth_seq_id": 8, "residue_name": "GLY", "hetero": False}]},
 ])
 def test_workspace_selection_rejects_malformed_or_ambiguous_identity(value):
     with pytest.raises(WorkspaceValidationError):
@@ -35,3 +33,11 @@ def test_normalization_boundary_does_not_double_report_selection_identity():
     called = []
     assert normalize_capability(lambda value: called.append(value) or {"params": {}}, {"selected_residues": []}) == {"params": {}}
     assert called
+
+
+def test_workspace_selection_accepts_no_pick_and_preserves_multichain_provenance():
+    validate_selected_residues({"selected_residues": []})
+    validate_selected_residues({"selected_residues": [
+        {"auth_chain": "A", "auth_seq_id": 7, "residue_name": "ALA", "hetero": False},
+        {"auth_chain": "B", "auth_seq_id": 8, "residue_name": "GLY", "hetero": False},
+    ]})

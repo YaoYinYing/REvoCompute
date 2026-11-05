@@ -13,10 +13,9 @@ def validate_selected_residues(value: Any) -> None:
     if not isinstance(value, dict) or "selected_residues" not in value:
         return
     residues = value["selected_residues"]
-    if not isinstance(residues, list) or not residues:
-        raise WorkspaceValidationError("A molecular selection must contain at least one residue")
+    if not isinstance(residues, list):
+        raise WorkspaceValidationError("Selected residues must be a list")
     identities: set[tuple[str, int, str, str, bool]] = set()
-    chains: set[str] = set()
     for index, residue in enumerate(residues):
         if not isinstance(residue, dict):
             raise WorkspaceValidationError(f"Selected residue {index + 1} must be an object")
@@ -36,9 +35,6 @@ def validate_selected_residues(value: Any) -> None:
         if identity in identities:
             raise WorkspaceValidationError("The molecular selection contains an ambiguous duplicate residue")
         identities.add(identity)
-        chains.add(chain)
-    if len(chains) != 1:
-        raise WorkspaceValidationError("Selected residues must belong to one authored structure chain")
 
 def normalize_capability(normalizer: Callable[[Any], dict[str, Any]], value: Any) -> dict[str, Any]:
     """Invoke a trusted runner-owned normalizer."""
