@@ -23,7 +23,7 @@ import shutil
 import time
 import unicodedata
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -203,6 +203,9 @@ from revocompute.task_runtime import (
     _safe_join,
     _sanitize_task_error,
     _task_zip_path,
+    ReuseReferenceError,
+    resolve_reuse_source,
+    role_input_digest,
     stage_projection,
     build_results_archive,
     cancel_compute_resources,
@@ -1385,6 +1388,18 @@ def task_type_form(name: str):
             }
             for stage in tt.workflow
         ],
+        "execution_modes": [
+            {
+                "id": mode.id,
+                "label": mode.label,
+                "stages": list(mode.stages),
+                "output_contract": mode.output_contract,
+                "reuse": [
+                    {"port": port_ref, **spec} for port_ref, spec in mode.reuse.items()
+                ],
+            }
+            for mode in tt.execution_modes
+        ],
         "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
         "input_workspace": workspace_payload,
     }
@@ -1740,13 +1755,53 @@ def _quarantine_uploaded_inputs(
     return saved, metadata, quarantined
 
 
+def _reuse_input_refusal(
+    declared_reuse: dict[str, dict[str, Any]],
+    reuse_identity: dict[str, dict[str, Any]],
+    saved: list[dict[str, Any]],
+) -> tuple[str, str] | None:
+    """Refuse a reuse reference the submission's own inputs do not reproduce.
+
+    A reused artifact is only meaningful for the input it was prepared from, so
+    each manifest-declared input role must carry the same per-role content
+    digest as the source Task's immutable snapshot.
+    """
+    consumer: dict[str, list[dict[str, Any]]] = {}
+    for item in saved:
+        consumer.setdefault(item["role"], []).append({"sha256": item["hash"], "size": item["size"]})
+    for spec in declared_reuse.values():
+        source_inputs = (reuse_identity.get(spec["role"]) or {}).get("source_inputs") or {}
+        for input_role in spec.get("inputs", []):
+            files = consumer.get(input_role)
+            if not files:
+                return (
+                    "reuse_input_missing",
+                    f"The reused artifact was prepared from input role {input_role!r}; "
+                    f"provide that input to reuse it.",
+                )
+            if source_inputs.get(input_role) != role_input_digest(files):
+                return (
+                    "reuse_input_mismatch",
+                    f"The provided {input_role!r} input does not match the input the source Task "
+                    f"was prepared from.",
+                )
+    return None
+
+
 def _derive_task_id(
     saved: list[dict[str, Any]],
     task_type: str,
     params: dict[str, Any],
     user_storage_key: str,
+    execution_mode: str = "full",
+    reuse: dict[str, Any] | None = None,
 ) -> str:
-    """Derive the prospective Task ID after security and contract normalization."""
+    """Derive the prospective Task ID after security and contract normalization.
+
+    The execution mode is part of the identity: the same bytes submitted as
+    ``prepare_only`` and as ``full`` are different scientific requests and must
+    not deduplicate onto one Task.
+    """
     identity_inputs: dict[str, list[dict[str, str]]] = {}
     for item in saved:
         identity_inputs.setdefault(item["role"], []).append(
@@ -1756,16 +1811,19 @@ def _derive_task_id(
                 "validation_receipt": item.get("validation_receipt"),
             }
         )
-    identity = json.dumps(
-        {
-            "task_type": task_type,
-            "params": params,
-            "inputs": identity_inputs,
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    content_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    identity = {
+        "task_type": task_type,
+        "execution_mode": execution_mode,
+        "params": params,
+        "inputs": identity_inputs,
+    }
+    # Only a reference-carrying submission adds the key, so the full/prepare
+    # identities of this branch keep the exact value they had before reuse.
+    if reuse:
+        identity["reuse"] = reuse
+    content_id = hashlib.sha256(
+        json.dumps(identity, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
     return _task_id_for_upload(content_id, user_storage_key)
 
 
@@ -2198,7 +2256,13 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         if key.startswith("params[") and key.endswith("]"):
             nested_params[key[len("params[") : -1]] = value
         else:
-            form_data[key] = value
+            if key == "reuse":
+                decoded_reuse, reuse_error = parse_bounded_json(value)
+                if reuse_error is not None or not isinstance(decoded_reuse, dict):
+                    return jsonify({"error": "Reuse must be a JSON object"}), 400
+                form_data[key] = decoded_reuse
+            else:
+                form_data[key] = value
     if nested_params:
         form_data["params"] = nested_params
     if task_type_override is not None:
@@ -2240,6 +2304,56 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         tt, runner = _get_task_type(task_type)
     except KeyError:
         return jsonify({"error": f"Unknown task type: {task_type}"}), 400
+    # A mode selects a declared subset of this Task's own graph; a Task with no
+    # modes accepts only `full`. Refuse anything else before reuse resolution or
+    # task-id derivation, which folds the mode in: an ignored string must not
+    # mint a second identity from the same inputs.
+    allowed_modes = {item.id for item in tt.execution_modes} or {"full"}
+    if submission.execution_mode not in allowed_modes:
+        message = f"Task type {task_type!r} does not declare execution mode {submission.execution_mode!r}"
+        return jsonify({
+            "error": message,
+            "reason_code": "execution_mode_unknown",
+            "details": [{"code": "execution_mode_unknown", "message": message}],
+        }), 400
+    # A model-only submission names typed artifacts from a prior authorized
+    # Task.  Verify ownership, completion, port identity and artifact digest
+    # here, before any upload or allocation side effect, and freeze the result
+    # into the graph this Task will execute.
+    mode = next((item for item in tt.execution_modes if item.id == submission.execution_mode), None)
+    declared_reuse = mode.reuse if mode is not None else {}
+    provided_reuse = {str(role): ref for role, ref in submission.reuse.items()}
+    expected_roles = {spec["role"]: spec for spec in declared_reuse.values()}
+    if set(provided_reuse) != set(expected_roles):
+        missing = set(expected_roles) - set(provided_reuse)
+        reason = "reuse_reference_missing" if missing else "reuse_reference_unexpected"
+        message = "This execution mode requires exactly the declared reuse references"
+        return jsonify({"error": message, "reason_code": reason,
+                        "details": [{"code": reason, "message": message}]}), 400
+    reuse_identity: dict[str, dict[str, Any]] = {}
+    for role, spec in expected_roles.items():
+        try:
+            resolved = resolve_reuse_source(
+                provided_reuse[role],
+                user_id=int(g.current_user["id"]),
+                expected_type=spec["type"],
+                expected_task_type=tt.name,
+            )
+        except ReuseReferenceError as exc:
+            status = 403 if exc.reason == "reuse_source_not_owned" else 400
+            return jsonify({
+                "error": str(exc),
+                "reason_code": exc.reason,
+                "details": [{"code": exc.reason, "message": str(exc)}],
+            }), status
+        reuse_identity[role] = {
+            "source_task": resolved["source_task"],
+            "stage": resolved["stage"],
+            "port": resolved["port"],
+            "artifact_digest": resolved["artifact_digest"],
+            "type": resolved["type"],
+            "source_inputs": resolved["source_inputs"],
+        }
     capability_values = workspace_payload.get("capabilities", {})
     if not isinstance(capability_values, dict):
         return jsonify({"error": "Workspace capabilities must be an object"}), 400
@@ -2290,14 +2404,34 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         if enabled is False:
             return jsonify({"error": f"Task type {task_type!r} is currently disabled"}), 400
 
+    # The submission intent selects a manifest-declared subset of the same
+    # graph. Admission, GPU entitlement and placement follow the selected
+    # stages, so a preparation-only run neither needs GPU entitlement nor
+    # requires a family that only an omitted stage would execute.
+    try:
+        execution_graph = execution_graph_payload(tt, submission.execution_mode, reuse_identity)
+    except GraphValidationError as exc:
+        return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
+    selected_stage_ids = (
+        {node["id"] for node in execution_graph["document"]["nodes"]} if execution_graph is not None else set()
+    )
+    selected_stages = tuple(stage for stage in tt.workflow if stage.name in selected_stage_ids)
+    graph_requires_gpu = (
+        bool(tt.gpus)
+        if execution_graph is None
+        else any(node["requires_gpu"] for node in execution_graph["document"]["nodes"])
+    )
     # A composed Task executes every family its graph names, so the submission
     # is admitted against each referenced family, never only the composing one.
-    referenced_families: dict[str, RuntimeFamily] = {tt.runtime.name: tt.runtime}
-    for stage in tt.workflow:
+    referenced_families: dict[str, RuntimeFamily] = {}
+    if execution_graph is None or any(
+        (stage.family or tt.runtime.name) == tt.runtime.name for stage in selected_stages
+    ):
+        referenced_families[tt.runtime.name] = tt.runtime
+    for stage in selected_stages:
         family_id = stage.family or tt.runtime.name
         if family_id not in referenced_families:
             referenced_families[family_id] = get_runtime_family(family_id)
-    graph_requires_gpu = bool(tt.gpus) or any(stage.requires_gpu for stage in tt.workflow)
 
     abuse_scope = getattr(_get_user_db(), "path", "")
     checked_policies: set[str] = set()
@@ -2579,7 +2713,9 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     if graph_requires_gpu:
         _project_gpu_authorization(int(g.current_user["id"]))
     try:
-        placement = resolve_submission_placement(managedb, tt, runner)
+        placement = resolve_submission_placement(
+            managedb, replace(tt, workflow=selected_stages), runner
+        )
     except PlacementError as exc:
         logging.warning("Placement rejected submission for %s: %s", task_type, exc.reason_code)
         return jsonify({"error": "This task type cannot be placed on this deployment", "reason_code": exc.reason_code, "message": str(exc)}), 503
@@ -2589,11 +2725,19 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     resource_policy = placement.primary
     resource_policies = placement.stage_resources
 
-    try:
-        execution_graph = execution_graph_payload(tt)
-    except GraphValidationError as exc:
-        return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
-
+    required_reuse_inputs = {
+        input_role
+        for spec in expected_roles.values()
+        for input_role in spec.get("inputs", [])
+    }
+    supplied_input_roles = set(request.form.getlist("input_roles"))
+    missing_reuse_inputs = required_reuse_inputs - supplied_input_roles
+    if missing_reuse_inputs:
+        input_role = sorted(missing_reuse_inputs)[0]
+        code = "reuse_input_missing"
+        message = f"The reused artifact was prepared from input role {input_role!r}; provide that input to reuse it."
+        return jsonify({"error": message, "reason_code": code,
+                        "details": [{"code": code, "message": message}]}), 400
     uploaded_inputs, upload_error = _validate_input_uploads(task_type)
     if upload_error is not None:
         return upload_error
@@ -2603,6 +2747,15 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             uploaded_inputs,
             task_type,
         )
+        if reuse_identity:
+            refusal = _reuse_input_refusal(declared_reuse, reuse_identity, saved_inputs)
+            if refusal is not None:
+                code, message = refusal
+                return jsonify({
+                    "error": message,
+                    "reason_code": code,
+                    "details": [{"code": code, "message": message}],
+                }), 400
         if not preflight_only:
             # Task preparation only: Runner-owned workspace semantics run after
             # Core file security and contract validation, and are never part of
@@ -2623,7 +2776,9 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                         normalized,
                         {role: tuple(paths) for role, paths in input_paths.items()},
                     )
-        md5sum = _derive_task_id(saved_inputs, task_type, coerced_params, workspace_key)
+        md5sum = _derive_task_id(
+            saved_inputs, task_type, coerced_params, workspace_key, submission.execution_mode, reuse_identity
+        )
         if managedb is not None and managedb.slurm_enabled():
             readiness_service = current_app.config["infrastructure_readiness"]
             infrastructure = readiness_service.report()

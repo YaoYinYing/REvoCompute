@@ -172,6 +172,26 @@ class WorkflowStage:
 
 
 @dataclass(frozen=True)
+class ExecutionMode:
+    """One manifest-declared subset of a workflow's stages.
+
+    The mode never changes what a stage does; it selects which declared stages
+    a submission intends to run. ``stages`` are fully qualified stage names in
+    manifest order.
+    """
+
+    id: str
+    label: str
+    stages: tuple[str, ...]
+    #: Which output contract this mode must satisfy: ``full`` assesses the
+    #: Task's declared result contract; ``stages`` validates only the selected
+    #: stages' declared output ports; ``none`` publishes artifacts without a
+    #: scientific completeness claim.
+    output_contract: str = "full"
+    reuse: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ExecutionSettings:
     """How a task's work items are executed inside one allocation.
 
@@ -251,6 +271,9 @@ class TaskType:
     requires_network: bool = False
     stage_markers: dict[str, str] = field(default_factory=dict)
     workflow: tuple[WorkflowStage, ...] = ()
+    #: Manifest-declared subsets a submission may run. Empty means the whole
+    #: workflow is the only supported intent.
+    execution_modes: tuple[ExecutionMode, ...] = ()
     execution: ExecutionSettings = field(default_factory=ExecutionSettings)
     execution_queue: ExecutionQueuePolicy = field(default_factory=ExecutionQueuePolicy)
     resource_adaptation: ResourceAdaptation = field(default_factory=ResourceAdaptation)
@@ -692,6 +715,14 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 descriptor.id for descriptor in manager.workspace_plugins() if descriptor.owner == workspace_owner
             )
             task_inputs = _load_task_inputs(raw.get("inputs"), task_id)
+            workflow = _load_workflow(raw.get("workflow"), task_id, dict(raw.get("stage_markers", {})))
+            if workflow and raw.get("gpus") and not any(stage.requires_gpu for stage in workflow):
+                # A workflow's accelerator need is per stage; the task-level flag
+                # is not used for placement, so declaring it here would only be
+                # read as an admission requirement the graph cannot satisfy.
+                raise ValueError(
+                    f"Task type {task_id!r} declares gpus but no workflow stage requires one"
+                )
             task = TaskType(
                 name=task_id,
                 display_name=str(raw.get("display_name", task_id)),
@@ -703,7 +734,10 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 gpus=bool(raw.get("gpus", False)),
                 requires_network=bool(raw.get("requires_network", False)),
                 stage_markers=dict(raw.get("stage_markers", {})),
-                workflow=_load_workflow(raw.get("workflow"), task_id, dict(raw.get("stage_markers", {}))),
+                workflow=workflow,
+                execution_modes=_load_execution_modes(
+                    raw.get("execution_modes"), task_id, workflow, task_inputs
+                ),
                 execution=_load_execution(raw.get("execution"), task_id),
                 execution_queue=_load_execution_queue(raw.get("execution_queue"), task_id),
                 resource_adaptation=_load_resource_adaptation(raw.get("resource_adaptation"), task_id),
@@ -1380,6 +1414,152 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
             f"{', '.join(omitted)} is unassigned"
         )
     return tuple(stages)
+
+
+def _load_execution_modes(
+    raw: Any,
+    task_name: str,
+    workflow: tuple[WorkflowStage, ...],
+    task_inputs: tuple[Any, ...],
+) -> tuple[ExecutionMode, ...]:
+    """Load the manifest-declared execution-mode subsets of this workflow.
+
+    A mode names stages, never new behavior. ``full`` is mandatory and must
+    cover every declared stage, so a submission that omits the field keeps
+    today's meaning and no mode can quietly become the default.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(f"Task type {task_name!r} execution_modes must be a non-empty mapping")
+    ordered = tuple(stage.name for stage in workflow)
+    stages_by_name = {stage.name: stage for stage in workflow}
+    known = set(ordered)
+    modes: list[ExecutionMode] = []
+    for mode_id, entry in raw.items():
+        if (
+            not isinstance(mode_id, str)
+            or not _valid_identifier(mode_id)
+            or mode_id != mode_id.lower()
+        ):
+            # Submission normalizes the field to lowercase, so an uppercase id
+            # would be unaddressable.
+            raise ValueError(f"Task type {task_name!r} has an invalid execution mode id")
+        if not isinstance(entry, dict) or set(entry) - {"label", "stages", "output_contract", "reuse"}:
+            raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} has invalid fields")
+        output_contract = entry.get("output_contract", "full" if mode_id == "full" else None)
+        if output_contract is None:
+            # A non-full mode must state its own completeness claim. Defaulting
+            # it would let a copied mode silently drop selected-stage checks.
+            raise ValueError(
+                f"Task type {task_name!r} execution mode {mode_id!r} must declare an output_contract"
+            )
+        if output_contract not in {"full", "stages", "none"}:
+            raise ValueError(
+                f"Task type {task_name!r} execution mode {mode_id!r} has an invalid output_contract"
+            )
+        if mode_id == "full" and output_contract != "full":
+            raise ValueError(f"Task type {task_name!r} execution mode 'full' must use the full output contract")
+        label = entry.get("label", mode_id.replace("_", " ").title())
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} needs a label")
+        stages = entry.get("stages")
+        if not isinstance(stages, list) or not stages or not all(isinstance(item, str) for item in stages):
+            raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} needs a stage list")
+        selected: set[str] = set()
+        for stage in stages:
+            qualified = stage if stage in known else f"{task_name}.{stage}"
+            if qualified not in known:
+                raise ValueError(
+                    f"Task type {task_name!r} execution mode {mode_id!r} names unknown stage {stage!r}"
+                )
+            selected.add(qualified)
+        reuse_raw = entry.get("reuse", {})
+        if not isinstance(reuse_raw, dict):
+            raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} has invalid reuse")
+        reuse: dict[str, dict[str, Any]] = {}
+        roles: set[str] = set()
+        input_roles = {item.name for item in task_inputs}
+        for port_ref, spec in reuse_raw.items():
+            if (
+                not isinstance(port_ref, str)
+                or "." not in port_ref
+                or not isinstance(spec, dict)
+                or set(spec) != {"role", "type", "inputs"}
+            ):
+                raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} has invalid reuse port")
+            stage_id, port_name = port_ref.rsplit(".", 1)
+            stage_id = stage_id if stage_id in stages_by_name else f"{task_name}.{stage_id}"
+            stage = stages_by_name.get(stage_id)
+            port = next((item for item in stage.inputs if item.name == port_name), None) if stage else None
+            role, artifact_type = spec["role"], spec["type"]
+            inputs = spec["inputs"]
+            if (
+                not isinstance(inputs, list)
+                or not inputs
+                or not all(isinstance(item, str) for item in inputs)
+                or len(set(inputs)) != len(inputs)
+                or not set(inputs) <= input_roles
+            ):
+                # An artifact is only meaningful for the input it was prepared
+                # from, so every reuse entry names the task input roles the
+                # consumer's own declaration must reproduce.
+                raise ValueError(
+                    f"Task type {task_name!r} execution mode {mode_id!r} must name declared input roles "
+                    f"for reuse port {port_ref!r}"
+                )
+            if stage_id not in selected:
+                raise ValueError(
+                    f"Task type {task_name!r} execution mode {mode_id!r} reuse port {port_ref!r} "
+                    "names a stage the mode omits"
+                )
+            if not port or not port.required or port.type != artifact_type:
+                raise ValueError(
+                    f"Task type {task_name!r} execution mode {mode_id!r} "
+                    f"has incompatible reuse port {port_ref!r}"
+                )
+            # A reuse entry substitutes for a producer the mode omits. When the
+            # producer is still selected the edge binds in-graph, so the frozen
+            # reference would be demanded at submission and then never consumed.
+            source = str(port.source or "")
+            producer = source.rsplit(":", 1)[0] if ":" in source and not source.startswith("graph:") else ""
+            producer = producer if producer in stages_by_name else f"{task_name}.{producer}"
+            producer_output = source.rsplit(":", 1)[1] if producer and ":" in source else ""
+            declared_output = next(
+                (item for item in stages_by_name[producer].outputs if item.name == producer_output), None
+            ) if producer in stages_by_name else None
+            if declared_output is None or declared_output.type != artifact_type:
+                raise ValueError(
+                    f"Task type {task_name!r} execution mode {mode_id!r} reuse port {port_ref!r} "
+                    "must declare a real producer output of its type"
+                )
+            if producer in selected:
+                raise ValueError(
+                    f"Task type {task_name!r} execution mode {mode_id!r} reuse port {port_ref!r} "
+                    "must replace a producer the mode omits"
+                )
+            if not _valid_identifier(role) or role in roles:
+                raise ValueError(
+                    f"Task type {task_name!r} execution mode {mode_id!r} has invalid or duplicate reuse role"
+                )
+            roles.add(role)
+            reuse[f"{stage_id}.{port_name}"] = {"role": role, "type": artifact_type, "inputs": list(inputs)}
+        modes.append(
+            ExecutionMode(
+                mode_id,
+                label.strip(),
+                tuple(name for name in ordered if name in selected),
+                output_contract,
+                reuse,
+            )
+        )
+    by_id = {mode.id: mode for mode in modes}
+    full = by_id.get("full")
+    if full is None:
+        raise ValueError(f"Task type {task_name!r} execution_modes must declare 'full'")
+    if set(full.stages) != known:
+        raise ValueError(f"Task type {task_name!r} execution mode 'full' must select every stage")
+    return tuple(modes)
 
 
 def _load_execution(raw: Any, task_name: str) -> ExecutionSettings:

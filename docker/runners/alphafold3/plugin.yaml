@@ -8,6 +8,7 @@ runtime:
   runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
+  - common/runtime/stage_inputs.py
   - alphafold3/run.sh
   access_policy: alphafold3_noncommercial
   entrypoint:

@@ -26,6 +26,7 @@ fasta_name=${fasta_name%.*}
 features_dir="${output_dir}/${fasta_name}"
 features_path="${features_dir}/features.pkl"
 features_marker="${output_dir}/.alphafold-features-complete"
+stage_inputs_py="${ALPHAFOLD_STAGE_INPUTS_PY:-$runtime_root/common/runtime/stage_inputs.py}"
 use_gpu_relax=true
 [[ "$run_stage" == features ]] && use_gpu_relax=false
 
@@ -44,6 +45,22 @@ case "$run_stage" in
 esac
 
 if [[ "$run_stage" == model ]]; then
+  # Full mode also exports TASK_STAGE_INPUTS, but its document declares the
+  # in-graph "features" role; the reuse role is what marks MODEL_ONLY.
+  if [[ -n "${TASK_STAGE_INPUTS:-}" ]]; then
+    declared=$(python3 "$stage_inputs_py" declares "$TASK_STAGE_INPUTS" prepared_features)
+  else
+    declared=no
+  fi
+  if [[ "$declared" == yes ]]; then
+    # MODEL_ONLY: the features come from the Server's verified copy of an
+    # earlier Task's stage output, not from this Task's own tree. The staged
+    # file is re-verified, placed where run_alphafold.py --run_stage=model reads
+    # it, and the marker then authenticates those bytes.
+    mkdir -p "$features_dir"
+    python3 "$stage_inputs_py" materialize "$TASK_STAGE_INPUTS" prepared_features "$features_dir" --flat >/dev/null
+    sha256sum "$features_path" | cut -d ' ' -f 1 > "$features_marker"
+  fi
   [[ -s "$features_path" && -s "$features_marker" ]] || { echo "Validated AlphaFold features are missing" >&2; exit 1; }
   expected_features_sha=$(<"$features_marker")
   actual_features_sha=$(sha256sum "$features_path" | cut -d ' ' -f 1)

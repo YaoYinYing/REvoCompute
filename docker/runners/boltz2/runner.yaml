@@ -1,0 +1,8 @@
+mounts:
+- host_path: /mnt/db/weights/boltz2
+  container_path: /mnt/db/weights/boltz2
+  mode: ro
+env:
+  BOLTZ_ASSET_ROOT: /mnt/db/weights/boltz2
+  BOLTZ_ASSET_MANIFEST: /app/revocompute/model-assets.sha256
+max_runtime_seconds: 14400

@@ -1,0 +1,31 @@
+data_design_generated
+#
+_entry.id design_generated.cif
+#
+loop_
+_atom_site.group_PDB
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.auth_seq_id
+_atom_site.auth_comp_id
+_atom_site.auth_asym_id
+_atom_site.auth_atom_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.annotation
+ATOM N N . ALA A 1 1 . 1 ALA A N 0.000 0.000 0.000 .
+ATOM C CA . ALA A 1 1 . 1 ALA A CA 1.458 0.000 0.000 .
+ATOM C C . ALA A 1 1 . 1 ALA A C 2.009 1.420 0.000 .
+ATOM O O . ALA A 1 1 . 1 ALA A O 1.251 2.512 0.000 .
+ATOM N N . GLY A 1 2 . 2 GLY A N 3.310 1.224 0.000 .
+ATOM C CA . GLY A 1 2 . 2 GLY A CA 4.766 1.189 0.000 .
+ATOM C C . GLY A 1 2 . 2 GLY A C 5.284 2.612 0.000 .
+ATOM O O . GLY A 1 2 . 2 GLY A O 4.507 3.583 0.000 .
+#

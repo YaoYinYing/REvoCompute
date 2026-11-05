@@ -1,0 +1,44 @@
+# Dependencies of RosettaCommons/RFD4-Proteina@68058693cb88762a8aaf806571e13b291ce6318a,
+# copied from its pyproject.toml: the project dependencies plus the all-cuda12
+# extra. The pinned upstream selects cu12 with `--extra all-cuda12
+# --torch-backend cu126`; this lock uses the same profile so the CUDA 12.6 base
+# image and the compiled wheels share one CUDA minor.
+atomworks[ml,openbabel]>=3.0.4,<4
+biotite>=1.6.0
+rootutils>=1.0.7,<1.1
+hydra-core>=1.3.0,<1.4
+environs>=11.0.0,<12
+huggingface-hub>=1.0,<2
+safetensors>=0.4,<1
+wandb>=0.15.10,<1
+rich>=13.9.4
+loguru
+jaxtyping>=0.2.17,<1
+beartype>=0.18.0,<1
+torch>=2.11,<3
+lightning>=2.6.0
+peft>=0.21.2,<0.22
+einops>=0.8.0,<1
+opt_einsum>=3.4.0,<4
+numpy>=1.25.0
+scipy>=1.13.1
+pandas>=2,<3
+pyyaml>=6.0
+toolz
+fire
+networkx
+anarcii>=2.0.8,<3
+assertpy
+# all-cuda12 extra: fused cuEquivariance kernels and TMol CUDA operators.
+tmol[cu12]>=0.2.0,<0.3; sys_platform == 'linux'
+posebusters
+matplotlib
+scikit-learn
+boto3>=1.34,<2
+cuequivariance>=0.13.0,<0.14; sys_platform == 'linux'
+cuequivariance-torch>=0.13.0,<0.14; sys_platform == 'linux'
+cuequivariance-ops-cu12>=0.13.0,<0.14; sys_platform == 'linux'
+cuequivariance-ops-torch-cu12>=0.13.0,<0.14; sys_platform == 'linux'
+# Pinned build backend so the upstream wheel builds with --no-build-isolation
+# from this same hash-locked closure.
+hatchling>=1.27,<2

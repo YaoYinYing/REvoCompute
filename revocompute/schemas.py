@@ -399,12 +399,24 @@ class TaskSubmissionRequest(BaseModel):
 
     task_type: str
     params: dict[str, Any] = Field(default_factory=dict)
+    #: Which manifest-declared stage subset this submission intends to run.
+    #: ``full`` is the meaning of an absent field and is validated against the
+    #: owning Task, never against a server-side mode registry.
+    execution_mode: str = "full"
+    reuse: dict[str, dict[str, str]] = Field(default_factory=dict)
 
     @field_validator("task_type", mode="before")
     @classmethod
     def _normalize_type(cls, v: str) -> str:
         if not isinstance(v, str) or not v.strip():
             raise ValueError("task_type must not be blank")
+        return v.strip().lower()
+
+    @field_validator("execution_mode", mode="before")
+    @classmethod
+    def _normalize_mode(cls, v: str) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("execution_mode must not be blank")
         return v.strip().lower()
 
     @model_validator(mode="after")

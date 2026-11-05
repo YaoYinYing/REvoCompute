@@ -81,4 +81,12 @@ workflow:
   stage_markers:
   - inference
   - output_validation
+execution_modes:
+  full:
+    label: Full run
+    stages: [features, model]
+  prepare_only:
+    label: Preparation only
+    stages: [features]
+    output_contract: stages
 gpus: true

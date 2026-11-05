@@ -60,6 +60,21 @@ export interface WorkspaceContract {
   steps: WorkspaceStep[];
 }
 
+export interface ExecutionModeReuse {
+  port: string;
+  role: string;
+  type: string;
+  inputs: string[];
+}
+
+export interface ExecutionModeOption {
+  id: string;
+  label: string;
+  stages: string[];
+  output_contract?: "full" | "stages" | "none";
+  reuse?: ExecutionModeReuse[];
+}
+
 export interface TaskFormDefinition {
   name: string;
   display_name: string;
@@ -77,6 +92,7 @@ export interface TaskFormDefinition {
   parameters_url: string;
   inputs: TaskInputRole[];
   input_workspace: WorkspaceContract;
+  execution_modes: ExecutionModeOption[];
   params: ParameterDefinition[];
   max_request_bytes: number;
 }

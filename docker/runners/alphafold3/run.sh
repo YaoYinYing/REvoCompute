@@ -49,6 +49,7 @@ small_bfd="${ALPHAFOLD3_SMALL_BFD_PATH:-/mnt/alphafold3/reduced_bfd/bfd-first_no
 model_dir="${ALPHAFOLD3_MODEL_DIR:-/mnt/alphafold3/models}"
 af3_python="${ALPHAFOLD3_PYTHON:-/alphafold3_venv/bin/python3}"
 af3_script="${ALPHAFOLD3_SCRIPT:-/app/alphafold/run_alphafold.py}"
+stage_inputs_py="${ALPHAFOLD3_STAGE_INPUTS_PY:-$runtime_root/common/runtime/stage_inputs.py}"
 
 # AF3 launches four protein MSA searches concurrently (and three RNA searches).
 # NPROC is the total scheduler allocation, so translate it into per-process
@@ -150,8 +151,23 @@ run_features() {
 
 run_model() {
   mkdir -p "$modeling_dir"
+  local processed_json expected_hash actual_hash declared=no
+  # Full mode also exports TASK_STAGE_INPUTS, but its document declares the
+  # in-graph "features" role; the reuse role is what marks MODEL_ONLY.
+  if [[ -n "${TASK_STAGE_INPUTS:-}" ]]; then
+    declared=$("$af3_python" "$stage_inputs_py" declares "$TASK_STAGE_INPUTS" prepared_features)
+  fi
+  if [[ "$declared" == yes ]]; then
+    # MODEL_ONLY: consume the Server's verified copy of an earlier Task's
+    # processed data-pipeline JSON instead of this Task's feature tree. The
+    # staged layout (<job>/<job>_data.json) is what find_processed_json and
+    # --json_path already expect; the marker authenticates the copied bytes.
+    mkdir -p "$features_dir"
+    "$af3_python" "$stage_inputs_py" materialize "$TASK_STAGE_INPUTS" prepared_features "$features_dir" >/dev/null
+    processed_json=$(find_processed_json)
+    sha256sum "$processed_json" | cut -d ' ' -f 1 > "$feature_marker"
+  fi
   [[ -s "$feature_marker" ]] || { echo "Validated AlphaFold 3 processed JSON is missing" >&2; exit 1; }
-  local processed_json expected_hash actual_hash
   processed_json=$(find_processed_json)
   expected_hash=$(<"$feature_marker")
   actual_hash=$(sha256sum "$processed_json" | cut -d ' ' -f 1)
