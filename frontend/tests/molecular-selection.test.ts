@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { MolecularViewer, authoredResidue } from '../src/features/structure/MolecularViewer';
+import { caverParameterSelection, caverSelectionParameters } from '../src/features/create-task/input-workspace/builtins';
 
 // The residue matcher is the generic selection contract every storyboard shares.
 // These cases pin its insertion-code semantics without mounting a viewer.
@@ -83,5 +84,33 @@ describe('MolecularViewer presentation independence', () => {
     expect(camera).toEqual(snapshot);
     expect(viewer.select({ residues: [] })).toBe(true);
     expect(cleared).toBe(true);
+  });
+});
+
+
+describe('CAVER selection parameter projection', () => {
+  const picked = (overrides: Partial<import('../src/features/structure/MolecularViewer').SelectedResidue> = {}) => ({
+    chain: 'label', residue: 99, auth_chain: 'A', auth_seq_id: 7, label_seq_id: 99, residue_name: 'ALA', hetero: false, ...overrides,
+  });
+  it('writes authored residue identity and no label identity', () => {
+    expect(caverSelectionParameters([picked()]).params).toMatchObject({ start_point_mode: 'residue', start_chain: 'A', start_residue_number: '7' });
+  });
+  it('writes one ligand and a multi-residue group in the owning vocabulary', () => {
+    expect(caverSelectionParameters([picked({ hetero: true, residue_name: 'HEM' })]).params).toMatchObject({ start_point_mode: 'ligand', start_residue_name: 'HEM' });
+    expect(caverSelectionParameters([picked(), picked({ auth_seq_id: 8 })]).params).toMatchObject({ start_point_mode: 'group', start_group: 'A:7,A:8' });
+  });
+  it('refuses insertion-coded, mixed hetero, multi-chain, and empty selections', () => {
+    const cases: Array<import('../src/features/structure/MolecularViewer').SelectedResidue[]> = [
+      [picked({ insertion_code: 'A' })], [picked({ hetero: true }), picked()],
+      [picked({ auth_chain: 'A' }), picked({ auth_chain: 'B', auth_seq_id: 8 })], [],
+    ];
+    cases.forEach(residues => expect(caverSelectionParameters(residues)).toHaveProperty('error'));
+  });
+  it('projects edited canonical parameters back to authored viewer selectors', () => {
+    expect(caverParameterSelection({ start_point_mode: 'residue', start_chain: 'A', start_residue_number: '7' }).residues)
+      .toEqual([{ chain: 'A', residue: 7, numbering: 'auth_seq_id' }]);
+    expect(caverParameterSelection({ start_point_mode: 'point', start_x: '1', start_y: '2', start_z: '3' }).point)
+      .toEqual({ x: 1, y: 2, z: 3 });
+    expect(caverParameterSelection({ start_point_mode: 'group', start_group: 'A:7,A:8' }).residues).toHaveLength(2);
   });
 });

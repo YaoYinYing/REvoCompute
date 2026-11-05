@@ -16,6 +16,44 @@ export function inputByParameter(name: string): HTMLInputElement | HTMLSelectEle
   return document.querySelector(`[data-ct-parameter="${CSS.escape(name)}"]`);
 }
 
+export function caverParameterSelection(parameters: Record<string, string>) {
+  const mode = parameters.start_point_mode;
+  if (mode === 'point') {
+    const point = [parameters.start_x, parameters.start_y, parameters.start_z].map(Number);
+    return { residues: [] as import('../../structure/MolecularViewer').MolecularSelection[], point: point.every(Number.isFinite) ? { x: point[0]!, y: point[1]!, z: point[2]! } : null };
+  }
+  const chain = parameters.start_chain || undefined;
+  if (mode === 'group') {
+    const residues = (parameters.start_group || '').split(',').filter(Boolean).map(term => {
+      const match = /^(.*):(\d+)$/.exec(term);
+      return match ? { chain: match[1] === '_' ? '' : match[1], residue: Number(match[2]), numbering: 'auth_seq_id' as const } : null;
+    }).filter((item): item is NonNullable<typeof item> => item !== null);
+    return { residues, point: null };
+  }
+  if ((mode === 'residue' || mode === 'ligand') && /^-?\d+$/.test(parameters.start_residue_number || '')) {
+    return { residues: [{ chain, residue: Number(parameters.start_residue_number), numbering: 'auth_seq_id' as const }], point: null };
+  }
+  return { residues: [] as import('../../structure/MolecularViewer').MolecularSelection[], point: null };
+}
+
+export function caverSelectionParameters(residues: import('../../structure/MolecularViewer').SelectedResidue[]) {
+  if (!residues.length) return { error: 'Select one residue, multiple residues, or one ligand.' };
+  if (residues.some(item => !item.auth_chain || item.insertion_code)) return { error: 'CAVER cannot address chainless or insertion-coded selections.' };
+  if (new Set(residues.map(item => item.auth_chain)).size !== 1) return { error: 'Select residues from one authored chain.' };
+  if (residues.length === 1 && !residues[0]!.hetero) {
+    const item = residues[0]!;
+    return { params: { start_point_mode: 'residue', start_chain: item.auth_chain, start_residue_number: String(item.auth_seq_id), start_residue_name: item.residue_name, start_group: '', start_x: '', start_y: '', start_z: '' } };
+  }
+  if (residues.length === 1 && residues[0]!.hetero) {
+    const item = residues[0]!;
+    return { params: { start_point_mode: 'ligand', start_chain: item.auth_chain, start_residue_number: String(item.auth_seq_id), start_residue_name: item.residue_name, start_group: '', start_x: '', start_y: '', start_z: '' } };
+  }
+  if (residues.length > 1 && residues.every(item => !item.hetero)) {
+    return { params: { start_point_mode: 'group', start_chain: residues[0]!.auth_chain, start_residue_number: '', start_residue_name: '', start_group: residues.map(item => `${item.auth_chain}:${item.auth_seq_id}`).join(','), start_x: '', start_y: '', start_z: '' } };
+  }
+  return { error: 'Select multiple non-hetero residues for a group, or one hetero residue for a ligand.' };
+}
+
 function renderParameter(parameter: ParameterDefinition, context: WorkspaceContext): HTMLElement {
   const field = element('div', 'ct-parameter');
   const heading = element('div', 'ct-parameter-heading');
@@ -257,7 +295,7 @@ const structurePlugin: WorkspacePlugin = {
     const status = element('p', 'ct-help', prompt);
     const host = element('div', 'ct-structure-viewer'); host.hidden = true; target.append(status, host);
     let generation = 0; let viewer: Awaited<ReturnType<(typeof import('../../structure/MolecularViewer'))['MolecularViewer']['mount']>> | null = null; let removeListener: (() => void) | null = null;
-    let selectedFile: File | null = null; let queue = Promise.resolve();
+    let selectedFile: File | null = null; let queue = Promise.resolve(); let selectionError: string | null = null;
     const render = async (current: number, file: File | null) => {
       if (generation !== current) return;
       context.setStructureSelections([]);
@@ -273,25 +311,11 @@ const structurePlugin: WorkspacePlugin = {
           viewer = mounted;
           if (selectable) removeListener = mounted.onSelectionChanged(residues => {
             context.setStructureSelections(residues);
-            const names = new Set(context.form.params.map(parameter => parameter.name));
-            if (names.has('start_point_mode')) {
-              if (!residues.length) return context.changed();
-              const chains = new Set(residues.map(item => item.auth_chain));
-              const mode = residues.length > 1 ? 'group' : residues[0]!.hetero ? 'ligand' : 'residue';
-              const supported = residues.every(item => !item.insertion_code && !item.hetero === (mode !== 'ligand')) && chains.size === 1 && [...chains][0] !== '';
-              if (supported) {
-                context.setParameter('start_point_mode', mode);
-                context.setParameter('start_chain', residues[0]!.auth_chain);
-                if (mode === 'residue') {
-                  context.setParameter('start_residue_number', String(residues[0]!.auth_seq_id));
-                  context.setParameter('start_residue_name', residues[0]!.residue_name);
-                } else if (mode === 'ligand') {
-                  context.setParameter('start_residue_number', String(residues[0]!.auth_seq_id));
-                  context.setParameter('start_residue_name', residues[0]!.residue_name);
-                } else {
-                  context.setParameter('start_group', residues.map(item => `${item.auth_chain}:${item.auth_seq_id}`).join(','));
-                }
-              }
+            if (context.form.params.some(parameter => parameter.name === 'start_point_mode')) {
+              const mapped = caverSelectionParameters(residues);
+              if (!('params' in mapped) || !mapped.params) { selectionError = 'error' in mapped ? mapped.error || 'Unsupported selection.' : 'Unsupported selection.'; status.textContent = selectionError; context.changed(); return; }
+              selectionError = null; status.textContent = prompt;
+              Object.entries(mapped.params).forEach(([name, value]) => context.setParameter(name, value));
             }
             context.changed();
           });
@@ -304,7 +328,15 @@ const structurePlugin: WorkspacePlugin = {
     };
     const refresh = (): Promise<void> => {
       const role = typeof definition.options.role === 'string' ? definition.options.role : undefined; const file = context.structureFile(role);
-      if (file === selectedFile) return queue;
+      if (file === selectedFile) {
+        const selection = caverParameterSelection(context.parameters());
+        if (viewer) {
+          viewer.select(selection.residues.length > 1 ? { residues: selection.residues } : selection.residues[0] || { residues: [] });
+          viewer.annotate(selection.point ? { point: selection.point, label: 'Manual start point' } : null);
+          if (selection.residues.length) viewer.focus(selection.residues.length > 1 ? { residues: selection.residues } : selection.residues[0]!);
+        }
+        return queue;
+      }
       selectedFile = file; const current = ++generation;
       queue = queue.catch(() => undefined).then(() => render(current, file));
       return queue;
@@ -318,7 +350,7 @@ const structurePlugin: WorkspacePlugin = {
       residue_name: item.residue_name,
       hetero: item.hetero,
     });
-    return { refresh, readValue: () => ({ selected_residues: context.structureSelections().map(authored) }), summarize: () => context.structureSelections().length ? { label: t('ct.summary.selection'), value: t('ct.sequence.residues', { count: context.structureSelections().length }) } : null, destroy: () => { generation++; selectedFile = null; removeListener?.(); removeListener = null; viewer?.dispose(); viewer = null; } };
+    return { refresh, validate: () => selectionError, readValue: () => ({ selected_residues: context.structureSelections().map(authored) }), summarize: () => context.structureSelections().length ? { label: t('ct.summary.selection'), value: t('ct.sequence.residues', { count: context.structureSelections().length }) } : null, destroy: () => { generation++; selectedFile = null; removeListener?.(); removeListener = null; viewer?.dispose(); viewer = null; } };
   },
 };
 
