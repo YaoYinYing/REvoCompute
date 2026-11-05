@@ -541,7 +541,11 @@ def test_model_only_dispatch_materializes_the_source_and_opens_no_producer_attem
         "stage_input_runner-model": str(tmp_path / "workspace" / "stage_inputs" / "stage_input_runner.model")
     }
     document = json.loads((Path(staged["stage_input_runner-model"]) / STAGE_INPUTS_DOCUMENT_NAME).read_text())
-    entry = document["inputs"]["features"]
+    # The declared reuse role, not the consumer input role it fills, keys the
+    # document: that is the name the Runner probes for.
+    entry = document["inputs"]["prepared_features"]
+    assert "features" not in document["inputs"]
+    assert (Path(staged["stage_input_runner-model"]) / "prepared_features").is_dir()
     assert entry["source_task"] == source_id
     assert entry["source_stage"] == "stage_input_runner.features"
     assert entry["files"][0]["sha256"] == hashlib.sha256(b"features").hexdigest()

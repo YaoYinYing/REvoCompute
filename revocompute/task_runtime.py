@@ -2389,6 +2389,11 @@ def _materialize_stage_inputs(
     layout below the port's static prefix preserved, and the document names that
     directory plus every file's verified digest.  A role of exactly one file
     names the file itself, which is what a single-artifact consumer resolves.
+
+    A cross-Task artifact is keyed by the manifest-declared reuse role, not by
+    the consumer input role it fills: that declared role is the contract the
+    Runner probes for, and the two names differ whenever a mode reuses an
+    artifact in place of an omitted producer.
     """
     entries: dict[str, dict[str, Any]] = {}
     total_bytes = 0
@@ -2463,7 +2468,7 @@ def _materialize_stage_inputs(
                 }
         # Cross-Task reuse: the frozen source identity is re-verified against the
         # source Task and its latest COMPLETED attempt before any byte is copied.
-        for role, reuse_role in sorted(_reuse_bindings(node).items()):
+        for _input_role, reuse_role in sorted(_reuse_bindings(node).items()):
             frozen = (reuse or {}).get(reuse_role)
             if not isinstance(frozen, dict) or consumer_owner_id is None:
                 return "stage_input_unavailable"
@@ -2482,7 +2487,7 @@ def _materialize_stage_inputs(
             except (TypeError, ValueError):
                 return "stage_input_unavailable"
             prefix = _static_prefix(resolved["port_path"] or "")
-            role_dir = os.path.join(stage_inputs_dir, role)
+            role_dir = os.path.join(stage_inputs_dir, reuse_role)
             staged = []
             with _ResultTreeWalker(source_root) as source_walker:
                 for item in resolved["files"]:
@@ -2503,13 +2508,13 @@ def _materialize_stage_inputs(
                         verified.handle.close()
                     total_bytes += verified.size
                     staged.append({
-                        "path": "/".join((STAGE_INPUTS_CONTAINER_DIR, role, *(relative or parts[-1:]))),
+                        "path": "/".join((STAGE_INPUTS_CONTAINER_DIR, reuse_role, *(relative or parts[-1:]))),
                         "source_path": "/".join(parts),
                         "sha256": verified.digest,
                         "size": verified.size,
                     })
-            entries[role] = {
-                "path": staged[0]["path"] if len(staged) == 1 else "/".join((STAGE_INPUTS_CONTAINER_DIR, role)),
+            entries[reuse_role] = {
+                "path": staged[0]["path"] if len(staged) == 1 else "/".join((STAGE_INPUTS_CONTAINER_DIR, reuse_role)),
                 "files": staged,
                 "producer": resolved["stage"],
                 "producer_attempt": resolved["attempt"],

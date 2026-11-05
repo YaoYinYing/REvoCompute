@@ -5,12 +5,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from functools import partial
 from pathlib import Path
 
 from runner_protocol import ROOT, run_with_manifest
+from stage_input_contract import write_server_reuse_document
 
 ALPHAFOLD_RUNNER_SCRIPT = ROOT / "docker/runners/alphafold/run.sh"
 SERVER_ROOT = ROOT
@@ -197,34 +197,12 @@ def _calls(env):
     return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 
 
-def _staged_features_document(tmp_path, content=b"STAGED-FEATURES\n", *, role="prepared_features", sha256=None):
-    """A Server-shaped document for the AF2 ``model.features`` reuse role."""
-    artifact = tmp_path / "stage_inputs" / role / "source_job" / "features.pkl"
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_bytes(content)
-    document = tmp_path / "stage_inputs" / "stage_inputs.json"
-    document.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "stage": "model",
-                "inputs": {
-                    role: {
-                        "path": str(artifact),
-                        "files": [{
-                            "path": str(artifact),
-                            "sha256": sha256 or hashlib.sha256(content).hexdigest(),
-                            "size": len(content),
-                        }],
-                        "producer": "features",
-                        "producer_attempt": 1,
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
+def _staged_features_document(tmp_path, monkeypatch, content=b"STAGED-FEATURES\n", *, role="prepared_features"):
+    """The document the Server's reuse path writes for the AF2 model input."""
+    return write_server_reuse_document(
+        tmp_path, monkeypatch, stage="alphafold.features", role=role,
+        port_path="*/features.pkl", relative=("source_job", "features.pkl"), content=content,
     )
-    return document, artifact
 
 
 def _stage_inputs_env(env, document):
@@ -235,9 +213,9 @@ def _stage_inputs_env(env, document):
     return env
 
 
-def test_alphafold_model_stage_models_the_verified_staged_features(tmp_path):
+def test_alphafold_model_stage_models_the_verified_staged_features(tmp_path, monkeypatch):
     env, input_file, output_dir = _retry_env(tmp_path)
-    document, staged = _staged_features_document(tmp_path)
+    document, staged = _staged_features_document(tmp_path, monkeypatch)
     _stage_inputs_env(env, document)
 
     model = _run_af2_stage(env, input_file, output_dir, "model")
@@ -252,9 +230,9 @@ def test_alphafold_model_stage_models_the_verified_staged_features(tmp_path):
     assert (output_dir / "task_finished").is_file()
 
 
-def test_alphafold_model_stage_refuses_staged_features_that_changed(tmp_path):
+def test_alphafold_model_stage_refuses_staged_features_that_changed(tmp_path, monkeypatch):
     env, input_file, output_dir = _retry_env(tmp_path)
-    document, staged = _staged_features_document(tmp_path)
+    document, staged = _staged_features_document(tmp_path, monkeypatch)
     staged.write_bytes(b"STAGED-FEATUREX\n")
     _stage_inputs_env(env, document)
 
@@ -267,12 +245,12 @@ def test_alphafold_model_stage_refuses_staged_features_that_changed(tmp_path):
     assert _calls(env) == []
 
 
-def test_alphafold_model_stage_ignores_a_document_without_the_reuse_role(tmp_path):
+def test_alphafold_model_stage_ignores_a_document_without_the_reuse_role(tmp_path, monkeypatch):
     # A full-mode model stage exports a document for its in-graph "features"
     # role. Only the reuse role selects the staged artifact; without it the
     # attempt still requires this Task's own validated feature tree.
     env, input_file, output_dir = _retry_env(tmp_path)
-    document, _ = _staged_features_document(tmp_path, role="features")
+    document, _ = _staged_features_document(tmp_path, monkeypatch, role="features")
     _stage_inputs_env(env, document)
 
     model = _run_af2_stage(env, input_file, output_dir, "model")
@@ -283,9 +261,9 @@ def test_alphafold_model_stage_ignores_a_document_without_the_reuse_role(tmp_pat
     assert _calls(env) == []
 
 
-def test_alphafold_full_mode_still_recomputes_its_own_features(tmp_path):
+def test_alphafold_full_mode_still_recomputes_its_own_features(tmp_path, monkeypatch):
     env, input_file, output_dir = _retry_env(tmp_path)
-    document, staged = _staged_features_document(tmp_path, content=b"OTHER-TASK-FEATURES\n")
+    document, staged = _staged_features_document(tmp_path, monkeypatch, content=b"OTHER-TASK-FEATURES\n")
     _stage_inputs_env(env, document)
 
     full = _run_af2_stage(env, input_file, output_dir, "all")

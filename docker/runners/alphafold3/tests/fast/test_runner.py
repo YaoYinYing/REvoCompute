@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from revocompute.task_types import get, isolated_discovery
+from stage_input_contract import write_server_reuse_document
 
 ROOT = Path(__file__).resolve().parents[5]
 RUNNER = ROOT / "docker/runners/alphafold3/run.sh"
@@ -201,35 +202,13 @@ def test_model_stage_recomputes_instead_of_reusing_finished_outputs(tmp_path):
 
 
 def _staged_processed_document(
-    tmp_path: Path, content: bytes = b'{"name": "Test Job"}', *, role: str = "prepared_features"
+    tmp_path: Path, monkeypatch, content: bytes = b'{"name": "Test Job"}', *, role: str = "prepared_features"
 ):
-    """A Server-shaped document for the AF3 ``model.features`` reuse role."""
-    artifact = tmp_path / "stage_inputs" / role / "test_job" / "test_job_data.json"
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_bytes(content)
-    document = tmp_path / "stage_inputs" / "stage_inputs.json"
-    document.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "stage": "model",
-                "inputs": {
-                    role: {
-                        "path": str(artifact),
-                        "files": [{
-                            "path": str(artifact),
-                            "sha256": hashlib.sha256(content).hexdigest(),
-                            "size": len(content),
-                        }],
-                        "producer": "features",
-                        "producer_attempt": 1,
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
+    """The document the Server's reuse path writes for the AF3 model input."""
+    return write_server_reuse_document(
+        tmp_path, monkeypatch, stage="alphafold3.features", role=role,
+        port_path="features/*/*_data.json", relative=("test_job", "test_job_data.json"), content=content,
     )
-    return document, artifact
 
 
 def _stage_inputs_env(env: dict[str, str], document: Path) -> dict[str, str]:
@@ -240,10 +219,10 @@ def _stage_inputs_env(env: dict[str, str], document: Path) -> dict[str, str]:
     return env
 
 
-def test_model_stage_models_the_verified_staged_processed_json(tmp_path):
+def test_model_stage_models_the_verified_staged_processed_json(tmp_path, monkeypatch):
     env, manifest, call_log = _runner_env(tmp_path)
     output = tmp_path / "result"
-    document, staged = _staged_processed_document(tmp_path)
+    document, staged = _staged_processed_document(tmp_path, monkeypatch)
     _stage_inputs_env(env, document)
 
     model = _run_stage(env, manifest, output, "model")
@@ -260,10 +239,10 @@ def test_model_stage_models_the_verified_staged_processed_json(tmp_path):
     assert (output / "task_finished").is_file()
 
 
-def test_model_stage_refuses_staged_processed_json_that_changed(tmp_path):
+def test_model_stage_refuses_staged_processed_json_that_changed(tmp_path, monkeypatch):
     env, manifest, call_log = _runner_env(tmp_path)
     output = tmp_path / "result"
-    document, staged = _staged_processed_document(tmp_path)
+    document, staged = _staged_processed_document(tmp_path, monkeypatch)
     staged.write_bytes(b'{"name": "Test Jab"}')
     _stage_inputs_env(env, document)
 
@@ -276,13 +255,13 @@ def test_model_stage_refuses_staged_processed_json_that_changed(tmp_path):
     assert not call_log.exists()
 
 
-def test_model_stage_ignores_a_document_without_the_reuse_role(tmp_path):
+def test_model_stage_ignores_a_document_without_the_reuse_role(tmp_path, monkeypatch):
     # A full-mode model stage exports a document for its in-graph "features"
     # role. Only the reuse role selects the staged artifact; without it the
     # attempt still requires this Task's own validated feature tree.
     env, manifest, call_log = _runner_env(tmp_path)
     output = tmp_path / "result"
-    document, _ = _staged_processed_document(tmp_path, role="features")
+    document, _ = _staged_processed_document(tmp_path, monkeypatch, role="features")
     _stage_inputs_env(env, document)
 
     model = _run_stage(env, manifest, output, "model")
@@ -293,10 +272,10 @@ def test_model_stage_ignores_a_document_without_the_reuse_role(tmp_path):
     assert not (output / "task_finished").exists()
 
 
-def test_full_mode_ignores_a_staged_reuse_document(tmp_path):
+def test_full_mode_ignores_a_staged_reuse_document(tmp_path, monkeypatch):
     env, manifest, call_log = _runner_env(tmp_path)
     output = tmp_path / "result"
-    document, staged = _staged_processed_document(tmp_path, content=b'{"name": "Other Task"}', role="features")
+    document, staged = _staged_processed_document(tmp_path, monkeypatch, content=b'{"name": "Other Task"}', role="features")
     _stage_inputs_env(env, document)
 
     full = _run_stage(env, manifest, output, "all")
