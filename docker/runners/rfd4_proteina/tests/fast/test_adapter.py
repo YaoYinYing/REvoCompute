@@ -23,6 +23,7 @@ def test_hydra_command_uses_pinned_option_names(tmp_path):
         'rfd4-generate', f'inputs={tmp_path / "in"}', f'out_dir={tmp_path / "out"}',
         'num_replicates=2', 'seed=7', 'generation.args.nsteps=60',
         'hardware.accelerator=gpu', 'skip_existing=false', 'metrics_tags=[]',
+        'compress_outputs=false',
         f'hf_ckpt_path={weights}', f'hydra.run.dir={tmp_path / "out" / "hydra"}',
     ]
     assert not any(arg.startswith('--') for arg in argv)
@@ -136,10 +137,12 @@ def test_condition_spec_refuses_unsupported_directives_and_shell_text(tmp_path):
     for body in [
         'design:\n  contig: "A1-4"\n  conditions: {C_CRD: {true: [{select: "$HOME"}]}}\n',
         'design:\n  contig: "A1-4; touch /tmp/x"\n  conditions: {C_CRD: {true: []}}\n',
+        'design:\n  contig: "A1-4, /1"\n  conditions: {C_CRD: {true: []}}\n',
         'design:\n  contig: "A1-4"\n  conditions: {C_CRD: {true: []}}\n  shell: "rm -rf /"\n',
         'design:\n  contig: "A1-4"\n  input_as_annotated_cif: /etc/passwd\n  conditions: {C_CRD: {true: []}}\n',
         'global_args: {shell: x}\ndesign: {}\n',
         'design:\n  contig: "A1-4"\n  conditions: {C_FAKE: {true: []}}\n',
+        'design:\n  conditions: {null: {true: []}}\n',
     ]:
         path = tmp_path / 'bad.yaml'
         path.write_text(body, encoding='utf-8')

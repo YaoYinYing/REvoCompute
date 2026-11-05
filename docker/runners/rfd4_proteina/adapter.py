@@ -15,7 +15,7 @@ from typing import Any
 
 WEIGHTS = Path('/mnt/db/weights/rfd4-proteina')
 CONTIG_TOKEN = re.compile(
-    r'(?:/\d+|\d+(?:-\d+)?[PRD]?|[A-Za-z][A-Za-z0-9]*(?::\d+(?:-\d+)?[PRD]?|\d+(?:-\d+)?))\Z'
+    r'(?:/0|\d+(?:-\d+)?[PRD]?|[A-Za-z][A-Za-z0-9]*(?::\d+(?:-\d+)?[PRD]?|\d+(?:-\d+)?))\Z'
 )
 SPEC_KEYS = {'input', 'input_as_annotated_cif', 'contig', 'conditions'}
 CONDITION_KEYS = {
@@ -162,7 +162,7 @@ def build_command(input_path: Path, output: Path, num_designs: int, steps: int, 
         'rfd4-generate', f'inputs={input_path}', f'out_dir={output}',
         f'num_replicates={num_designs}', f'seed={seed}',
         f'generation.args.nsteps={steps}', 'hardware.accelerator=gpu',
-        'skip_existing=false', 'metrics_tags=[]',
+        'skip_existing=false', 'metrics_tags=[]', 'compress_outputs=false',
         f'hf_ckpt_path={weights}', f'hydra.run.dir={output / "hydra"}',
     ]
 

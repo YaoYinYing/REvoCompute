@@ -11,7 +11,7 @@ considerations:
 - Accepted YAML/JSON grammar is named designs with optional `contig`, `conditions`, and `input_as_annotated_cif`, plus top-level `global_args` defaults. Condition aliases are C_CRD, C_SEQ, C_HOT, C_RAS, C_HB, C_PISTACK, C_PICATION, C_CATH, C_CENTROID, C_IDX, C_CRDGRP, and C_SEQ_PROB_<TOKEN>; full annotation names and two-body conditions are not accepted.
 - Each named design is replicated num_designs times, so a specification with N named designs produces N x num_designs candidate CIFs.
 - This Task defaults to 200 diffusion steps (upstream default 60) and seed 0 (upstream default random).
-- Motif positions and contig grammar are validated before invoking the upstream program.
+- Contig and condition grammar are refused before invoking the upstream program; motif positions and condition satisfaction are validated by upstream against the scaffold.
 - Model assets are provisioned separately at /mnt/db/weights/rfd4-proteina; the Task fails closed when they are missing.
 inputs:
   condition:
