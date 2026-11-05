@@ -64,6 +64,7 @@ export interface ExecutionModeReuse {
   port: string;
   role: string;
   type: string;
+  inputs: string[];
 }
 
 export interface ExecutionModeOption {

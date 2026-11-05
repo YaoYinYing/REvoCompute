@@ -188,7 +188,7 @@ class ExecutionMode:
     #: stages' declared output ports; ``none`` publishes artifacts without a
     #: scientific completeness claim.
     output_contract: str = "full"
-    reuse: dict[str, dict[str, str]] = field(default_factory=dict)
+    reuse: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -729,7 +729,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 stage_markers=dict(raw.get("stage_markers", {})),
                 workflow=workflow,
                 execution_modes=_load_execution_modes(
-                    raw.get("execution_modes"), task_id, workflow
+                    raw.get("execution_modes"), task_id, workflow, task_inputs
                 ),
                 execution=_load_execution(raw.get("execution"), task_id),
                 execution_queue=_load_execution_queue(raw.get("execution_queue"), task_id),
@@ -1410,7 +1410,10 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
 
 
 def _load_execution_modes(
-    raw: Any, task_name: str, workflow: tuple[WorkflowStage, ...]
+    raw: Any,
+    task_name: str,
+    workflow: tuple[WorkflowStage, ...],
+    task_inputs: tuple[Any, ...],
 ) -> tuple[ExecutionMode, ...]:
     """Load the manifest-declared execution-mode subsets of this workflow.
 
@@ -1461,14 +1464,15 @@ def _load_execution_modes(
         reuse_raw = entry.get("reuse", {})
         if not isinstance(reuse_raw, dict):
             raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} has invalid reuse")
-        reuse: dict[str, dict[str, str]] = {}
+        reuse: dict[str, dict[str, Any]] = {}
         roles: set[str] = set()
+        input_roles = {item.name for item in task_inputs}
         for port_ref, spec in reuse_raw.items():
             if (
                 not isinstance(port_ref, str)
                 or "." not in port_ref
                 or not isinstance(spec, dict)
-                or set(spec) != {"role", "type"}
+                or set(spec) != {"role", "type", "inputs"}
             ):
                 raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} has invalid reuse port")
             stage_id, port_name = port_ref.rsplit(".", 1)
@@ -1476,6 +1480,21 @@ def _load_execution_modes(
             stage = stages_by_name.get(stage_id)
             port = next((item for item in stage.inputs if item.name == port_name), None) if stage else None
             role, artifact_type = spec["role"], spec["type"]
+            inputs = spec["inputs"]
+            if (
+                not isinstance(inputs, list)
+                or not inputs
+                or not all(isinstance(item, str) for item in inputs)
+                or len(set(inputs)) != len(inputs)
+                or not set(inputs) <= input_roles
+            ):
+                # An artifact is only meaningful for the input it was prepared
+                # from, so every reuse entry names the task input roles the
+                # consumer's own declaration must reproduce.
+                raise ValueError(
+                    f"Task type {task_name!r} execution mode {mode_id!r} must name declared input roles "
+                    f"for reuse port {port_ref!r}"
+                )
             if stage_id not in selected:
                 raise ValueError(
                     f"Task type {task_name!r} execution mode {mode_id!r} reuse port {port_ref!r} "
@@ -1491,7 +1510,7 @@ def _load_execution_modes(
                     f"Task type {task_name!r} execution mode {mode_id!r} has invalid or duplicate reuse role"
                 )
             roles.add(role)
-            reuse[f"{stage_id}.{port_name}"] = {"role": role, "type": artifact_type}
+            reuse[f"{stage_id}.{port_name}"] = {"role": role, "type": artifact_type, "inputs": list(inputs)}
         modes.append(
             ExecutionMode(
                 mode_id,

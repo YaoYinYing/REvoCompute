@@ -359,7 +359,8 @@ def load_validation_identity(
                         "stages": tuple(mode.stages),
                         "output_contract": mode.output_contract,
                         "reuse": sorted(
-                            (port_ref, spec["role"], spec["type"]) for port_ref, spec in mode.reuse.items()
+                            (port_ref, spec["role"], spec["type"], tuple(spec.get("inputs", ())))
+                            for port_ref, spec in mode.reuse.items()
                         ),
                     }
                     for mode in task_type.execution_modes

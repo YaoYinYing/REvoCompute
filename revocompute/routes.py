@@ -205,6 +205,7 @@ from revocompute.task_runtime import (
     _task_zip_path,
     ReuseReferenceError,
     resolve_reuse_source,
+    role_input_digest,
     stage_projection,
     build_results_archive,
     cancel_compute_resources,
@@ -1749,6 +1750,39 @@ def _quarantine_uploaded_inputs(
     return saved, metadata, quarantined
 
 
+def _reuse_input_refusal(
+    declared_reuse: dict[str, dict[str, Any]],
+    reuse_identity: dict[str, dict[str, Any]],
+    saved: list[dict[str, Any]],
+) -> tuple[str, str] | None:
+    """Refuse a reuse reference the submission's own inputs do not reproduce.
+
+    A reused artifact is only meaningful for the input it was prepared from, so
+    each manifest-declared input role must carry the same per-role content
+    digest as the source Task's immutable snapshot.
+    """
+    consumer: dict[str, list[dict[str, Any]]] = {}
+    for item in saved:
+        consumer.setdefault(item["role"], []).append({"sha256": item["hash"], "size": item["size"]})
+    for spec in declared_reuse.values():
+        source_inputs = (reuse_identity.get(spec["role"]) or {}).get("source_inputs") or {}
+        for input_role in spec.get("inputs", []):
+            files = consumer.get(input_role)
+            if not files:
+                return (
+                    "reuse_input_missing",
+                    f"The reused artifact was prepared from input role {input_role!r}; "
+                    f"provide that input to reuse it.",
+                )
+            if source_inputs.get(input_role) != role_input_digest(files):
+                return (
+                    "reuse_input_mismatch",
+                    f"The provided {input_role!r} input does not match the input the source Task "
+                    f"was prepared from.",
+                )
+    return None
+
+
 def _derive_task_id(
     saved: list[dict[str, Any]],
     task_type: str,
@@ -2301,6 +2335,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             "port": resolved["port"],
             "artifact_digest": resolved["artifact_digest"],
             "type": resolved["type"],
+            "source_inputs": resolved["source_inputs"],
         }
     capability_values = workspace_payload.get("capabilities", {})
     if not isinstance(capability_values, dict):
@@ -2668,6 +2703,19 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     resource_policy = placement.primary
     resource_policies = placement.stage_resources
 
+    required_reuse_inputs = {
+        input_role
+        for spec in expected_roles.values()
+        for input_role in spec.get("inputs", [])
+    }
+    supplied_input_roles = set(request.form.getlist("input_roles"))
+    missing_reuse_inputs = required_reuse_inputs - supplied_input_roles
+    if missing_reuse_inputs:
+        input_role = sorted(missing_reuse_inputs)[0]
+        code = "reuse_input_missing"
+        message = f"The reused artifact was prepared from input role {input_role!r}; provide that input to reuse it."
+        return jsonify({"error": message, "reason_code": code,
+                        "details": [{"code": code, "message": message}]}), 400
     uploaded_inputs, upload_error = _validate_input_uploads(task_type)
     if upload_error is not None:
         return upload_error
@@ -2677,6 +2725,15 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             uploaded_inputs,
             task_type,
         )
+        if reuse_identity:
+            refusal = _reuse_input_refusal(declared_reuse, reuse_identity, saved_inputs)
+            if refusal is not None:
+                code, message = refusal
+                return jsonify({
+                    "error": message,
+                    "reason_code": code,
+                    "details": [{"code": code, "message": message}],
+                }), 400
         if not preflight_only:
             # Task preparation only: Runner-owned workspace semantics run after
             # Core file security and contract validation, and are never part of

@@ -479,7 +479,9 @@ def _staged_reuse_app(monkeypatch, tmp_path):
             ExecutionMode("full", "Full run", ("multistage_runner.features", "multistage_runner.model")),
             ExecutionMode("prepare_only", "Preparation only", ("multistage_runner.features",), "stages"),
             ExecutionMode("model_only", "Model from prepared features", ("multistage_runner.model",), "full",
-                          {"multistage_runner.model.features": {"role": "prepared_features", "type": "features"}}),
+                          {"multistage_runner.model.features": {
+                              "role": "prepared_features", "type": "features", "inputs": ["sequence"],
+                          }}),
         ),
     )
     routes_globals = conftest._routes_globals(module)
@@ -494,9 +496,18 @@ def _completed_features_source(module, task_type, *, owner="tester", status="fin
     result_dir = Path(module.task_runtime.CONFIG.results_folder) / f"src_{md5sum}"
     result_dir.mkdir(parents=True, exist_ok=True)
     (result_dir / "features.dat").write_text("prepared features", encoding="utf-8")
+    input_path = result_dir / "input.fasta"
+    fixture = Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta"
+    input_content = fixture.read_bytes()
+    input_path.write_bytes(input_content)
+    input_form = json.dumps({"entities": [{
+        "type": "file", "role": "sequence", "relative_path": "input.fasta",
+        "hash": hashlib.sha256(input_content).hexdigest(), "size": len(input_content),
+    }]})
     _upsert_task_for_user(
-        module, md5sum, filename="input.fasta", file_path=result_dir / "input.fasta",
+        module, md5sum, filename="input.fasta", file_path=input_path,
         result_dir=result_dir, username=owner, status="running", task_type=task_type.name,
+        input_form=input_form,
     )
     attempt = module.task_store.begin_stage_attempt(
         task_id=md5sum, stage_index=1, stage_name="multistage_runner.features",
@@ -516,8 +527,8 @@ def _completed_features_source(module, task_type, *, owner="tester", status="fin
     return md5sum, {"source_task": md5sum, "stage": "multistage_runner.features", "port": "features", "digest": digest}
 
 
-def _post_model_only(module, client, auth_header, reuse=None, *, upload=True):
-    fasta_path = Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta"
+def _post_model_only(module, client, auth_header, reuse=None, *, upload=True, input_path=None):
+    fasta_path = input_path or Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta"
     data = {"task_type": "multistage_runner", "execution_mode": "model_only"}
     if reuse is not None:
         data["reuse"] = json.dumps(reuse)
@@ -552,6 +563,10 @@ def test_model_only_submission_validates_reuse_and_freezes_the_source_identity(m
     entry = frozen["document"]["reuse_inputs"]["prepared_features"]
     assert entry["source"]["source_task"] == source_id
     assert entry["source"]["artifact_digest"] == reference["digest"]
+    assert entry["source"]["source_inputs"]["sequence"] == module.task_runtime.role_input_digest([{
+        "sha256": hashlib.sha256((Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta").read_bytes()).hexdigest(),
+        "size": (Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta").stat().st_size,
+    }])
     # The producing Task is untouched: reuse is a provenance edge, not a mutation.
     assert module.task_store.get_task(source_id)["status"] == "finished"
     # The Task Type projection tells the Create-Task surface which typed
@@ -560,8 +575,45 @@ def test_model_only_submission_validates_reuse_and_freezes_the_source_identity(m
     mode_projection = next(item for item in projection["execution_modes"] if item["id"] == "model_only")
     assert mode_projection["output_contract"] == "full"
     assert mode_projection["reuse"] == [
-        {"port": "multistage_runner.model.features", "role": "prepared_features", "type": "features"}
+        {"port": "multistage_runner.model.features", "role": "prepared_features", "type": "features",
+         "inputs": ["sequence"]}
     ]
+
+
+def test_model_only_refuses_a_valid_artifact_prepared_from_a_different_uploaded_sequence(monkeypatch, tmp_path):
+    module, task_type = _staged_reuse_app(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    module.app.config["user_db"].update_user(
+        module.app.config["user_db"].get_user_by_username("tester")["id"], allow_gpu_use=True
+    )
+    _source_id, reference = _completed_features_source(module, task_type)
+    other_sequence = tmp_path / "other.fasta"
+    other_sequence.write_text(">other\\nWWWW\\n", encoding="utf-8")
+
+    response = _post_model_only(
+        module, client, auth_header, {"prepared_features": reference}, input_path=other_sequence,
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["reason_code"] == "reuse_input_mismatch"
+    assert "does not match" in response.get_json()["error"]
+
+
+def test_model_only_names_a_missing_consumer_input_role(monkeypatch, tmp_path):
+    module, task_type = _staged_reuse_app(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    module.app.config["user_db"].update_user(
+        module.app.config["user_db"].get_user_by_username("tester")["id"], allow_gpu_use=True
+    )
+    _source_id, reference = _completed_features_source(module, task_type)
+
+    response = _post_model_only(module, client, auth_header, {"prepared_features": reference}, upload=False)
+
+    assert response.status_code == 400
+    assert response.get_json()["reason_code"] == "reuse_input_missing"
+    assert "sequence" in response.get_json()["error"]
 
 
 @pytest.mark.parametrize(("prepare", "reason", "status"), [
@@ -612,7 +664,7 @@ def test_model_only_submission_refuses_each_invalid_reuse_before_any_side_effect
     # the visible state only after the source Task exists.
     before = {task["md5sum"] for task in module.task_store.list_tasks()}
 
-    response = _post_model_only(module, client, auth_header, reference, upload=False)
+    response = _post_model_only(module, client, auth_header, reference, upload=prepare != "missing")
 
     assert response.status_code == status, response.get_data(as_text=True)[:300]
     assert response.get_json()["reason_code"] == reason

@@ -2588,11 +2588,16 @@
             "description": "Typed artifacts this mode consumes from an earlier authorized Task; each entry names the consumer port and its required role/type.",
             "items": {
               "type": "object",
-              "required": ["port", "role", "type"],
+              "required": ["port", "role", "type", "inputs"],
               "properties": {
                 "port": {"type": "string", "description": "Fully qualified consumer port, for example model.features."},
                 "role": {"type": "string"},
-                "type": {"type": "string"}
+                "type": {"type": "string"},
+                "inputs": {
+                  "type": "array",
+                  "items": {"type": "string"},
+                  "description": "Consumer input roles the reused artifact was prepared from; the submission must reproduce them."
+                }
               },
               "additionalProperties": false
             }

@@ -61,7 +61,7 @@ execution_modes:
     stages: [model]
     output_contract: full
     reuse:
-      model.features: {role: prepared_features, type: alphafold3_processed_input}
+      model.features: {role: prepared_features, type: alphafold3_processed_input, inputs: [specification]}
 use_when: Use this for protein, nucleic-acid, ligand, ion, or modified-residue complexes
   expressed in the upstream AlphaFold 3 JSON format.
 input_summary: One current upstream AlphaFold 3 JSON input document; the document is

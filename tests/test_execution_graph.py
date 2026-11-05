@@ -14,6 +14,7 @@ from revocompute.execution_graph import (
     compile_graph,
     execution_graph_payload,
 )
+from revocompute.io_contracts import NamedFileRole
 from revocompute.task_types import ExecutionMode, StagePortSpec, WorkflowStage, _load_execution_modes
 
 
@@ -41,7 +42,7 @@ def test_model_only_reuse_is_frozen_into_graph_identity():
         "model", "model", False,
         inputs=(StagePortSpec("input", "x", source="features:out"),),
     )
-    mode = ExecutionMode("model_only", "Model", ("model",), "full", {"model.input": {"role": "prepared", "type": "x"}})
+    mode = ExecutionMode("model_only", "Model", ("model",), "full", {"model.input": {"role": "prepared", "type": "x", "inputs": ["source"]}})
     task = graph(producer, consumer, modes=(mode,))
     source = {"source_task": "task-a", "stage": "features", "port": "out", "artifact_digest": "a" * 64}
     compiled = compile_graph(task, "model_only", {"prepared": {**source, "type": "x"}})
@@ -216,26 +217,27 @@ def test_execution_modes_require_full_covering_every_stage():
         {"full": {"stages": ["a", "b"]}, "prepare_only": {"label": "Prep", "stages": ["a"]}},
         "task",
         stages,
+        (),
     )
     assert [(mode.id, mode.stages) for mode in loaded] == [
         ("full", ("task.a", "task.b")),
         ("prepare_only", ("task.a",)),
     ]
     with pytest.raises(ValueError, match="must declare 'full'"):
-        _load_execution_modes({"prepare_only": {"stages": ["a"]}}, "task", stages)
+        _load_execution_modes({"prepare_only": {"stages": ["a"]}}, "task", stages, ())
     with pytest.raises(ValueError, match="must select every stage"):
-        _load_execution_modes({"full": {"stages": ["a"]}}, "task", stages)
+        _load_execution_modes({"full": {"stages": ["a"]}}, "task", stages, ())
     with pytest.raises(ValueError, match="unknown stage"):
-        _load_execution_modes({"full": {"stages": ["a", "b", "c"]}}, "task", stages)
+        _load_execution_modes({"full": {"stages": ["a", "b", "c"]}}, "task", stages, ())
     # A non-full mode never inherits the full contract implicitly.
     implicit = _load_execution_modes(
-        {"full": {"stages": ["a", "b"]}, "prepare_only": {"stages": ["a"]}}, "task", stages
+        {"full": {"stages": ["a", "b"]}, "prepare_only": {"stages": ["a"]}}, "task", stages, ()
     )
     assert next(mode for mode in implicit if mode.id == "prepare_only").output_contract == "none"
     with pytest.raises(ValueError, match="invalid output_contract"):
         _load_execution_modes(
             {"full": {"stages": ["a", "b"]}, "x": {"stages": ["a"], "output_contract": "bogus"}},
-            "task", stages,
+            "task", stages, (),
         )
 
 
@@ -257,26 +259,36 @@ def test_reuse_declarations_are_validated_against_the_manifest():
             "model_only": {"stages": list(stage_ids), "output_contract": "full", "reuse": reuse},
         }
 
-    loaded = _load_execution_modes(modes({"b.input": {"role": "prepared", "type": "x"}}), "task", workflow)
-    assert loaded[1].reuse == {"task.b.input": {"role": "prepared", "type": "x"}}
+    roles = (NamedFileRole("sequence", "Sequence", "x", ("fasta",), 1, 1),)
+    loaded = _load_execution_modes(
+        modes({"b.input": {"role": "prepared", "type": "x", "inputs": ["sequence"]}}), "task", workflow, roles
+    )
+    assert loaded[1].reuse == {
+        "task.b.input": {"role": "prepared", "type": "x", "inputs": ["sequence"]},
+    }
     # A reuse reference must name a real, required port of a stage the mode selects,
-    # with the port's own type, under a unique identifier role.
+    # with the port's own type, under a unique identifier role, and the input
+    # roles the artifact was prepared from.
     for bad in (
-        {"b.missing": {"role": "prepared", "type": "x"}},
-        {"b.extra": {"role": "prepared", "type": "x"}},
-        {"b.input": {"role": "prepared", "type": "y"}},
-        {"b.input": {"role": "not an id", "type": "x"}},
+        {"b.missing": {"role": "prepared", "type": "x", "inputs": ["sequence"]}},
+        {"b.extra": {"role": "prepared", "type": "x", "inputs": ["sequence"]}},
+        {"b.input": {"role": "prepared", "type": "y", "inputs": ["sequence"]}},
+        {"b.input": {"role": "not an id", "type": "x", "inputs": ["sequence"]}},
+        {"b.input": {"role": "prepared", "type": "x"}},
+        {"b.input": {"role": "prepared", "type": "x", "inputs": ["unknown"]}},
+        {"b.input": {"role": "prepared", "type": "x", "inputs": ["sequence", "sequence"]}},
         {
-            "b.input": {"role": "prepared", "type": "x"},
-            "b.extra": {"role": "prepared", "type": "x"},
+            "b.input": {"role": "prepared", "type": "x", "inputs": ["sequence"]},
+            "b.extra": {"role": "prepared", "type": "x", "inputs": ["sequence"]},
         },
     ):
         with pytest.raises(ValueError, match="reuse"):
-            _load_execution_modes(modes(bad), "task", workflow)
+            _load_execution_modes(modes(bad), "task", workflow, roles)
     # An optional port may keep its producer selected without consuming it: a
     # reuse entry naming a stage the mode omits is a dead declaration.
     with pytest.raises(ValueError, match="names a stage the mode omits"):
-        _load_execution_modes(modes({"a.out": {"role": "prepared", "type": "x"}}), "task", workflow)
+        _load_execution_modes(modes({"a.out": {"role": "prepared", "type": "x", "inputs": ["sequence"]}}),
+                              "task", workflow, roles)
 
 
 def test_a_port_name_cannot_escape_the_stage_input_directory():

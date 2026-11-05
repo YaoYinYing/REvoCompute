@@ -2615,6 +2615,8 @@ export interface components {
                 port: string;
                 role: string;
                 type: string;
+                /** @description Consumer input roles the reused artifact was prepared from; the submission must reproduce them. */
+                inputs: string[];
             }[];
         };
         TaskCitation: {

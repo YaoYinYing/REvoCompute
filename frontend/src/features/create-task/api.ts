@@ -148,7 +148,8 @@ export async function getTaskDefinition(name: string, signal?: AbortSignal): Pro
         if (!rawReuse || typeof rawReuse !== 'object') return [];
         const entry = rawReuse as Record<string, unknown>;
         if (typeof entry.port !== 'string' || typeof entry.role !== 'string' || typeof entry.type !== 'string') return [];
-        return [{ port: entry.port, role: entry.role, type: entry.type }];
+        if (!Array.isArray(entry.inputs) || !entry.inputs.every((role): role is string => typeof role === 'string')) return [];
+        return [{ port: entry.port, role: entry.role, type: entry.type, inputs: entry.inputs }];
       }) : [];
       return [{
         id: mode.id,

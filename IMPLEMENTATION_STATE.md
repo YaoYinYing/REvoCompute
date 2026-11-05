@@ -12,8 +12,9 @@ UI/API presentation and target-host receipt remain. Base `6d726f54` + local comm
 - Submission accepts `execution_mode`; admission, GPU entitlement, referenced families and placement
   follow the selected stages. Detail API projects `execution_modes`.
 - AF2 (`features -> model`) and AF3 (`features -> model`) declare `full` and `prepare_only`.
-- Create-Task renders a mode selector when a Task declares more than one mode and submits
-  `execution_mode`; the preflight path uses the same field.
+- Create-Task renders a mode selector when multiple usable modes remain and submits
+  `execution_mode`; reuse-required modes stay hidden until a source picker exists. The preflight path
+  uses the same field.
 - Tests: graph/loader refusal cases, prepare-only submission freezes one node, opens no GPU requirement,
   and places only the selected stage; frontend submission carries the selected mode. 224 Python focused
   tests, 17 frontend tests and `tsc --noEmit` pass.
@@ -35,21 +36,24 @@ UI/API presentation and target-host receipt remain. Base `6d726f54` + local comm
 
 ## M2 — MODEL_ONLY with provenance-bound cross-Task reuse
 
-- An execution mode declares `reuse`: consumer port reference -> `{role, type}`. The loader validates
-  the port exists on a selected stage, is required, matches the declared type, and that roles are
-  unique identifiers. AF2 and AF3 declare `model_only` (`stages: [model]`, `output_contract: full`,
-  reuse role `prepared_features`).
+- An execution mode declares `reuse`: consumer port reference -> `{role, type, inputs}`. The loader validates
+  the port exists on a selected stage, is required, matches the declared type, each named input role
+  exists on the Task, and reuse roles are unique. AF2 and AF3 declare `model_only` (`stages: [model]`,
+  `output_contract: full`, reuse role `prepared_features` bound to `sequence`/`specification`).
 - `compile_graph(task_type, mode, reuse)` rewrites a selected consumer's omitted-required-producer
   binding to `reuse:<role>`, records `reuse_inputs` (role/type/port/verified source) in the frozen
   document, and covers all of it with the digest. A declared role without a supplied reference, an
   extra reference, or a source type mismatch is refused.
-- Submission accepts a `reuse` JSON object (role -> `{source_task, stage, port, digest}`). Before any
-  upload or allocation side effect it validates: caller owns the source Task (403
+- Submission accepts a `reuse` JSON object (role -> `{source_task, stage, port, digest}`). Before upload
+  promotion or allocation side effects it validates: caller owns the source Task (403
   `reuse_source_not_owned`), source finished (`reuse_source_not_completed`), latest stage attempt
   COMPLETED with recorded output identity (`reuse_stage_not_completed`), port exists and type matches
   the consumer port (`reuse_port_unknown`/`reuse_type_mismatch`), source task type agrees
   (`reuse_source_incompatible`), and the port's artifact set re-hashes to the supplied digest
-  (`reuse_digest_mismatch`). The identity participates in `_derive_task_id` and the frozen graph.
+  (`reuse_digest_mismatch`). It computes per-role source input content identities from the immutable
+  role-resolved snapshot and compares each mode-declared consumer role against the uploaded bytes
+  (`reuse_input_missing`/`reuse_input_mismatch`). Source input identities participate in the frozen
+  graph digest and `_derive_task_id`; execution mode remains part of task identity.
 - Dispatch re-verifies the frozen source before the consumer owns an attempt and copies the verified
   bytes into the existing `stage_inputs` layout with the same `stage_inputs.json` document, naming the
   source Task/stage/attempt as provenance. A changed, deleted or superseded source refuses the stage
@@ -72,10 +76,21 @@ UI/API presentation and target-host receipt remain. Base `6d726f54` + local comm
   model-stage change needs a SIF rebuild plus a fresh live-test receipt; AF3's `run.sh` and both
   bundles' new `common/runtime/stage_inputs.py` are runtime overlays, so a candidate bundle activation
   carries them. No real MODEL_ONLY target-host acceptance has run.
-- Tests: compile digest/rejection cases, named submission refusals (each mutation fails its test),
-  reuse-identity task separation, successful submission freeze, successful dispatch materialization
-  with no producer StageRun, and changed/deleted/foreign-owner/removed source refusals. 208 focused
-  tests pass across the five brief suites; `mkdocs build --strict` passes.
+- Tests: compile digest/rejection cases, named submission refusals (including matching/mismatching
+  consumer inputs, missing required input role and source artifact digest), reuse-identity task separation,
+  successful submission freeze, successful dispatch materialization with no producer StageRun, and
+  changed/deleted/foreign-owner/removed source refusals. Exact port-glob matching excludes unrelated
+  stage outputs even when a port begins with a wildcard.
+
+## UI successor boundary
+
+- #137's merge contract is source-only: the server reuse API is stable and tested, while Create-Task
+  keeps modes with required reuse references hidden. No picker is included here.
+- The bounded successor picker lists only the caller's own completed Tasks whose declared output port
+  matches the consumer's reuse role and type. It shows source Task, stage and source input identity,
+  submits the canonical reuse reference, and the result view surfaces reused-source provenance.
+- Activating AF2 MODEL_ONLY also requires a candidate SIF because its `run.sh` is a baked build input;
+  AF3 runtime-bundle activation is separate.
 
 ## Next action
 

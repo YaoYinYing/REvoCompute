@@ -261,6 +261,21 @@ def _producer_run(
     return str(output), task_id, nodes, latest
 
 
+def test_reuse_port_files_match_the_declared_glob_not_an_empty_static_prefix():
+    port = StagePortSpec("features", "features", path="*/features.pkl")
+    identity = {
+        "files": [
+            {"path": "job/features.pkl", "size": 1, "sha256": "a" * 64},
+            {"path": "other.log", "size": 1, "sha256": "b" * 64},
+            {"path": "job/unrelated.pkl", "size": 1, "sha256": "c" * 64},
+        ]
+    }
+
+    assert task_runtime._reuse_port_files(identity, port) == [
+        {"path": "job/features.pkl", "size": 1, "sha256": "a" * 64},
+    ]
+
+
 def test_a_multi_file_producer_port_is_staged_as_a_role_directory(tmp_path, monkeypatch):
     output, _task_id, nodes, latest = _producer_run(
         tmp_path, monkeypatch, {"features/a.dat": "a", "features/b.dat": "b"}
@@ -347,7 +362,9 @@ def _reuse_task_type() -> TaskType:
     base = _task_type()
     mode = ExecutionMode(
         "model_only", "Model from prepared features", ("stage_input_runner.model",), "full",
-        {"stage_input_runner.model.features": {"role": "prepared_features", "type": "features"}},
+        {"stage_input_runner.model.features": {
+            "role": "prepared_features", "type": "features", "inputs": ["sequence"],
+        }},
     )
     return replace(base, execution_modes=(ExecutionMode("full", "Full", tuple(s.name for s in base.workflow)), mode))
 
@@ -381,10 +398,15 @@ def _reuse_source_task(tmp_path, monkeypatch, *, owner: int = 0, status: str = "
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (task_type, None))
     monkeypatch.setattr(task_runtime, "_get_family", lambda name: (task_type.runtime, None))
     source_id = "d" * 32
+    sequence = b">source\nACDE\n"
     database.upsert_task(
         source_id, filename="source.fasta", file_path="/tmp/source.fasta", uploaded_at=time.time(),
         status="running", is_binary=0, task_type=task_type.name,
         storage_key="owner-key", submitted_by_user_id=owner,
+        input_form=json.dumps({"entities": [{
+            "type": "file", "role": "sequence", "relative_path": "source.fasta",
+            "hash": hashlib.sha256(sequence).hexdigest(), "size": len(sequence),
+        }]}),
     )
     output = tmp_path / "source-output"
     output.mkdir()
@@ -414,15 +436,27 @@ def test_a_valid_reuse_reference_is_frozen_and_changes_task_identity(tmp_path, m
     resolved = task_runtime.resolve_reuse_source(reference, user_id=0, expected_type="features")
     assert resolved["source_task"] == source_id
     assert resolved["artifact_digest"] == reference["digest"]
+    assert resolved["source_inputs"] == {"sequence": task_runtime.role_input_digest([
+        {"sha256": hashlib.sha256(b">source\nACDE\n").hexdigest(), "size": 13},
+    ])}
     frozen = execution_graph_payload(task_type, "model_only", {"prepared_features": {
         "source_task": resolved["source_task"], "stage": resolved["stage"], "port": resolved["port"],
         "artifact_digest": resolved["artifact_digest"], "type": resolved["type"],
+        "source_inputs": resolved["source_inputs"],
     }})
     assert frozen["document"]["reuse_inputs"]["prepared_features"]["source"]["source_task"] == source_id
     other = dict(reference, digest="1" * 64)
     assert frozen["digest"] != execution_graph_payload(task_type, "model_only", {"prepared_features": {
         "source_task": "e" * 32, "stage": resolved["stage"], "port": resolved["port"],
         "artifact_digest": other["digest"], "type": resolved["type"],
+        "source_inputs": resolved["source_inputs"],
+    }})["digest"]
+    # The same artifact prepared from a different input identity is a different
+    # scientific request, so the binding changes the frozen digest too.
+    assert frozen["digest"] != execution_graph_payload(task_type, "model_only", {"prepared_features": {
+        "source_task": resolved["source_task"], "stage": resolved["stage"], "port": resolved["port"],
+        "artifact_digest": resolved["artifact_digest"], "type": resolved["type"],
+        "source_inputs": {"sequence": "0" * 64},
     }})["digest"]
 
 
@@ -475,6 +509,7 @@ def test_model_only_dispatch_materializes_the_source_and_opens_no_producer_attem
     frozen_ref = {
         "source_task": source_id, "stage": reference["stage"], "port": reference["port"],
         "artifact_digest": reference["digest"], "type": "features",
+        "source_inputs": task_runtime._source_input_identity(database.get_task(source_id)),
     }
     graph = compile_graph(task_type, "model_only", {"prepared_features": frozen_ref})
     consumer_id = "f" * 32
@@ -521,6 +556,7 @@ def test_model_only_dispatch_materializes_the_source_and_opens_no_producer_attem
         ("deleted", "stage_input_invalid"),
         ("foreign", "stage_input_invalid"),
         ("removed", "stage_input_unavailable"),
+        ("input_changed", "stage_input_invalid"),
     ],
 )
 def test_model_only_dispatch_refuses_a_broken_source_before_any_attempt(
@@ -529,6 +565,7 @@ def test_model_only_dispatch_refuses_a_broken_source_before_any_attempt(
     database, task_type, source_id, source_output, reference = _reuse_source_task(
         tmp_path, monkeypatch, owner=0 if break_source != "foreign" else 7
     )
+    frozen_source_inputs = task_runtime._source_input_identity(database.get_task(source_id))
     if break_source == "changed":
         (source_output / "features" / "2KL8.dat").write_text("changed", encoding="utf-8")
     if break_source == "deleted":
@@ -536,9 +573,15 @@ def test_model_only_dispatch_refuses_a_broken_source_before_any_attempt(
         shutil.rmtree(source_output)
     if break_source == "removed":
         database.delete_task(source_id)
+    if break_source == "input_changed":
+        database.update_task(source_id, input_form=json.dumps({"entities": [{
+            "type": "file", "role": "sequence", "relative_path": "source.fasta",
+            "hash": "0" * 64, "size": 13,
+        }]}))
     frozen_ref = {
         "source_task": source_id, "stage": reference["stage"], "port": reference["port"],
         "artifact_digest": reference["digest"], "type": "features",
+        "source_inputs": frozen_source_inputs,
     }
     graph = compile_graph(task_type, "model_only", {"prepared_features": frozen_ref})
     consumer_id = "a" * 32

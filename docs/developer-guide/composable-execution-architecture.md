@@ -176,25 +176,29 @@ execution_modes:
     stages: [model]
     output_contract: full
     reuse:
-      model.features: {role: prepared_features, type: alphafold_features}
+      model.features: {role: prepared_features, type: alphafold_features, inputs: [sequence]}
 ~~~
 
 Rules the code enforces:
 
 - The reuse mapping is manifest-owned: every entry names a selected consumer port, that port must be
-  required, and the declared type must equal the port type. A mode without an entry keeps the refusal
-  for a dropped required producer.
+  required, and the declared type must equal the port type. It also names the consumer input role(s)
+  the source artifact was prepared from. A mode without a reuse entry keeps the refusal for a dropped
+  required producer.
 - Submission carries one typed reference per declared role — source Task, stage, port and the digest of
-  the port's verified artifact set — never a path or filename. Before any upload or allocation side
+  the port's verified artifact set — never a path or filename. Before any upload promotion or allocation side
   effect the Server requires the caller to own the source Task, the source to be finished, the named
   stage's latest attempt to be COMPLETED with a recorded output identity, the port to exist with the
-  declared type and task type, and the recorded artifact set to hash to the submitted digest. Every
-  refusal names its reason (`reuse_source_not_owned`, `reuse_source_not_completed`,
+  declared type and task type, and the recorded artifact set to hash to the submitted digest. The
+  Server also hashes the source Task's immutable role-resolved input snapshot and requires every
+  manifest-declared consumer input role to have the same content digest. It refuses a missing role as
+  `reuse_input_missing` and different bytes as `reuse_input_mismatch`, before task creation. Other
+  refusals name their reason (`reuse_source_not_owned`, `reuse_source_not_completed`,
   `reuse_stage_not_completed`, `reuse_port_unknown`, `reuse_type_mismatch`, `reuse_digest_mismatch`,
   `reuse_reference_missing`).
-- The verified source identity is recorded in the submission-frozen graph document and its digest, and
-  participates in the derived Task ID, so two model-only runs from different sources never
-  deduplicate.
+- The verified artifact and source input identities are recorded in the submission-frozen graph document
+  and its digest, and participate in the derived Task ID, so two model-only runs from different sources
+  or input identities never deduplicate. The execution mode remains part of Task identity.
 - Before the consumer stage owns an attempt, dispatch re-reads the source Task and re-verifies
   ownership, status, stage identity and every file's size and sha256, then copies the verified bytes
   into the existing `stage_inputs` directory and writes the same server-owned document, naming the
@@ -202,6 +206,8 @@ Rules the code enforces:
   refuses the stage as `stage_input_unavailable`/`stage_input_invalid` with no attempt and no
   allocation. The producing Task and its `ResultManifest` are never mutated, and reuse opens no
   producer StageRun in the consumer Task.
+- Reuse resolves only files matched by the declared output-port glob, not every file under a static
+  prefix. This matters for wildcard-first ports and stages that publish more than one port.
 - The Runner consumes the staged artifact from the same document. A model-only stage keys on the
   document declaring its reuse role; a full-mode model stage also receives a document, for its
   in-graph role, and keeps consuming the tree it built. AF2 places the verified `features.pkl` where
@@ -213,9 +219,15 @@ Rules the code enforces:
   `_data.json`.
 - `model_only` uses the `full` output contract: a model-only run that lacks the Task's required
   scientific outputs fails its output check.
-- The Create-Task upload surface for a model-only submission (choosing among the caller's validated
-  reusable artifacts) is a separate frontend milestone; the server projects each mode's reuse roles,
-  types and ports through `GET /compute/api/types/<name>`.
+- The stable server API projects each mode's reuse roles, types, ports and required input roles through
+  `GET /compute/api/types/<name>`. #137's merge contract is source-only: the Create-Task selector keeps
+  reuse-required modes hidden, and the source/artifact picker is a bounded successor rather than part of
+  this change.
+- That successor picker lists only the caller's own completed Tasks whose declared output port matches
+  the consumer's reuse role and type. It shows the source Task, stage and input identity, submits the
+  canonical reuse reference, and surfaces reused-source provenance in the result view.
+- AF2 MODEL_ONLY activation also requires a candidate SIF because its `run.sh` is a baked build input;
+  AF3 runtime-bundle activation is separate.
 
 ### Cross-family stage references (delivered contract)
 

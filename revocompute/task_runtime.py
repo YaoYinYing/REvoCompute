@@ -12,6 +12,7 @@ opens the user database.
 from __future__ import annotations
 
 import csv
+import fnmatch
 import hashlib
 import json
 import logging
@@ -2135,7 +2136,52 @@ class ReuseReferenceError(ValueError):
 
 
 _REUSE_REFERENCE_FIELDS = frozenset({"source_task", "stage", "port", "digest"})
-_REUSE_FROZEN_FIELDS = frozenset({"source_task", "stage", "port", "artifact_digest", "type"})
+_REUSE_FROZEN_FIELDS = frozenset({
+    "source_task", "stage", "port", "artifact_digest", "type", "source_inputs",
+})
+
+
+def role_input_digest(entries: list[dict[str, Any]]) -> str:
+    """One input role's content digest from its files' verified size and sha256.
+
+    The digest covers the bytes the role resolves to, never the submitted
+    filename, so the same preparation reproduced under another name is the same
+    scientific input and a different sequence is not.
+    """
+    ordered = sorted(
+        ({"sha256": str(item["sha256"]).lower(), "size": int(item["size"])} for item in entries),
+        key=lambda item: (item["sha256"], item["size"]),
+    )
+    return hashlib.sha256(json.dumps(ordered, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _source_input_identity(task: dict[str, Any]) -> dict[str, str]:
+    """Per-role content digests from a Task's immutable role-resolved snapshot."""
+    raw = task.get("input_form")
+    try:
+        form = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        raise ReuseReferenceError("reuse_artifact_unavailable", "The source input snapshot is unreadable") from None
+    entities = form.get("entities") if isinstance(form, dict) else None
+    if not isinstance(entities, list):
+        raise ReuseReferenceError("reuse_artifact_unavailable", "The source input snapshot is unreadable")
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for entity in entities:
+        if not isinstance(entity, dict) or entity.get("type") != "file":
+            continue
+        role = str(entity.get("role") or "").strip()
+        sha256 = str(entity.get("hash") or "").strip().lower()
+        size = entity.get("size")
+        if (
+            not role
+            or not re.fullmatch(r"[a-f0-9]{64}", sha256)
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or size < 0
+        ):
+            raise ReuseReferenceError("reuse_artifact_unavailable", "The source input snapshot is unreadable")
+        grouped.setdefault(role, []).append({"sha256": sha256, "size": size})
+    return {role: role_input_digest(files) for role, files in grouped.items()}
 
 
 def _reuse_artifact_digest(files: list[dict[str, Any]]) -> str:
@@ -2147,14 +2193,32 @@ def _reuse_artifact_digest(files: list[dict[str, Any]]) -> str:
     return hashlib.sha256(json.dumps(ordered, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _port_pattern_matches(path: str, pattern: str) -> bool:
+    """Whether one recorded result path is a file this port's glob publishes."""
+    def matches(path_parts: tuple[str, ...], pattern_parts: tuple[str, ...]) -> bool:
+        if not pattern_parts:
+            return not path_parts
+        if pattern_parts[0] == "**":
+            return any(matches(path_parts[index:], pattern_parts[1:]) for index in range(len(path_parts) + 1))
+        return (
+            bool(path_parts)
+            and fnmatch.fnmatchcase(path_parts[0], pattern_parts[0])
+            and matches(path_parts[1:], pattern_parts[1:])
+        )
+
+    return matches(tuple(path.split("/")), tuple(pattern.split("/")))
+
+
 def _reuse_port_files(identity: dict[str, Any], port) -> list[dict[str, Any]]:
-    """The recorded files this output port publishes, under its static prefix."""
-    prefix = _static_prefix(port.path or "")
+    """The recorded files this output port publishes, matched by its own glob.
+
+    A wildcard-first port has no static prefix, so selecting by prefix would
+    hand the consumer every file another port on the same stage recorded.
+    """
     files = []
     for item in identity.get("files", []):
         path = str(item.get("path") or "")
-        parts = tuple(path.split("/"))
-        if parts[: len(prefix)] != prefix:
+        if not _port_pattern_matches(path, port.path or ""):
             continue
         files.append({"path": path, "size": int(item["size"]), "sha256": str(item["sha256"])})
     return files
@@ -2216,6 +2280,20 @@ def resolve_reuse_source(
         raise ReuseReferenceError("reuse_port_unknown", "The source stage does not declare that port")
     if port.type != expected_type or (frozen and source_ref.get("type") != expected_type):
         raise ReuseReferenceError("reuse_type_mismatch", "The source port type does not match the consumer")
+    frozen_inputs = source_ref.get("source_inputs") if frozen else None
+    if frozen and (
+        not isinstance(frozen_inputs, dict)
+        or not all(
+            isinstance(role, str) and isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value)
+            for role, value in frozen_inputs.items()
+        )
+    ):
+        raise ReuseReferenceError("reuse_reference_invalid", "A reuse reference is malformed")
+    source_inputs = _source_input_identity(source)
+    if frozen and frozen_inputs != source_inputs:
+        raise ReuseReferenceError(
+            "reuse_input_mismatch", "The source input snapshot no longer matches the frozen reference"
+        )
     runs = [
         run for run in task_store.list_stage_runs(source_task_id)
         if str(run.get("stage_name")) == stage_name
@@ -2240,6 +2318,7 @@ def resolve_reuse_source(
         "port": port_name,
         "artifact_digest": digest,
         "type": expected_type,
+        "source_inputs": source_inputs,
         "attempt": int(latest["attempt"]),
         "files": files,
         "port_path": port.path,
