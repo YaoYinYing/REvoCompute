@@ -52,7 +52,7 @@ result_workspace:
     description: Candidate sequences with model-proxy objectives for the requested conditions.
     sources:
       candidates:
-      - glob: candidates/*.fa
+      - glob: candidates/designs.fa
         required: true
     mapping: {}
 stage_markers:
@@ -78,18 +78,32 @@ parameters:
         additionalProperties: false
         required: [position, state]
         properties:
-          position: {type: integer, minimum: 1}
+          position:
+            type: integer
+            description: PDB residue number in the binder chain (the four-column PDB field).
+            minimum: -999
+            maximum: 9999
           state:
             type: string
             enum: [HIS-P, ASP-P, GLU-P]
     states:
       type: array
-      description: One supported v6 protonated/deprotonated contrast pair.
+      description: One supported v6 protonated/deprotonated contrast pair, protonated token first.
       minItems: 2
       maxItems: 2
       items:
         type: string
         enum: [HIS-P, HIS-S, ASP-P, ASP-D, GLU-P, GLU-D]
+      oneOf:
+      - prefixItems:
+        - {const: HIS-P}
+        - {const: HIS-S}
+      - prefixItems:
+        - {const: ASP-P}
+        - {const: ASP-D}
+      - prefixItems:
+        - {const: GLU-P}
+        - {const: GLU-D}
     combined_lambda:
       type: number
       description: Relative weight for the v6 condition-selectivity term in the model objective.
@@ -98,10 +112,13 @@ parameters:
       maximum: 1
     block_size:
       type: integer
-      description: Number of sequence positions optimized jointly in each block-descent step.
+      description: >-
+        Number of sequence positions optimized jointly in each block-descent step. Capped at the
+        production value 2: block descent enumerates all 30**block_size joint assignments per step,
+        so larger blocks are not bounded for a server-requestable Task.
       default: 2
       minimum: 1
-      maximum: 8
+      maximum: 2
     temperature:
       type: number
       description: Sampling temperature for block-descent assignments.

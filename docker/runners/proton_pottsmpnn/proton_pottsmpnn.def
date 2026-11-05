@@ -4,7 +4,7 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
 %labels
     org.opencontainers.image.source https://github.com/christian-creator/ProtonPottsMPNN
     org.opencontainers.image.revision 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
-    org.opencontainers.image.licenses MIT
+    org.opencontainers.image.licenses MIT AND BSD-3-Clause
 
 %files
     proton_pottsmpnn/requirements-extra.txt /tmp/proton-requirements-extra.txt
@@ -12,21 +12,60 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
 %post
     set -eux
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        git ca-certificates curl build-essential
     rm -rf /var/lib/apt/lists/*
+
+    # HBPLUS 3.06 (RomanLas/HBPLUS, pinned commit) is required by the v6
+    # CalculateHbondsPlus transform inside prepare_potts_input; it is not
+    # pip-installable. The tarball SHA-256 is pinned, not just the Git commit.
+    curl -fsSL \
+        https://raw.githubusercontent.com/RomanLas/HBPLUS/0bd4df6aab49054322c23c4dcfcc07075a84bc05/hbplus.tar.gz \
+        -o /tmp/hbplus.tar.gz
+    echo '937467447bd2e429630cc9a226d7d967f728ca2d39bac3ffc70eb378f498fa20  /tmp/hbplus.tar.gz' \
+        | sha256sum -c -
+    mkdir -p /tmp/hbplus-src
+    tar xzf /tmp/hbplus.tar.gz -C /tmp/hbplus-src
+    make -C /tmp/hbplus-src/hbplus
+    install -m 0755 /tmp/hbplus-src/hbplus/hbplus /usr/local/bin/hbplus
+    install -d /usr/local/share/doc/hbplus
+    install -m 0644 /tmp/hbplus-src/hbplus/hbplus.c /usr/local/share/doc/hbplus/hbplus.c
+    install -m 0644 /tmp/hbplus-src/hbplus/hbplus.h /usr/local/share/doc/hbplus/hbplus.h
+    rm -rf /tmp/hbplus.tar.gz /tmp/hbplus-src
+
     git clone https://github.com/christian-creator/ProtonPottsMPNN.git /opt/ProtonPottsMPNN
     cd /opt/ProtonPottsMPNN
     git checkout --detach 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
     python -m pip install --no-cache-dir ./foundry
     python -m pip install --no-cache-dir -r /tmp/proton-requirements-extra.txt
+
+    # The design checkpoint is mounted read-only at runtime, never baked into
+    # the image. Remove it and Git history after installation; the MIT and
+    # BSD-3-Clause notices remain in /opt/ProtonPottsMPNN.
+    rm -rf /opt/ProtonPottsMPNN/.git /opt/ProtonPottsMPNN/checkpoints
     mkdir -p /mnt/db/weights/proton-pottsmpnn /opt/revocompute/runtime
 
 %environment
+    export HBPLUS_PATH=/usr/local/bin/hbplus
     export HF_HUB_OFFLINE=1
     export TRANSFORMERS_OFFLINE=1
 
 %test
-    python -c 'import mpnn.potts_inference; import mpnn.pipelines.potts_mpnn; import mpnn.transforms.bond_annotation; import mpnn.transforms.pka_annotation; from mpnn.inference_engines.potts_mpnn_ph import PottsMPNNPHEngine, PHDesignCriteria; print(PottsMPNNPHEngine.__name__, PHDesignCriteria.__name__)'
+    export HBPLUS_PATH="${HBPLUS_PATH:-/usr/local/bin/hbplus}"
+    python - <<'PY'
+from pathlib import Path
+
+from mpnn.potts_inference import prepare_potts_input
+from mpnn.transforms.ev6 import EV6Predictor
+
+example = Path('/opt/ProtonPottsMPNN/inference/examples/pdl1_seed_binder.pdb')
+assert example.is_file(), example
+batch = prepare_potts_input(example, extended_vocab='v6')
+assert batch['network_input'], 'v6 prepare_potts_input returned no model input'
+scored = EV6Predictor().predict(batch['atom_array'])
+assert len(scored), 'EV6 fold ensemble produced no protonation calls'
+print('v6 prepare_potts_input + EV6 fold ensembles executed')
+PY
 
 %runscript
     exec "$@"

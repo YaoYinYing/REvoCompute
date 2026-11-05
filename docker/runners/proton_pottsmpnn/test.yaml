@@ -6,9 +6,9 @@ collections:
       task: proton_pottsmpnn
       input: {roles: {complex: [tests/data/proton_pottsmpnn/complex.pdb]}}
       parameters:
-        binder_chain: A
-        centres: [{position: 1, state: HIS-P}]
-        states: [HIS-P, HIS-S]
+        binder_chain: B
+        centres: [{position: 9, state: ASP-P}]
+        states: [ASP-P, ASP-D]
         combined_lambda: 0.5
         block_size: 1
         neighbour_k: 1

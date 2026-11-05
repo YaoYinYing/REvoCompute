@@ -20,7 +20,14 @@ STATE_PAIRS = {'HIS-P': 'HIS-S', 'ASP-P': 'ASP-D', 'GLU-P': 'GLU-D'}
 AA3 = {'ALA':'A','ARG':'R','ASN':'N','ASP':'D','CYS':'C','GLU':'E','GLN':'Q','GLY':'G',
        'HIS':'H','ILE':'I','LEU':'L','LYS':'K','MET':'M','PHE':'F','PRO':'P','SER':'S',
        'THR':'T','TRP':'W','TYR':'Y','VAL':'V'}
-V6_TOKENS = set(AA3) | set(STATES) | {'UNK'}
+V6_PROTONATION_TOKENS = {'HIS-P', 'HIS-S', 'HIS-A', 'ASP-P', 'ASP-D', 'ASP-A',
+                         'GLU-P', 'GLU-D', 'GLU-A'}
+# Upstream token_atoms is keyed by three-letter CCD tokens (STANDARD_AA + UNKNOWN_AA + the
+# nine v6 protonation tokens), never by one-letter sequence codes.
+V6_TOKENS = set(AA3) | {'UNK'} | V6_PROTONATION_TOKENS
+TOKEN_PARENT = {**AA3, 'UNK': 'X', 'HIS-P': 'H', 'HIS-S': 'H', 'HIS-A': 'H',
+                'ASP-P': 'D', 'ASP-D': 'D', 'ASP-A': 'D',
+                'GLU-P': 'E', 'GLU-D': 'E', 'GLU-A': 'E'}
 
 
 def verify_checkpoint(manifest_path: Path | None = None) -> Path:
@@ -131,8 +138,8 @@ def validate_request(data: object, binder_residues: dict[int, str]) -> dict:
         if pos not in binder_residues or binder_residues[pos] != STATES[centre['state']][0] or pos in seen:
             raise ValueError('centre position is duplicated, missing, or has the wrong input residue type')
         seen.add(pos)
-    if type(data.get('block_size', 2)) is not int or not 1 <= data.get('block_size', 2) <= 8:
-        raise ValueError('block_size must be between 1 and 8')
+    if type(data.get('block_size', 2)) is not int or not 1 <= data.get('block_size', 2) <= 2:
+        raise ValueError('block_size must be between 1 and 2')
     if type(data.get('neighbour_k', 8)) is not int or not 1 <= data.get('neighbour_k', 8) <= 128:
         raise ValueError('neighbour_k must be between 1 and 128')
     if type(data.get('max_mutations', 20)) is not int or not 1 <= data.get('max_mutations', 20) <= 500:
@@ -174,12 +181,9 @@ def criteria_parameters(data: dict) -> dict:
 
 
 def validate_vocabulary(tokens: object) -> None:
-    required = set('ACDEFGHIKLMNPQRSTVWY') | {'UNK'} | {
-        'HIS-P','HIS-S','HIS-A','ASP-P','ASP-D','ASP-A','GLU-P','GLU-D','GLU-A'
-    }
     if isinstance(tokens, Mapping):
         tokens = set(tokens)
-    if not isinstance(tokens, (list, tuple, set)) or set(tokens) != required or len(tokens) != 30:
+    if not isinstance(tokens, (list, tuple, set)) or set(tokens) != V6_TOKENS or len(tokens) != 30:
         raise ValueError('checkpoint vocabulary is not the pinned 30-token v6 vocabulary')
 
 
@@ -189,7 +193,11 @@ def write_outputs(output: Path, designs: list[Any], params: dict, checkpoint: Pa
         raise ValueError('PottsMPNN returned zero designs')
     candidates = output / 'candidates'
     candidates.mkdir(parents=True, exist_ok=True)
-    metadata = [design.to_metadata() for design in designs]
+    metadata = []
+    for design in designs:
+        record = design.to_metadata()
+        record['protonation_tokens'] = list(design.extended_tokens)
+        metadata.append(record)
     if any(not design.canonical_sequence or not design.extended_tokens for design in designs):
         raise ValueError('PottsMPNN returned a design without canonical and protonation-token sequences')
     with (candidates / 'designs.fa').open('w', encoding='utf-8') as handle:
@@ -296,6 +304,12 @@ def validate_outputs(output: Path, binder_residues: dict[int, str], centres: lis
             raise ValueError(f'design {index} does not match the binder chain length')
         if set(sequence) - set(AA3.values()) or set(tokens) - V6_TOKENS:
             raise ValueError(f'design {index} contains an unsupported sequence or protonation token')
+        for offset, token in enumerate(tokens):
+            if sequence[offset] != TOKEN_PARENT[token]:
+                raise ValueError(
+                    f'design {index} position {offset + 1}: canonical residue {sequence[offset]} '
+                    f'does not match protonation token {token}'
+                )
         for position, state in expected_centres:
             if position not in binder_residues:
                 raise ValueError(f'requested centre {position} is absent from the binder chain')

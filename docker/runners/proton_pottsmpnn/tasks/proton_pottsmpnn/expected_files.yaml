@@ -1,7 +1,7 @@
 result:
   files:
     candidates:
-      pattern: 'candidates/*.fa'
+      pattern: 'candidates/designs.fa'
       cardinality: many
       required: true
       type: fasta

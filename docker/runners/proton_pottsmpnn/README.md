@@ -2,7 +2,21 @@
 
 Pinned source: `christian-creator/ProtonPottsMPNN` at `09682abfa7d20e0abcdeea0490b7a4b1c190aee3`. Authored upstream code is MIT; the bundled `foundry` tree is BSD-3-Clause and its notice must be verified before building a redistributable image. Objective values are model proxies, never measured pKa, affinity, or pH-selective binding. The selected CPU path does not require a GPU for a small binder.
 
-The image installs the pinned `foundry` package plus the inference-relevant entries from the pinned `requirements-extra.txt` (`pandas>=2.1,<3`, `ipdb`, `propka>=3.5`), and `%test` imports the full runtime chain. The adapter validates the pinned code's complete 30-token v6 vocabulary and constructs `PottsMPNNPHEngine` with `extended_vocab="v6"`.
+The image installs the pinned `foundry` package plus the pinned runtime entries from
+`requirements-extra.txt`. The v6 path is not import-only: every `PottsMPNNPHEngine.run_ph_redesign` call
+featurises through `prepare_potts_input(..., extended_vocab="v6")`, which unconditionally runs
+`CalculateHbondsPlus` and the EV6 FLAML labeller. The image therefore builds HBPLUS 3.06 from the pinned
+`RomanLas/HBPLUS` commit, exports `HBPLUS_PATH`, and pins the labeller stack (`flaml`, `xgboost`,
+`lightgbm`, `scikit-learn`). `%test` executes `prepare_potts_input` on the pinned upstream example PDB and
+runs `EV6Predictor.predict()`, so a missing HBPLUS binary or unpicklable fold model fails the build instead
+of the first design. The adapter validates the pinned code's complete 30-token, three-letter v6
+`token_atoms` vocabulary and constructs `PottsMPNNPHEngine` with `extended_vocab="v6"`.
+
+Licence: authored upstream code is MIT; the bundled `foundry` tree is BSD-3-Clause. Both notices ship in
+`/opt/ProtonPottsMPNN`, and the image label declares `MIT AND BSD-3-Clause`. HBPLUS is a separate program
+(Copyright I K McDonald, D T Jones, D Naylor and J M Thornton; free to academic users under its own terms,
+not an OSI licence); its source notice is retained at `/usr/local/share/doc/hbplus/`. The design checkpoint
+and Git history are removed after installation, so no model weights are baked into the image.
 
 ## Model asset provenance
 
@@ -27,7 +41,14 @@ These values are recorded in `model-assets.sha256`.
 
 ## Binder residue indexing
 
-The pinned engine builds `chainA_all_idx` from the featurised token array, which follows the Biotite atom order supplied by `prepare_potts_input`; `_score_design` emits `canonical_sequence` and `extended_tokens` from that same index. Centres are matched by authored `res_id`. The adapter therefore supports ascending, possibly nonconsecutive binder numbering, and refuses insertion codes, duplicate numbering, and out-of-order authored numbering before design. The authored mapping is reused unchanged for output offset validation.
+The pinned engine builds `chainA_all_idx` from the featurised token array, which follows the Biotite atom order supplied by `prepare_potts_input`; `_score_design` emits `canonical_sequence` and `extended_tokens` from that same index. Centres are matched by authored `res_id`. The adapter therefore supports ascending, possibly nonconsecutive, zero, or negative binder numbering, and refuses insertion codes, duplicate numbering, and out-of-order authored numbering before design. The authored mapping is reused unchanged for output offset validation, which checks that every canonical residue matches its protonation token's parent.
+
+## Smoke fixture
+
+`tests/data/proton_pottsmpnn/complex.pdb` is the pinned upstream `inference/examples/pdl1_seed_binder.pdb`
+(MIT, revision `09682abf`): a two-chain PD-L1/binder complex, not a synthetic single chain. The smoke case
+uses chain B as the binder and the ASP B9 protonation centre, so the fixture exercises real target/binder
+chain identity and a real titratable residue.
 
 ## Activation status (source-only)
 
@@ -35,4 +56,4 @@ The family is discoverable from this tree, but it is not in the deployment's `EN
 
 ## ASSET_BLOCKED
 
-The mount is absent today, so the family is not READY. A candidate SIF may be built and `%test`-checked without the checkpoint, but scientific execution and the live-test receipt require the provisioned, hash-verified checkpoint. Remaining gates: operator provisioning above, candidate SIF build and direct-API smoke, target-host live acceptance, then activation by the maintainer.
+The mount is absent today, so the family is not READY. A candidate SIF may be built and `%test`-checked without the checkpoint; `%test` already exercises the v6 featurisation and EV6 fold ensembles at build time. No SIF build or model-backed design run has been executed in this change, so scientific execution and the live-test receipt require the provisioned, hash-verified checkpoint. Remaining gates: operator provisioning above, candidate SIF build and direct-API smoke, target-host live acceptance, then activation by the maintainer.

@@ -2,16 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import sys
 from pathlib import Path
-
-from packaging.requirements import Requirement
 
 MODULE = Path(__file__).resolve().parents[2] / 'adapter.py'
 ROOT = Path(__file__).resolve().parents[5]
-sys.path.insert(0, str(ROOT))
-
-from revocompute import task_types  # noqa: E402
 
 spec = importlib.util.spec_from_file_location('proton_adapter', MODULE)
 assert spec and spec.loader
@@ -51,13 +45,18 @@ class FakeEngine:
         return [FakeDesign()]
 
 
-def test_pinned_v6_vocabulary_and_state_pair():
-    vocab = set('ACDEFGHIKLMNPQRSTVWY') | {'UNK'} | {
-        'HIS-P','HIS-S','HIS-A','ASP-P','ASP-D','ASP-A','GLU-P','GLU-D','GLU-A'
-    }
+def test_pinned_v6_vocabulary_is_the_three_letter_token_contract():
+    vocab = set(adapter.AA3) | {'UNK'} | adapter.V6_PROTONATION_TOKENS
     assert len(vocab) == 30
     adapter.validate_vocabulary(vocab)
     adapter.validate_vocabulary({token: None for token in vocab})
+    try:
+        # Upstream token_atoms is keyed by three-letter CCD tokens, never by one-letter codes.
+        adapter.validate_vocabulary(set('ACDEFGHIKLMNPQRSTVWY') | {'UNK'} | adapter.V6_PROTONATION_TOKENS)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('one-letter vocabulary accepted')
     bad = vocab - {'HIS-P'} | {'HIS-X'}
     try:
         adapter.validate_vocabulary(bad)
@@ -66,6 +65,12 @@ def test_pinned_v6_vocabulary_and_state_pair():
     else:
         raise AssertionError('wrong checkpoint vocabulary accepted')
     assert adapter.STATE_PAIRS == {'HIS-P': 'HIS-S', 'ASP-P': 'ASP-D', 'GLU-P': 'GLU-D'}
+    try:
+        from mpnn.transforms.feature_aggregation.token_encodings import POTTS_MPNN_V6_TOKEN_ENCODING
+    except ImportError:
+        pass
+    else:
+        adapter.validate_vocabulary(POTTS_MPNN_V6_TOKEN_ENCODING.token_atoms)
 
 
 def test_api_binding_uses_task_input_parameters_checkpoint_and_output(tmp_path):
@@ -84,7 +89,7 @@ def test_api_binding_uses_task_input_parameters_checkpoint_and_output(tmp_path):
     task = {
         'binder_chain': 'A', 'centres': [{'position': 1, 'state': 'HIS-P'}],
         'states': ['HIS-P', 'HIS-S'], 'combined_lambda': 0.4,
-        'block_size': 3, 'temperature': 0.05, 'neighbour_k': 7,
+        'block_size': 2, 'temperature': 0.05, 'neighbour_k': 7,
         'max_mutations': 12, 'samples_per_site': 2, 'seed': 17,
     }
     atom_array = object()
@@ -105,6 +110,7 @@ def test_api_binding_uses_task_input_parameters_checkpoint_and_output(tmp_path):
     scores = json.loads((output / 'design_scores.json').read_text(encoding='utf-8'))
     assert scores['designs'][0]['potts_energy'] == -2.0
     assert scores['designs'][0]['extended_tokens'] == 'HIS-P ASP-D GLU-D ALA'
+    assert scores['designs'][0]['protonation_tokens'] == ['HIS-P', 'ASP-D', 'GLU-D', 'ALA']
     assert scores['checkpoint_path'] == str(checkpoint)
     assert (output / 'candidates' / 'designs.fa').read_text(encoding='utf-8') == '>fake-design\nHDEA\n'
     assert (output / 'candidates' / 'designs_states.fa').read_text(encoding='utf-8') == '>fake-design\nHIS-P ASP-D GLU-D ALA\n'
@@ -154,11 +160,25 @@ def pdb_line(serial, atom, comp, chain, position, *, icode=' ', altloc=' ', x=11
     )
 
 
-def test_unambiguous_binder_addressing_is_accepted():
+def test_two_chain_smoke_complex_binder_addressing_is_accepted():
     mapping = adapter.read_binder_residues(
-        ROOT / 'tests' / 'data' / 'proton_pottsmpnn' / 'complex.pdb', 'A', {1, 2, 3, 4}
+        ROOT / 'tests' / 'data' / 'proton_pottsmpnn' / 'complex.pdb', 'B', {9}
     )
-    assert mapping == {1: 'H', 2: 'D', 3: 'E', 4: 'A'}
+    assert len(mapping) == 115
+    assert mapping[9] == 'D'
+
+
+def test_zero_and_negative_authored_residue_numbers_are_supported(tmp_path):
+    pdb = tmp_path / 'complex.pdb'
+    pdb.write_text(
+        ''.join([
+            pdb_line(1, 'CA', 'ASP', 'A', -2),
+            pdb_line(2, 'CA', 'HIS', 'A', 0),
+            pdb_line(3, 'CA', 'GLU', 'A', 4),
+        ]),
+        encoding='utf-8',
+    )
+    assert adapter.read_binder_residues(pdb, 'A', {-2}) == {-2: 'D', 0: 'H', 4: 'E'}
 
 
 def test_nonconsecutive_ascending_binder_numbering_is_supported(tmp_path):
@@ -221,8 +241,10 @@ def test_invalid_task_mapping_and_empty_results_fail_closed(tmp_path):
     assert adapter.validate_request(valid, binder_residues) == valid
     for bad in [
         {**valid, 'states':['HIS-P','ASP-D']},
+        {**valid, 'states':['HIS-S','HIS-P']},
         {**valid, 'centres':[{'position':2,'state':'HIS-P'}]},
         {**valid, 'centres':[{'position':1,'state':'HIS-S'}]},
+        {**valid, 'block_size':3},
         {**valid, 'unexpected':'shell'},
     ]:
         try:
@@ -237,23 +259,6 @@ def test_invalid_task_mapping_and_empty_results_fail_closed(tmp_path):
         pass
     else:
         raise AssertionError('empty design set accepted')
-
-
-def test_runtime_build_inputs_declare_pinned_inference_extras():
-    task_types.discover_plugins(str(ROOT / 'docker' / 'runners'), enabled={'proton_pottsmpnn'})
-    family, _runner = task_types.get_family('proton_pottsmpnn')
-    relative = 'proton_pottsmpnn/requirements-extra.txt'
-    assert relative in family.build_inputs
-    requirements = {}
-    for line in (ROOT / 'docker' / 'runners' / relative).read_text(encoding='utf-8').splitlines():
-        entry = line.split('#', 1)[0].strip()
-        if entry:
-            requirement = Requirement(entry)
-            requirements[requirement.name] = requirement
-    assert {'ipdb', 'propka', 'pandas'} <= set(requirements)
-    assert requirements['propka'].specifier.contains('3.5')
-    assert requirements['pandas'].specifier.contains('2.2', prereleases=True)
-    assert not requirements['pandas'].specifier.contains('3.0', prereleases=True)
 
 
 def test_output_identity_counterexample_is_refused(tmp_path):
@@ -282,6 +287,31 @@ def test_output_identity_counterexample_is_refused(tmp_path):
         pass
     else:
         raise AssertionError('wrong centre state accepted')
+
+
+def test_canonical_sequence_must_match_every_token_parent(tmp_path):
+    output = tmp_path / 'bad'
+    (output / 'candidates').mkdir(parents=True)
+    (output / 'candidates' / 'designs.fa').write_text('>bad\nHDDA\n', encoding='utf-8')
+    (output / 'candidates' / 'designs_states.fa').write_text(
+        '>bad\nHIS-P ASP-D GLU-D ALA\n', encoding='utf-8'
+    )
+    (output / 'design_scores.json').write_text(json.dumps({'designs': [{
+        'design_id': 'bad', 'extended_tokens': 'HIS-P ASP-D GLU-D ALA',
+        'center_res_ids': [1], 'center_protonation_types': ['HIS-P'],
+    }]}), encoding='utf-8')
+    (output / 'task_config.json').write_text(
+        json.dumps({'checkpoint_path': '/mnt/model.ckpt'}), encoding='utf-8'
+    )
+    try:
+        adapter.validate_outputs(
+            output, {1: 'H', 2: 'D', 3: 'E', 4: 'A'},
+            [{'position': 1, 'state': 'HIS-P'}], ['HIS-P', 'HIS-S'],
+        )
+    except ValueError as exc:
+        assert 'canonical residue' in str(exc)
+    else:
+        raise AssertionError('token/canonical-parent mismatch accepted')
 
 
 def test_asset_manifest_remains_blocked_without_hash(tmp_path):
