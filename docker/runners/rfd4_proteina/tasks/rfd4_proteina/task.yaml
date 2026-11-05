@@ -1,30 +1,30 @@
 id: rfd4_proteina
 display_name: RFD4 Proteina conditioned design
 category: structure_generation
-summary: Generate candidate protein backbones and sequences conditioned on a bounded motif/scaffold specification.
-use_when: Use for computationally conditioned backbone and sequence generation.
-input_summary: A YAML or JSON condition specification and optional structure input.
-output_summary: Generated structures and computational condition-satisfaction results.
+summary: Generate conditioned protein backbone and sequence candidates with the pinned RFD4 Hydra interface.
+use_when: Use for motif or scaffold generation from a native RFD4 condition specification or annotated CIF.
+input_summary: One native YAML/JSON condition specification or annotated CIF, with an optional scaffold structure for specifications.
+output_summary: Native annotated CIF designs; no inline metrics are selected in this bounded mode.
 considerations:
 - Condition satisfaction is computational and does not demonstrate biochemical activity, binding, or function.
 - Motif positions and contig grammar are validated before invoking the upstream program.
 - Model assets are provisioned separately at /mnt/db/weights/rfd4-proteina; the Task fails closed when they are missing.
 inputs:
   condition:
-    title: Condition specification
+    title: Native condition specification or annotated CIF
     type: text
     cardinality: {min: 1, max: 1}
-    formats: [yaml, yml, json]
+    formats: [yaml, yml, json, cif, mmcif]
   scaffold:
-    title: Optional scaffold structure
+    title: Optional CIF scaffold for a condition specification
     type: protein_structure
     cardinality: {min: 0, max: 1}
-    formats: [cif, mmcif, pdb]
+    formats: [cif, mmcif]
 input_workspace:
   steps:
   - id: material
     title: Provide conditions
-    description: Supply a condition document and optional scaffold.
+    description: Supply a native condition specification with its scaffold, or an annotated CIF.
     capabilities:
     - plugin: files
       id: source_files
@@ -46,19 +46,20 @@ input_workspace:
       options: {show_paths: true}
 result_workspace:
   views:
-  - plugin: evidence-bundle
-    id: condition_metrics
+  - plugin: structure
+    id: generated_designs
     role: primary
-    title: Condition satisfaction
-    description: Computational condition satisfaction for generated candidates; not evidence of biochemical activity.
+    title: Generated designs
+    description: Native annotated CIF designs. Condition satisfaction is computational and not evidence of biochemical activity.
     sources:
-      items:
-      - path: condition_metrics.json
+      structure:
+      - glob: inference_samples/*/*.cif
         required: true
     mapping: {}
 stage_markers:
   model_loading: Loading RFD4 model assets
   generation: Generating conditioned candidates
+gpus: true
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object

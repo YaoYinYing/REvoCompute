@@ -1,14 +1,8 @@
 result:
   files:
-    condition_metrics:
-      path: condition_metrics.json
-      cardinality: one
+    generated_designs:
+      pattern: 'inference_samples/*/*.cif'
+      cardinality: many
       required: true
-      type: json
+      type: structure
       role: evidence
-    resolved_condition:
-      path: condition.json
-      cardinality: one
-      required: true
-      type: json
-      role: provenance

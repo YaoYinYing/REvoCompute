@@ -1,0 +1,5 @@
+motif_design:
+  contig: "A1-4"
+  conditions:
+    C_CRD: {true: [{select: "sel('A') and is_protein_backbone"}]}
+    C_SEQ: {true: [{select: "sel('A')"}]}

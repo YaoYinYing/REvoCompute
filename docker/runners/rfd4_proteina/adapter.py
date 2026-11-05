@@ -8,39 +8,16 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+from typing import Any
 
 WEIGHTS = Path('/mnt/db/weights/rfd4-proteina')
-ALLOWED = {'contig', 'motif', 'chain', 'residues', 'sequence'}
-CONTIG = re.compile(r'(?:\d+|[A-Za-z]:\d+-\d+)(?:/(?:\d+|[A-Za-z]:\d+-\d+))*\Z')
-
-
-def validate_condition(data: object) -> dict:
-    if not isinstance(data, dict) or set(data) - ALLOWED:
-        raise ValueError('condition must be an object containing only supported condition fields')
-    if 'contig' in data and (not isinstance(data['contig'], str) or not CONTIG.fullmatch(data['contig'])):
-        raise ValueError('invalid contig grammar')
-    if 'chain' in data and (not isinstance(data['chain'], str) or not re.fullmatch(r'[A-Za-z0-9]', data['chain'])):
-        raise ValueError('invalid chain identifier')
-    if 'residues' in data:
-        residues = data['residues']
-        if not isinstance(residues, list) or not residues or any(
-            not isinstance(r, int) or isinstance(r, bool) or r < 1 for r in residues
-        ):
-            raise ValueError('residues must be positive one-based integers')
-    if 'motif' in data and (not isinstance(data['motif'], str) or not re.fullmatch(r'[ACDEFGHIKLMNPQRSTVWYXBZJUO]{1,64}', data['motif'])):
-        raise ValueError('invalid motif sequence')
-    def unsafe(value: object) -> bool:
-        if isinstance(value, str):
-            return any(char in value for char in ('$','`','\\n',';'))
-        if isinstance(value, list):
-            return any(unsafe(item) for item in value)
-        if isinstance(value, dict):
-            return any(unsafe(key) or unsafe(item) for key, item in value.items())
-        return False
-    if unsafe(data):
-        raise ValueError('shell interpolation and directives are not accepted')
-    return data
+CONTIG_TOKEN = re.compile(
+    r'(?:/\d+|\d+(?:-\d+)?|[A-Za-z][A-Za-z0-9]*\d+(?::\d+)?(?:-\d+[A-Za-z]?|R)?)\Z'
+)
+SPEC_KEYS = {'input', 'input_as_annotated_cif', 'contig', 'conditions'}
+CONDITION_KEYS = {'C_CRD', 'C_CRDGRP', 'C_SEQ', 'C_HOT'}
 
 
 def verify_assets() -> None:
@@ -62,48 +39,133 @@ def verify_assets() -> None:
             raise RuntimeError(f'ASSET_BLOCKED: SHA256 mismatch: {relative}')
 
 
-def validate_outputs(metrics: Path) -> dict:
-    try:
-        data = json.loads(metrics.read_text(encoding='utf-8'))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError('upstream produced missing or malformed condition_metrics.json') from exc
-    if not isinstance(data, dict) or not data:
-        raise ValueError('upstream condition_metrics.json must be a non-empty object')
-    return data
+def _validate_data(value: Any) -> None:
+    if isinstance(value, str):
+        if len(value) > 2048 or any(char in value for char in ('$','`',';','\\','\n','\r')):
+            raise ValueError('condition values contain unsupported interpolation or directives')
+    elif isinstance(value, list):
+        if len(value) > 500:
+            raise ValueError('condition list exceeds the supported size')
+        for item in value:
+            _validate_data(item)
+    elif isinstance(value, dict):
+        if len(value) > 500:
+            raise ValueError('condition mapping exceeds the supported size')
+        for key, item in value.items():
+            if not isinstance(key, (str, bool, int)):
+                raise ValueError('condition keys must be plain scalar values')
+            _validate_data(item)
+    elif value is not None and type(value) not in (bool, int, float):
+        raise ValueError('condition contains an unsupported value type')
 
 
-def build_command(spec: Path, output: Path, num_designs: int, steps: int, seed: int) -> list[str]:
-    if not 1 <= num_designs <= 8 or not 1 <= steps <= 500 or not 0 <= seed <= 2147483647:
+def validate_contig(value: object) -> str:
+    if not isinstance(value, str) or len(value) > 256:
+        raise ValueError('contig must be a bounded native RFD4 string')
+    tokens = [token.strip() for token in value.split(',')]
+    if not tokens or any(not token or not CONTIG_TOKEN.fullmatch(token) for token in tokens):
+        raise ValueError('invalid contig grammar')
+    return value
+
+
+def parse_condition_spec(path: Path) -> dict:
+    text = path.read_text(encoding='utf-8')
+    if len(text) > 65536:
+        raise ValueError('condition specification exceeds 64 KiB')
+    if path.suffix.lower() == '.json':
+        spec = json.loads(text)
+    else:
+        import yaml
+        spec = yaml.safe_load(text)
+    if not isinstance(spec, dict) or not spec or 'global_args' in spec:
+        raise ValueError('provide one or more named native design specifications; global overrides are unsupported')
+    for name, design in spec.items():
+        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', name):
+            raise ValueError('invalid design name')
+        if not isinstance(design, dict) or set(design) - SPEC_KEYS:
+            raise ValueError('unsupported condition-spec directive')
+        validate_contig(design.get('contig'))
+        conditions = design.get('conditions')
+        if not isinstance(conditions, dict) or not conditions or set(conditions) - CONDITION_KEYS:
+            raise ValueError('conditions must use supported native RFD4 motif directives')
+        _validate_data(conditions)
+    _validate_data(spec)
+    return spec
+
+
+def prepare_input(condition: Path, scaffold: Path | None, scratch: Path) -> Path:
+    suffix = condition.suffix.lower()
+    if suffix in {'.cif', '.mmcif', '.bcif'}:
+        if scaffold is not None:
+            raise ValueError('upload either an annotated CIF or a condition specification with its scaffold')
+        text = condition.read_text(encoding='utf-8', errors='replace')
+        if '_atom_site' not in text and 'ATOM' not in text:
+            raise ValueError('annotated CIF input contains no atom records')
+        return condition
+    if suffix not in {'.yaml', '.yml', '.json'}:
+        raise ValueError('RFD4 input must be a native YAML/JSON condition specification or annotated CIF')
+    if scaffold is None or not scaffold.is_file() or scaffold.suffix.lower() not in {'.cif', '.mmcif'}:
+        raise ValueError('a native condition specification requires one CIF scaffold input')
+    spec = parse_condition_spec(condition)
+    for design in spec.values():
+        design['input'] = str(scaffold)
+    resolved = scratch / 'resolved_condition.yaml'
+    import yaml
+    resolved.write_text(yaml.safe_dump(spec, sort_keys=True), encoding='utf-8')
+    return resolved
+
+
+def build_command(input_path: Path, output: Path, num_designs: int, steps: int, seed: int,
+                  weights: Path = WEIGHTS) -> list[str]:
+    if (type(num_designs) is not int or not 1 <= num_designs <= 8
+            or type(steps) is not int or not 1 <= steps <= 500
+            or type(seed) is not int or not 0 <= seed <= 2147483647):
         raise ValueError('generation parameter outside supported bounds')
-    return ['rfd4-generate', '--config', str(spec), '--output-dir', str(output),
-            '--num-designs', str(num_designs), '--steps', str(steps), '--seed', str(seed)]
+    return [
+        'rfd4-generate', f'inputs={input_path}', f'out_dir={output}',
+        f'num_replicates={num_designs}', f'seed={seed}',
+        f'generation.args.nsteps={steps}', 'hardware.accelerator=gpu',
+        f'hf_ckpt_path={weights}', f'hydra.run.dir={output / "hydra"}',
+    ]
+
+
+def validate_outputs(output: Path) -> list[Path]:
+    sample_dir = output / 'inference_samples'
+    designs = sorted(path for path in sample_dir.rglob('*.cif')
+                     if path.is_file() and path.stat().st_size > 0) if sample_dir.is_dir() else []
+    if not designs:
+        raise ValueError('RFD4 produced zero non-empty annotated CIF designs')
+    return designs
+
+
+def run_task(condition: Path, scaffold: Path | None, output: Path,
+             num_designs: int, steps: int, seed: int) -> list[Path]:
+    verify_assets()
+    condition, output = condition.resolve(), output.resolve()
+    if scaffold is not None:
+        scaffold = scaffold.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='rfd4-input-') as temp_dir:
+        native_input = prepare_input(condition, scaffold, Path(temp_dir))
+        command = build_command(native_input, output, num_designs, steps, seed)
+        subprocess.run(command, check=True, cwd='/opt/RFD4-Proteina')
+    return validate_outputs(output)
 
 
 def main() -> int:
-    spec, output, task_file = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
-    manifest = json.loads(task_file.read_text(encoding='utf-8'))
-    scaffold_files = manifest.get('inputs', {}).get('scaffold', [])
-    if len(scaffold_files) > 1:
-        raise ValueError('scaffold role accepts at most one input')
-    scaffold = scaffold_files[0]['path'] if scaffold_files else None
-    verify_assets()
-    try:
-        import yaml
-        raw = yaml.safe_load(spec.read_text(encoding='utf-8'))
-        validate_condition(raw)
-    except Exception as exc:
-        raise SystemExit(f'invalid condition specification: {exc}') from exc
-    if scaffold is not None:
-        if not Path(scaffold).is_file():
-            raise ValueError('scaffold role path does not exist')
-        raw['scaffold_path'] = scaffold
-    output.mkdir(parents=True, exist_ok=True)
-    safe = output / 'condition.json'
-    safe.write_text(json.dumps(raw, sort_keys=True), encoding='utf-8')
-    command = build_command(safe, output, int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6]))
-    subprocess.run(command, check=True)
-    metrics = output / 'condition_metrics.json'
-    validate_outputs(metrics)
+    condition_path, output, task_file = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+    task = json.loads(task_file.read_text(encoding='utf-8'))
+    roles = task.get('inputs', {})
+    conditions = roles.get('condition', [])
+    scaffolds = roles.get('scaffold', [])
+    if len(conditions) != 1 or Path(conditions[0]['path']) != condition_path or len(scaffolds) > 1:
+        raise ValueError('expected one condition input and at most one scaffold role')
+    scaffold = Path(scaffolds[0]['path']) if scaffolds else None
+    params = task.get('params')
+    if not isinstance(params, dict) or set(params) - {'num_designs','steps','seed'}:
+        raise ValueError('task has unsupported generation parameters')
+    run_task(condition_path, scaffold, output, int(params['num_designs']),
+             int(params['steps']), int(params['seed']))
     return 0
 
 

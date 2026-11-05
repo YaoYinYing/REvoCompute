@@ -13,5 +13,4 @@ condition=$(task_input condition)
 mkdir -p "$output_dir"
 echo 'REVODESIGN_STAGE:model_loading'
 echo 'REVODESIGN_STAGE:generation'
-python3 "$runtime_root/rfd4_proteina/adapter.py" "$condition" "$output_dir" "$task_file" \
-  "$(_parse_param num_designs)" "$(_parse_param steps)" "$(_parse_param seed)"
+python3 "$runtime_root/rfd4_proteina/adapter.py" "$condition" "$output_dir" "$task_file"
