@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -137,47 +138,129 @@ def build_command(input_path: Path, output: Path, num_designs: int, steps: int, 
     ]
 
 
+AMINO_ACIDS = {
+    'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
+    'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL',
+}
+
+
+def parse_atom_site(text: str) -> tuple[list[str], list[list[str]]]:
+    """Parse the first atom_site loop with real CIF loop grammar.
+
+    An incomplete final row is a truncation error, not a row to discard.
+    """
+    columns: list[str] = []
+    values: list[str] = []
+    atom_columns: list[str] = []
+    atom_rows: list[list[str]] = []
+    in_loop = False
+    seen_values = False
+    parsed = False
+
+    def finish() -> None:
+        nonlocal parsed, atom_columns
+        if parsed or not columns:
+            return
+        if not any(column.startswith('_atom_site.') for column in columns):
+            return
+        if not all(column.startswith('_atom_site.') for column in columns):
+            raise ValueError('atom_site loop mixes incompatible column categories')
+        if not seen_values:
+            raise ValueError('empty atom_site loop')
+        if len(values) % len(columns):
+            raise ValueError('truncated or incomplete atom_site loop')
+        atom_columns = list(columns)
+        atom_rows.extend(values[index:index + len(columns)] for index in range(0, len(values), len(columns)))
+        parsed = True
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            if in_loop and seen_values:
+                finish()
+                in_loop = False
+            continue
+        if line == 'loop_':
+            if in_loop:
+                finish()
+            in_loop, columns, values, seen_values = True, [], [], False
+            continue
+        if in_loop and seen_values and (
+            line.startswith('_') or line.startswith('data_') or line.startswith('save_') or line == 'stop_'
+        ):
+            finish()
+            in_loop = False
+            continue
+        if in_loop and line.startswith('_'):
+            columns.append(line.split(maxsplit=1)[0].lower())
+            continue
+        if in_loop and columns:
+            try:
+                values.extend(shlex.split(line, comments=False, posix=True))
+            except ValueError as exc:
+                raise ValueError('malformed quoted atom_site data') from exc
+            seen_values = True
+            continue
+        if in_loop:
+            raise ValueError('atom_site loop has no columns')
+    if in_loop:
+        finish()
+    if not parsed:
+        raise ValueError('generated CIF has no atom_site loop')
+    return atom_columns, atom_rows
+
+
 def validate_generated_cif(path: Path) -> None:
-    """Require a real atom record, not an empty generation placeholder."""
+    """Require grounded polymer backbone content, not a placeholder or ligand-only file."""
     text = path.read_text(encoding='utf-8', errors='replace')
     if len(text) > 10 * 1024 * 1024:
         raise ValueError(f'generated CIF exceeds the supported size: {path.name}')
-    columns: list[str] = []
-    rows: list[list[str]] = []
-    in_loop = False
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line == 'loop_':
-            in_loop, columns = True, []
-            continue
-        if in_loop and line.startswith('_atom_site.'):
-            columns.append(line.lower())
-            continue
-        if in_loop and columns:
-            if not line or line.startswith(('#', '_', 'loop_', 'data_')):
-                in_loop = False
-                continue
-            rows.append(line.split())
-    if not columns:
-        raise ValueError(f'generated CIF has no atom_site loop: {path.name}')
+    columns, rows = parse_atom_site(text)
     index = {name: position for position, name in enumerate(columns)}
-    required = ('_atom_site.group_pdb', '_atom_site.cartn_x', '_atom_site.cartn_y', '_atom_site.cartn_z')
+    required = ('_atom_site.group_pdb', '_atom_site.label_atom_id', '_atom_site.label_comp_id',
+                '_atom_site.label_asym_id', '_atom_site.label_seq_id',
+                '_atom_site.cartn_x', '_atom_site.cartn_y', '_atom_site.cartn_z')
     if any(name not in index for name in required):
-        raise ValueError(f'generated CIF omits atom coordinates or record type: {path.name}')
-    residue_columns = [name for name in ('_atom_site.label_comp_id', '_atom_site.auth_comp_id') if name in index]
-    sequence_columns = [name for name in ('_atom_site.label_seq_id', '_atom_site.auth_seq_id') if name in index]
+        raise ValueError(f'generated CIF omits polymer atom identity or coordinates: {path.name}')
+    residue_atoms: dict[tuple[str, str, str], dict[str, object]] = {}
     for row in rows:
-        if len(row) < len(columns) or row[index['_atom_site.group_pdb']].upper() not in {'ATOM', 'HETATM'}:
+        if row[index['_atom_site.group_pdb']].upper() != 'ATOM':
             continue
-        try:
-            coordinates = [float(row[index[name]]) for name in required[1:]]
-        except ValueError:
+        comp = row[index['_atom_site.label_comp_id']]
+        if comp not in AMINO_ACIDS:
             continue
-        residue = next((row[index[name]] for name in residue_columns if row[index[name]] not in {'.', '?'}), '')
-        sequence = next((row[index[name]] for name in sequence_columns if row[index[name]] not in {'.', '?'}), '')
-        if residue and sequence and all(abs(value) < 1e6 for value in coordinates):
-            return
-    raise ValueError(f'generated CIF has no atom record with coordinates and a residue: {path.name}')
+        chain = row[index['_atom_site.label_asym_id']]
+        sequence = row[index['_atom_site.label_seq_id']]
+        insertion_column = index.get('_atom_site.pdbx_pdb_ins_code')
+        altloc_column = index.get('_atom_site.label_alt_id')
+        insertion = row[insertion_column] if insertion_column is not None else '.'
+        if sequence in {'.', '?'} or chain in {'.', '?'}:
+            continue
+        key = (chain, sequence, insertion)
+        entry = residue_atoms.setdefault(key, {'comp': comp, 'atoms': set(), 'altlocs': set()})
+        if entry['comp'] != comp:
+            raise ValueError(f'generated CIF has inconsistent residue identity: {path.name}')
+        atom = row[index['_atom_site.label_atom_id']].upper()
+        if atom in entry['atoms']:
+            raise ValueError(f'generated CIF repeats an atom in one residue: {path.name}')
+        entry['atoms'].add(atom)
+        entry['altlocs'].add(row[altloc_column] if altloc_column is not None else '.')
+        for name in ('_atom_site.cartn_x', '_atom_site.cartn_y', '_atom_site.cartn_z'):
+            try:
+                float(row[index[name]])
+            except ValueError as exc:
+                raise ValueError(f'generated CIF has a non-numeric backbone coordinate: {path.name}') from exc
+    if not residue_atoms:
+        raise ValueError(f'ligand-only or non-polymer generated CIF: {path.name}')
+    complete_by_chain: dict[str, int] = {}
+    for (chain, _sequence, _insertion), entry in residue_atoms.items():
+        altlocs = {value for value in entry['altlocs'] if value not in {'.', '?'}}
+        if altlocs:
+            raise ValueError(f'generated CIF has ambiguous alternate locations: {path.name}')
+        if {'N', 'CA', 'C'}.issubset(entry['atoms']):
+            complete_by_chain[chain] = complete_by_chain.get(chain, 0) + 1
+    if not any(count >= 2 for count in complete_by_chain.values()):
+        raise ValueError('insufficient polymer backbone: need two residues with N, CA and C')
 
 
 def validate_outputs(output: Path) -> list[Path]:

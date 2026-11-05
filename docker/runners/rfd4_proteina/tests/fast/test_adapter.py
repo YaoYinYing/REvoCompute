@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 
 MODULE = Path(__file__).resolve().parents[2] / 'adapter.py'
+FIXTURES = Path(__file__).resolve().parents[5] / 'tests' / 'data' / 'rfd4_proteina'
 spec = importlib.util.spec_from_file_location('rfd4_adapter', MODULE)
 assert spec and spec.loader
 adapter = importlib.util.module_from_spec(spec)
@@ -62,21 +63,23 @@ def test_zero_cif_output_is_refused(tmp_path):
         pass
     else:
         raise AssertionError('header-only generated CIF accepted as a design')
-    generated.write_text(
-        'data_design\n'
-        'loop_\n'
-        '_atom_site.group_PDB\n'
-        '_atom_site.id\n'
-        '_atom_site.Cartn_x\n'
-        '_atom_site.Cartn_y\n'
-        '_atom_site.Cartn_z\n'
-        '_atom_site.label_comp_id\n'
-        '_atom_site.label_seq_id\n'
-        'ATOM 1 0.000 0.000 0.000 ALA 1\n'
-        '#\n',
-        encoding='utf-8',
-    )
+    generated.write_bytes((FIXTURES / 'generated_minimal.cif').read_bytes())
     assert adapter.validate_outputs(output) == [generated]
+
+
+def test_generated_cif_requires_two_polymer_backbone_residues():
+    adapter.validate_generated_cif(FIXTURES / 'generated_minimal.cif')
+    for name, message in [
+        ('generated_ligand_only.cif', 'ligand-only'),
+        ('generated_one_atom.cif', 'insufficient polymer backbone'),
+        ('generated_truncated.cif', 'truncated'),
+    ]:
+        try:
+            adapter.validate_generated_cif(FIXTURES / name)
+        except ValueError as exc:
+            assert message in str(exc), (name, str(exc))
+        else:
+            raise AssertionError(f'placeholder generated CIF accepted: {name}')
 
 
 def test_condition_spec_refuses_unsupported_directives_and_shell_text(tmp_path):
