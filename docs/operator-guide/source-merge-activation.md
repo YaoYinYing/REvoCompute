@@ -19,24 +19,31 @@ declared build inputs for five families:
 | AlphaFold3 | source commit, HMMER patches |
 
 Foundry is unchanged and is the control: its definition and declared build
-inputs retain the existing retained pin, so its build identity and readiness do
-not move when the other five are activated.
+inputs retain the existing audited executable pin, so its build identity and
+readiness do not move when the other five are activated. The upstream delta is
+documentation-only and does not justify a rebuild.
+
+Two upgrades also change upstream defaults: OpenDDE v1.2.0 defaults to BF16 with
+TF32 off, and ESMFold2 v3.4.2 defaults its ESMC backbone to fp8. Each Runner
+keeps sending its explicit Task values and records them with the result, so the
+change is visible rather than silent. Each family's `upstream.json` is the
+durable provenance record.
 
 ## Read-only preflight
 
 Before building or merging, list the affected families and what each still
-needs:
+needs. Include Foundry so its unchanged row is observed rather than assumed:
 
 ```bash
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh activation-preflight \
-  --runners bioemu2,opendde,freebindcraft,esmfold2,alphafold3
+  --runners bioemu2,opendde,freebindcraft,esmfold2,alphafold3,foundry
 ```
 
 The command reads the same readiness resolver as `runner-status`: it builds,
-promotes, and mutates nothing. Each row shows the family, current status, build
-identity freshness, and next action (`build-sif`, `live-test`, `promote`, or
-`none`). Add `--json` for the full readiness rows. Disabled families are listed
-because enabling them is part of the activation.
+promotes, and mutates nothing, including the env file. Each row shows the
+family, current status, build identity freshness, and next action (`build-sif`,
+`live-test`, `promote`, or `none`). Add `--json` for the full readiness rows.
+Disabled families are listed because enabling them is part of the activation.
 
 ## What a source merge leaves behind
 
@@ -66,16 +73,24 @@ promotion alone completes activation:
    untouched and readiness remains `BUILD_STALE`.
 
    ```bash
-   REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh prepare \
-     --enabled-runners=bioemu2,opendde,freebindcraft,esmfold2,alphafold3 --build-sif
+   REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh prepare --build-sif
    ```
+
+   Do not pass `--enabled-runners` here. It overrides the deployment's
+   configured set for the whole window: `prepare` replaces
+   `SERVER_DIR/docker/runners` with only the listed families, and an interrupted
+   run leaves the snapshot narrowed. A bare `prepare` materializes every family
+   configured by `ENABLED_TASKRUNNERS`, and `build_slurm_images` stages only the
+   missing or stale candidates, so unrelated families stay in the deployment
+   snapshot and their active SIFs are untouched.
 
 3. **Accept each candidate on the target host.** Run `%test`, imports, and a
    representative native inference on the candidate image, then `live-test` so
    the receipt binds the exact candidate SHA-256, build-provenance digest,
    Runtime Bundle digest, execution contract, and every required smoke case.
-4. **Confirm the preflight.** All five candidates now report their staged
-   promotion action; Foundry still reports `READY` with next action `none`.
+4. **Confirm the preflight.** Run it again with the list above and record the
+   observed rows: all five candidates must report their staged promotion action,
+   and Foundry must report `READY` with next action `none`.
 5. **Merge the source.** Admission refuses the five changed families. This is
    the only planned refusal window.
 6. **Promote in one prepared restart.** The prepared restart verifies each
@@ -85,8 +100,9 @@ promotion alone completes activation:
    REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepared
    ```
 
-7. **Verify readiness.** Run the preflight again. All five families must report
-   `READY` with next action `none`, and unrelated families must be unchanged.
+7. **Verify readiness.** Run the preflight again with the list above. All five
+   families must report `READY` with next action `none`, and the observed
+   unrelated rows, including Foundry, must be unchanged.
 
 If a candidate cannot be built or accepted before the merge, activation cannot
 complete in the promotion restart. The only acceptable alternative is a
@@ -102,9 +118,12 @@ the same steps apply after the merge, one family at a time:
 1. **Build the candidate** from the merged definition:
 
    ```bash
-   REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh prepare \
-     --enabled-runners=<family> --build-sif
+   REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh prepare --build-sif
    ```
+
+   A bare `prepare` keeps the configured enabled set and rebuilds only the
+   families whose candidate is missing or stale, so the other enabled families
+   remain in the snapshot.
 
 2. **Validate the candidate** with its `%test`, imports, and a representative
    native inference on the candidate image.

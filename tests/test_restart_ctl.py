@@ -692,6 +692,37 @@ def test_prepare_builds_only_selected_runner(monkeypatch, tmp_path):
     assert "build web worker" not in commands
 
 
+def test_prepare_without_runner_override_keeps_the_configured_family_set(monkeypatch, tmp_path):
+    """The merge-window build must not narrow the deployment snapshot to its targets."""
+    task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
+    configured = {
+        path.name
+        for path in (SERVER_DIR / "tests" / "fixtures" / "runners").iterdir()
+        if (path / "plugin.yaml").is_file()
+    }
+
+    result = _run_cli(monkeypatch, tmp_path, env_file, _write_shims(tmp_path), "prepare", "--build-sif")
+
+    assert result.returncode == 0, result.stderr
+    materialized = task_dir / "docker" / "runners"
+    assert configured | {"common"} <= {path.name for path in materialized.iterdir() if path.is_dir()}
+
+
+def test_activation_preflight_is_read_only_and_json_is_pure(monkeypatch, tmp_path):
+    """The merge-window preflight must not create env secrets or decorate JSON."""
+    _task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
+    before = env_file.read_bytes()
+
+    result = _run_cli(
+        monkeypatch, tmp_path, env_file, _write_shims(tmp_path),
+        "activation-preflight", "--runners", "cpu_runner", "--json",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert env_file.read_bytes() == before
+    assert [row["runner_family"] for row in json.loads(result.stdout)["runners"]] == ["cpu_runner"]
+
+
 def test_prepare_fails_when_selected_runner_build_fails(monkeypatch, tmp_path):
     _task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
     bin_dir = _write_shims(tmp_path)

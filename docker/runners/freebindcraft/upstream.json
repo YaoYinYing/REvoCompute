@@ -7,6 +7,7 @@
   "previous_commit": "8b8d4c4627da06f084f46b7007450048fe3ca22f",
   "install_method": "source at upstream_commit with installation/linux-cuda12-requirements.txt",
   "code_license": "MIT",
+  "model_weights_license": "CC-BY-4.0 for the mounted AlphaFold2 2022-12-06 parameters; the provisioned params LICENSE file is CC BY 4.0",
   "python_requires": "3.12 for the pinned Linux CUDA profile",
   "cuda_minor": "12.9",
   "dependency_manifest": "installation/linux-cuda12-requirements.txt at upstream_commit",

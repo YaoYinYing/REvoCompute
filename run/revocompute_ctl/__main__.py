@@ -317,7 +317,8 @@ def main() -> None:
             print(str(exc), file=sys.stderr)
             raise SystemExit(1) from None
     elif subcommand == "activation-preflight":
-        require_env_file(state)
+        # Read-only: never generate or append secrets, and keep --json pure.
+        require_env_file(state, dry_run=True)
         from revocompute.runner_readiness import run_activation_preflight
         from revocompute.runner_registry import RegistryError
 

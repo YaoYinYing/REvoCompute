@@ -6,11 +6,15 @@ From: python:3.11-slim
     opendde/requirements.lock /opt/opendde-requirements.lock
 
 %post
+    set -e
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends hmmer kalign git
     rm -rf /var/lib/apt/lists/*
-    python -m pip install --no-cache-dir uv
-    uv pip install --system --no-cache --require-hashes /opt/opendde-requirements.lock
+    # 0.12.0 rejects a requirements file passed as a positional argument; the
+    # lock must be selected with -r. Pin the version this definition was
+    # converted and checked against.
+    python -m pip install --no-cache-dir uv==0.12.0
+    uv pip install --system --no-cache --require-hashes -r /opt/opendde-requirements.lock
     rm -f /opt/opendde-requirements.lock
     # OpenDDE v1.2.0 source commit; provenance is recorded in opendde/upstream.json.
     git init /opt/opendde-src
@@ -32,6 +36,9 @@ From: python:3.11-slim
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test
+    # Apptainer does not fail the section on an intermediate command's exit
+    # status, so the identity checks below would be masked without this.
+    set -e
     command -v opendde
     python -c 'from opendde.version import __version__; assert __version__ == "1.2.0", __version__'
     grep -qx 9d0d9c975178074c1ce722d2d6eefac8b7057062 /opt/opendde-source-commit

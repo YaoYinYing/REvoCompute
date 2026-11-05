@@ -184,6 +184,18 @@ def test_symlink_alias_cannot_copy_excluded_tests(runner_source, alias, destinat
     assert current.read_bytes() == b"previous deployment"
 
 
+def test_materialization_keeps_every_configured_enabled_family(runner_source):
+    """A bare prepare must preserve the configured set, not only a --build-sif target."""
+    source, state, _manifest = runner_source
+    _add_disabled_family(source, "second")
+    state.values["ENABLED_TASKRUNNERS"] = "demo,second"
+
+    materialize_runner_families(state)
+
+    target = Path(state.server_dir()) / "docker" / "runners"
+    assert {path.name for path in target.iterdir() if path.is_dir()} == {"common", "demo", "second"}
+
+
 def test_enabled_family_cannot_alias_disabled_family_tests(runner_source):
     """A disabled family's tests/ is reserved even though only the enabled set is discovered."""
     source, state, _manifest = runner_source

@@ -5,6 +5,9 @@ From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
     esmfold2/requirements.lock /opt/esmfold2-requirements.lock
 
 %post
+    # Fail on the first broken step: Apptainer reports only the section's last
+    # command, so a failed install would otherwise leave a green build.
+    set -e
     apt-get update
     # The default fused backend JIT-compiles upstream's Triton kernels in
     # process, so keep a C compiler and the Python headers in the image.
@@ -38,6 +41,9 @@ From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test
+    # Fail on the first broken check: without this, a failed import is masked by
+    # the later `test` commands and %test proves nothing.
+    set -e
     # Environment validity only: the CUDA/PyTorch ABI and the pinned upstream
     # package.  REvoCompute overlay modules are deliberately absent from the
     # image, so importing them here would test the wrong artifact.
