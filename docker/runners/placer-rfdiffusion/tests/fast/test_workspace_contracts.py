@@ -114,3 +114,33 @@ def test_structure_cross_validation_rejects_absent_residue(tmp_path):
     )
     with pytest.raises(WorkspaceValidationError, match="A2"):
         validate_capability(validator, normalized, {"structure": (str(path),)})
+
+
+def _pdb_line(record: str, resname: str, chain: str, resseq: int, icode: str = " ") -> str:
+    return (
+        f"{record}{1:5d}  CA  {resname} {chain}{resseq:4d}{icode}   "
+        f"{10.0:8.3f}{10.0:8.3f}{10.0:8.3f}{1.0:6.2f}{20.0:6.2f}           C\n"
+    )
+
+
+def _validate_fixed(tmp_path, selected: int, line: str):
+    normalizer, validator = _rfdiffusion_backend()
+    assert validator is not None
+    path = tmp_path / "input.pdb"
+    path.write_text(line + "END\n", encoding="utf-8")
+    normalized = normalize_capability(normalizer, {
+        "mode": "motif_scaffolding",
+        "segments": [{"kind": "fixed", "chain": "A", "start": selected, "end": selected}],
+        "hotspots": [],
+    })
+    validate_capability(validator, normalized, {"structure": (str(path),)})
+
+
+def test_insertion_coded_residues_are_refused(tmp_path):
+    with pytest.raises(WorkspaceValidationError, match="insertion-coded"):
+        _validate_fixed(tmp_path, 1, _pdb_line("ATOM  ", "GLY", "A", 1, "A"))
+
+
+def test_hetero_residues_are_refused(tmp_path):
+    with pytest.raises(WorkspaceValidationError, match="hetero"):
+        _validate_fixed(tmp_path, 1, _pdb_line("HETATM", "HEM", "A", 1))

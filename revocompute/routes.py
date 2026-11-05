@@ -223,7 +223,12 @@ from revocompute.task_types import (
     workspace_plugin_descriptor,
 )
 from revocompute.task_demos import DemoContractError, demo_root, load_task_demo, load_task_demos, resolve_demo_file
-from revocompute.workspace_contracts import WorkspaceValidationError, normalize_capability, validate_capability
+from revocompute.workspace_contracts import (
+    WorkspaceValidationError,
+    normalize_capability,
+    validate_capability,
+    validate_selected_residues,
+)
 from revocompute.task_types import workspace_backend
 from revocompute.tool_calls import ToolAdmissionError, new_tool_call_id, normalize_tool_call_id
 from revocompute.tool_types import canonical_parameters, public_tool
@@ -2238,6 +2243,11 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     capability_values = workspace_payload.get("capabilities", {})
     if not isinstance(capability_values, dict):
         return jsonify({"error": "Workspace capabilities must be an object"}), 400
+    try:
+        for value in capability_values.values():
+            validate_selected_residues(value)
+    except WorkspaceValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
     known_capability_ids = {item.id for item in iter_capabilities(tt)}
     # The workspace projection exposes the canonical parameter area for a Task
     # whose declaration owns none, and the frontend echoes it back with the rest
