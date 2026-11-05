@@ -51,8 +51,10 @@ Disabled families are listed because enabling them is part of the activation.
 Run the preflight after `prepare`, not before it. A requested family that is
 already in the materialized instance snapshot resolves from that snapshot and
 reports the deployment's current `READY` / `none`, not the candidate's
-`BUILD_STALE`. The candidate row appears only after `prepare`; an
-instance-resolved row always describes the deployment, not a pending candidate.
+`BUILD_STALE`. For a family in the instance snapshot, the candidate row appears
+only after `prepare`; a family absent from the snapshot resolves from the
+checkout and can report before it. An instance-resolved row always describes the
+deployment, not a pending candidate.
 
 ## What a source merge leaves behind
 
