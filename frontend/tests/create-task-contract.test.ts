@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseWorkspaceDescriptor } from '../src/features/create-task/api';
 import { parametersFromSchema, seedConstant } from '../src/features/create-task/parameter-controls';
+import { selectableExecutionModes } from '../src/features/create-task/input-workspace/InputWorkspace';
 import { buildSubmissionFormData } from '../src/features/create-task/submission';
 import type { ParameterDefinition, TaskFormDefinition } from '../src/features/create-task/types';
 
@@ -50,6 +51,18 @@ describe('Create Task server contracts', () => {
     expect(params[0]).toMatchObject({ name: 'samples', type: 'int', required: true, minimum: 1, maximum: 9, step: 2, unit: 'models', help: 'Controls output count.', advanced: true, seed: { minimum: 2, maximum: 8 } });
     expect(params[1]?.choices).toEqual(['fast', 'exact']);
     expect(params[2]).toMatchObject({ type: 'bool', defaultValue: true });
+  });
+
+  it('keeps modes with required reuse references out of the selector', () => {
+    const form = {
+      execution_modes: [
+        { id: 'full', label: 'Full', stages: ['features', 'model'] },
+        { id: 'prepare_only', label: 'Prepare only', stages: ['features'] },
+        { id: 'model_only', label: 'Model only', stages: ['model'], reuse: [{ port: 'model.features', role: 'prepared_features', type: 'features' }] },
+      ],
+    } as TaskFormDefinition;
+
+    expect(selectableExecutionModes(form).map(mode => mode.id)).toEqual(['full', 'prepare_only']);
   });
 
   it('binds files to named roles and emits the versioned workspace document', () => {

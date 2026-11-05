@@ -72,8 +72,11 @@ function writeParameter(parameter: ParameterDefinition, control: HTMLInputElemen
   control.value = value;
 }
 
-/**
- * Steps the protocol column renders. A step whose only capability is the
+export function selectableExecutionModes(form: TaskFormDefinition) {
+  return form.execution_modes.filter(mode => !mode.reuse?.length);
+}
+
+/** Steps the protocol column renders. A step whose only capability is the
  * terminal `review` anchor is contract bookkeeping, not input the user works
  * with; it is dropped from the column (the Task Snapshot rail owns the visible
  * summary) while its capability stays in the submitted workspace. If a form ever
@@ -110,24 +113,30 @@ export class InputWorkspace {
     // choose the intent before the inputs; the Server still refuses an
     // undeclared or unsupported mode. One mode is the default and needs no
     // control.
+    const selectableModes = selectableExecutionModes(form);
     this.executionIntent = 'full';
-    if (form.execution_modes.length > 1) {
+    if (selectableModes.length > 1 || selectableModes.length !== form.execution_modes.length) {
       const section = element('section', 'ct-protocol-step');
       section.dataset.content = 'input';
-      const heading = element('header', 'ct-step-heading');
-      heading.append(
-        element('p', 'ct-section-kicker', t('ct.executionMode')),
-        element('h2', 'ct-step-title', t('ct.executionMode')),
-      );
-      const select = element('select', 'ct-control');
-      select.dataset.ctExecutionMode = 'true';
-      form.execution_modes.forEach(mode => select.append(new Option(mode.label, mode.id)));
-      select.value = this.executionIntent;
-      select.addEventListener('change', () => {
-        this.executionIntent = select.value;
-        this.options.onChange();
-      });
-      section.append(heading, select);
+      if (selectableModes.length > 1) {
+        const heading = element('header', 'ct-step-heading');
+        heading.append(
+          element('p', 'ct-section-kicker', t('ct.executionMode')),
+          element('h2', 'ct-step-title', t('ct.executionMode')),
+        );
+        const select = element('select', 'ct-control');
+        select.dataset.ctExecutionMode = 'true';
+        selectableModes.forEach(mode => select.append(new Option(mode.label, mode.id)));
+        select.value = this.executionIntent;
+        select.addEventListener('change', () => {
+          this.executionIntent = select.value;
+          this.options.onChange();
+        });
+        section.append(heading, select);
+      }
+      if (selectableModes.length !== form.execution_modes.length) {
+        section.append(element('p', 'ct-inline-note', t('ct.executionMode.reuseUnavailable')));
+      }
       this.root.append(section);
     }
     const displayed = new Set(displaySteps(form.input_workspace.steps));
