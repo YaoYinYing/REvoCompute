@@ -333,29 +333,43 @@ def load_validation_identity(
     task_contracts = []
     runner_contracts = {}
     for task_id, (task_type, runner) in sorted(definitions.items()):
-        task_contracts.append(
-            {
-                "id": task_type.name,
-                "inputs": [
-                    {
-                        "name": role.name,
-                        "type": role.type,
-                        "formats": role.formats,
-                        "minimum": role.minimum,
-                        "maximum": role.maximum,
-                    }
-                    for role in task_type.inputs
-                ],
-                "schema": execution_contract_mapping(task_type.schema),
-                "runner_args": task_type.runner_args,
-                "gpus": task_type.gpus,
-                "requires_network": task_type.requires_network,
-                "stage_markers": tuple(task_type.stage_markers),
-                "input_workspace": [capability(step) for step in task_type.input_workspace],
-                "workflow": [stage_contract(stage) for stage in task_type.workflow],
-                "results": [result_contract(view) for view in task_type.result_workspace],
-            }
-        )
+        task_contract = {
+            "id": task_type.name,
+            "inputs": [
+                {
+                    "name": role.name,
+                    "type": role.type,
+                    "formats": role.formats,
+                    "minimum": role.minimum,
+                    "maximum": role.maximum,
+                }
+                for role in task_type.inputs
+            ],
+            "schema": execution_contract_mapping(task_type.schema),
+            "runner_args": task_type.runner_args,
+            "gpus": task_type.gpus,
+            "requires_network": task_type.requires_network,
+            "stage_markers": tuple(task_type.stage_markers),
+            "input_workspace": [capability(step) for step in task_type.input_workspace],
+            "workflow": [stage_contract(stage) for stage in task_type.workflow],
+            "results": [result_contract(view) for view in task_type.result_workspace],
+        }
+        if task_type.execution_modes:
+            # Only a Task that declares modes carries this key, so a family
+            # whose Tasks declare none keeps the identity its receipt already has.
+            task_contract["execution_modes"] = [
+                {
+                    "id": mode.id,
+                    "stages": tuple(mode.stages),
+                    "output_contract": mode.output_contract,
+                    "reuse": sorted(
+                        (port_ref, spec["role"], spec["type"], tuple(spec.get("inputs", ())))
+                        for port_ref, spec in mode.reuse.items()
+                    ),
+                }
+                for mode in task_type.execution_modes
+            ]
+        task_contracts.append(task_contract)
         runner_contracts[task_id] = asdict(runner)
     config_public = sanitized_mapping({
         "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,

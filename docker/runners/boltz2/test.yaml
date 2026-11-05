@@ -1,0 +1,26 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: boltz2-structure
+      task: boltz2_predict
+      input:
+        roles:
+          specification: [tests/data/boltz2/structure.yaml]
+      parameters:
+        recycling_steps: 1
+        sampling_steps: 2
+        diffusion_samples: 1
+        preprocessing_workers: 0
+        seed: 0
+    - id: boltz2-affinity
+      task: boltz2_affinity
+      input:
+        roles:
+          specification: [tests/data/boltz2/affinity.yaml]
+      parameters:
+        recycling_steps: 1
+        sampling_steps: 2
+        diffusion_samples: 1
+        preprocessing_workers: 0
+        seed: 0

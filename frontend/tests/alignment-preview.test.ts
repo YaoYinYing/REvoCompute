@@ -35,7 +35,7 @@ it('submits the unchanged original A3M after constructing an aligned preview', a
   alignmentPreview(await file.text(), true);
   const data = buildSubmissionFormData({ name: 'alignment_task', inputs: [] } as unknown as TaskFormDefinition, {
     inputFiles: () => [{ role: 'alignment', file }], sequence: () => '', sequenceName: () => '', sequenceRole: () => null,
-    parameters: () => ({ iterations: '400' }),
+    parameters: () => ({ iterations: '400' }), executionMode: () => 'full',
   }, {});
   expect(await (data.get('files') as File).text()).toBe(source);
   expect(data.get('input_roles')).toBe('alignment');

@@ -48,6 +48,20 @@ workflow:
   stage_markers:
   - inference
   - output_validation
+execution_modes:
+  full:
+    label: Full prediction
+    stages: [features, model]
+  prepare_only:
+    label: Preparation only
+    stages: [features]
+    output_contract: stages
+  model_only:
+    label: Model from prepared features
+    stages: [model]
+    output_contract: full
+    reuse:
+      model.features: {role: prepared_features, type: alphafold3_processed_input, inputs: [specification]}
 use_when: Use this for protein, nucleic-acid, ligand, ion, or modified-residue complexes
   expressed in the upstream AlphaFold 3 JSON format.
 input_summary: One current upstream AlphaFold 3 JSON input document; the document is

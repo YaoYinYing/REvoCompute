@@ -1,0 +1,11 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-conditioned-design
+      task: rfd4_proteina
+      input:
+        roles:
+          condition: [tests/data/rfd4_proteina/condition.yaml]
+          scaffold: [tests/data/rfd4_proteina/scaffold.cif]
+      parameters: {num_designs: 1, steps: 1, seed: 7}

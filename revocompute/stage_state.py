@@ -24,10 +24,13 @@ COMPLETED = "COMPLETED"
 FAILED = "FAILED"
 CANCELLED = "CANCELLED"
 INTERRUPTED = "INTERRUPTED"
+#: Projection-only: a declared stage that the submission's execution mode
+#: omits. No StageRun exists, so this state is never stored or transitioned.
+SKIPPED = "SKIPPED"
 
 #: ``NOT_STARTED`` is what the API reports for a declared stage with no record;
 #: every stored attempt opens directly in ``QUEUED``.
-STATUSES = (NOT_STARTED, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED, INTERRUPTED)
+STATUSES = (NOT_STARTED, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED, INTERRUPTED, SKIPPED)
 
 ACTIVE_STATUSES = frozenset({QUEUED, RUNNING})
 TERMINAL_STATUSES = frozenset({COMPLETED, FAILED, CANCELLED, INTERRUPTED})

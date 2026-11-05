@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseWorkspaceDescriptor } from '../src/features/create-task/api';
 import { parametersFromSchema, seedConstant } from '../src/features/create-task/parameter-controls';
+import { InputWorkspace, selectableExecutionModes } from '../src/features/create-task/input-workspace/InputWorkspace';
+import { HarnessNode, installHarness } from './dom-harness';
 import { buildSubmissionFormData } from '../src/features/create-task/submission';
 import { structureFormat } from '../src/features/create-task/input-workspace/builtins';
 import type { ParameterDefinition, TaskFormDefinition } from '../src/features/create-task/types';
@@ -53,15 +55,53 @@ describe('Create Task server contracts', () => {
     expect(params[2]).toMatchObject({ type: 'bool', defaultValue: true });
   });
 
+  it('keeps modes with required reuse references out of the selector', () => {
+    const form = {
+      execution_modes: [
+        { id: 'full', label: 'Full', stages: ['features', 'model'] },
+        { id: 'prepare_only', label: 'Prepare only', stages: ['features'] },
+        { id: 'model_only', label: 'Model only', stages: ['model'], reuse: [{ port: 'model.features', role: 'prepared_features', type: 'features' }] },
+      ],
+    } as TaskFormDefinition;
+
+    expect(selectableExecutionModes(form).map(mode => mode.id)).toEqual(['full', 'prepare_only']);
+  });
+
+  it('renders only selectable modes and explains the omitted reuse mode', async () => {
+    installHarness(vi.stubGlobal);
+    vi.stubGlobal('Option', class extends HarnessNode {
+      constructor(text: string, value: string) {
+        super('option'); this.textContent = text; (this as unknown as { value: string }).value = value;
+      }
+    });
+    const form = {
+      name: 'alphafold', inputs: [], params: [],
+      execution_modes: [
+        { id: 'full', label: 'Full', stages: ['features', 'model'] },
+        { id: 'prepare_only', label: 'Prepare only', stages: ['features'] },
+        { id: 'model_only', label: 'Model only', stages: ['model'], reuse: [{ port: 'model.features', role: 'prepared_features', type: 'features' }] },
+      ],
+      input_workspace: { version: 3, plugins: [], steps: [] },
+    } as unknown as TaskFormDefinition;
+    const root = document.createElement('div') as unknown as HarnessNode;
+
+    await new InputWorkspace(root as unknown as HTMLElement, { onChange: () => {}, onError: () => {} }).mount(form);
+
+    const select = root.querySelector('select[data-ct-execution-mode="true"]');
+    expect(select?.children.map(option => option.textContent)).toEqual(['Full', 'Prepare only']);
+    expect(root.querySelector('.ct-inline-note')?.textContent).toContain('API-only');
+  });
+
   it('binds files to named roles and emits the versioned workspace document', () => {
     const file = new File(['ATOM'], 'model.pdb');
     const definition = { name: 'method', inputs: [] } as unknown as TaskFormDefinition;
     const data = buildSubmissionFormData(definition, {
       inputFiles: () => [{ role: 'structure', file }], sequence: () => '', sequenceName: () => '', sequenceRole: () => null,
-      parameters: () => ({ models: '4', enabled: 'true' }),
+      parameters: () => ({ models: '4', enabled: 'true' }), executionMode: () => 'prepare_only',
     }, { selection: { chains: ['A'] } });
     expect(data.getAll('files')).toEqual([file]);
     expect(data.getAll('input_roles')).toEqual(['structure']);
+    expect(data.get('execution_mode')).toBe('prepare_only');
     expect(data.get('params[models]')).toBe('4');
     expect(JSON.parse(String(data.get('workspace')))).toEqual({ version: 2, capabilities: { selection: { chains: ['A'] } } });
   });

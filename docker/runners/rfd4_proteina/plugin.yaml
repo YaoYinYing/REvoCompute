@@ -1,0 +1,19 @@
+api_version: 1
+id: rfd4_proteina
+version: '1'
+name: RFD4 Proteina conditioned design
+runtime:
+  image_artifact: rfd4_proteina_v1.sif
+  definition: rfd4_proteina.def
+  # SIF build inputs: the hash-locked CUDA 12.6 dependency closure. REvoCompute's
+  # entrypoint, adapter, and asset manifest are runtime_overlay instead.
+  build_inputs:
+  - rfd4_proteina/requirements.in
+  - rfd4_proteina/requirements.lock
+  runtime_overlay:
+    - common/runtime/
+    - rfd4_proteina/run.sh
+    - rfd4_proteina/adapter.py
+    - rfd4_proteina/model-assets.sha256
+  entrypoint: [bash, /opt/revocompute/runtime/rfd4_proteina/run.sh]
+tasks: [tasks/rfd4_proteina/task.yaml]

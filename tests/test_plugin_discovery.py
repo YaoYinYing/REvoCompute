@@ -89,6 +89,30 @@ def test_distributed_task_rejects_invalid_role_cardinality(tmp_path):
         discover_plugins(str(tmp_path))
 
 
+def test_a_workflow_declaring_gpus_must_declare_a_gpu_stage(tmp_path):
+    """Placement reads a workflow's accelerator need from its stages."""
+    family = tmp_path / "demo"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text(
+        "gpus: true\n" + _workflow_yaml(
+            "- name: features\n  requires_gpu: false\n  requires_network: false\n"
+            "  runner_args: [-s, features]\n  stage_markers: [first]\n"
+            "- name: model\n  requires_gpu: false\n  requires_network: false\n"
+            "  runner_args: [-s, model]\n  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="no workflow stage requires one"):
+        discover_plugins(str(tmp_path))
+
+
 def test_manifest_id_selects_plugin_when_directory_name_differs(tmp_path):
     family = tmp_path / "implementation_detail"
     task_dir = family / "tasks" / "echo"

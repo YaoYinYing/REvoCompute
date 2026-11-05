@@ -1,0 +1,18 @@
+api_version: 1
+id: boltz2
+version: '1'
+name: Boltz-2 structure and affinity
+runtime:
+  image_artifact: boltz2_v1.sif
+  definition: boltz2.def
+  build_inputs:
+  - boltz2/run.sh
+  - boltz2/adapter.py
+  - boltz2/model-assets.sha256
+  - boltz2/upstream.json
+  - boltz2/requirements.lock
+  runtime_overlay: []
+  entrypoint: [bash, /app/revocompute/run.sh]
+tasks:
+- tasks/boltz2_predict/task.yaml
+- tasks/boltz2_affinity/task.yaml
