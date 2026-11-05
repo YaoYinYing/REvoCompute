@@ -22,6 +22,25 @@ exposed. YAML is accepted only through named input roles; arbitrary path-bearing
 references and non-local MSA paths are rejected. Upstream mmCIF and JSON are
 retained without conversion.
 
+## Source-only acceptance contract
+
+This family is delivered for source/Draft acceptance only. Merging the branch,
+promoting nothing, and leaving the PR Draft does **not** mean any of:
+
+- the family is enabled — `ENABLED_TASKRUNNERS` remains a deployment decision and
+  this branch does not add `boltz2` to it;
+- the family is READY or admissible — with `/mnt/db/weights/boltz2` absent, no SIF,
+  and no live-test receipt, readiness reports `NOT_BUILT` (`SIF_MISSING`) and
+  admission reports `RUNNER_UNAVAILABLE` for both Tasks;
+- any receipt exists or can be inherited from another build identity.
+
+Enabling requires all of the following after operator provisioning: the five
+reviewed asset digests in `model-assets.sha256`, a candidate `boltz2_v1.sif.next`
+built from the committed lock with `%test` recorded, and PASS receipts for both
+`boltz2-structure` and `boltz2-affinity` on the target Slurm/Apptainer host,
+followed by maintainer promotion and activation. Boltz-1 and its existing
+readiness/receipts are unaffected by this branch.
+
 ## Assets: ASSET_BLOCKED
 
 `/mnt/db/weights/boltz2` is absent at implementation time. Do not infer readiness
