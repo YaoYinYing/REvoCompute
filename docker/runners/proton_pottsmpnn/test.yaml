@@ -4,7 +4,7 @@ collections:
     cases:
     - id: minimal-two-state-design
       task: proton_pottsmpnn
-      input: {roles: {complex: [tests/data/complex.pdb]}}
+      input: {roles: {complex: [tests/data/proton_pottsmpnn/complex.pdb]}}
       parameters:
         binder_chain: A
         designable_residues: [1, 4]
