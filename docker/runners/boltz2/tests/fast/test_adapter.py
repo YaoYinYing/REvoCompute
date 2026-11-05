@@ -47,12 +47,21 @@ def _assets(tmp_path: Path) -> tuple[Path, Path]:
     return root, manifest
 
 
-def _task(tmp_path: Path, content: str, *, affinity: bool = False) -> Path:
-    source = tmp_path / "system.yaml"
+def _task(
+    tmp_path: Path,
+    content: str,
+    *,
+    spec_relative: str = "system.yaml",
+    assets: tuple[tuple[Path, str], ...] = (),
+) -> Path:
+    source = tmp_path / "source-system.yaml"
     source.write_text(content)
     task = tmp_path / "task.json"
     task.write_text(json.dumps({
-        "inputs": {"specification": [{"path": str(source), "relative_path": "system.yaml"}], "assets": []},
+        "inputs": {
+            "specification": [{"path": str(source), "relative_path": spec_relative}],
+            "assets": [{"path": str(path), "relative_path": relative} for path, relative in assets],
+        },
         "params": {"recycling_steps": 1, "sampling_steps": 2, "diffusion_samples": 1,
                    "preprocessing_workers": 0, "seed": 0},
     }))
@@ -79,6 +88,70 @@ def test_prepare_confines_msa_and_rejects_external_references(tmp_path: Path) ->
 def test_prepare_requires_explicit_empty_or_supplied_msa(tmp_path: Path) -> None:
     task = _task(tmp_path, "version: 1\nsequences:\n- protein:\n    id: A\n    sequence: ACDE\n")
     with pytest.raises(ValueError, match="must explicitly declare msa"):
+        adapter.prepare(task, tmp_path / "prepared", "boltz2_predict")
+
+
+def test_nested_spec_consumes_the_resolved_msa(tmp_path: Path) -> None:
+    """Upstream resolves the raw msa against the spec's parent, not the root."""
+    alignment = tmp_path / "q.a3m"
+    alignment.write_text(">q\nACDE\n")
+    task = _task(
+        tmp_path,
+        "version: 1\nsequences:\n- protein:\n    id: A\n    sequence: ACDE\n    msa: alignments/q.a3m\n",
+        spec_relative="inputs/system.yaml",
+        assets=((alignment, "inputs/alignments/q.a3m"),),
+    )
+
+    spec, provenance = adapter.prepare(task, tmp_path / "prepared", "boltz2_predict")
+
+    assert spec == (tmp_path / "prepared/inputs/system.yaml").resolve()
+    consumed = tmp_path / "prepared/inputs/alignments/q.a3m"
+    assert consumed.read_text() == ">q\nACDE\n"
+    assert provenance["msa"] == [
+        {
+            "chain": "A",
+            "declared": "alignments/q.a3m",
+            "consumed": "inputs/alignments/q.a3m",
+            "sha256": hashlib.sha256(b">q\nACDE\n").hexdigest(),
+        }
+    ]
+
+
+def test_duplicate_msa_paths_resolve_to_the_consumed_file(tmp_path: Path) -> None:
+    """A root copy must not be verified while the spec-relative copy is consumed."""
+    root_alignment = tmp_path / "root.a3m"
+    root_alignment.write_text(">root\nAAAA\n")
+    consumed_alignment = tmp_path / "nested.a3m"
+    consumed_alignment.write_text(">nested\nBBBB\n")
+    task = _task(
+        tmp_path,
+        "version: 1\nsequences:\n- protein:\n    id: A\n    sequence: ACDE\n    msa: alignments/q.a3m\n",
+        spec_relative="inputs/system.yaml",
+        assets=(
+            (root_alignment, "alignments/q.a3m"),
+            (consumed_alignment, "inputs/alignments/q.a3m"),
+        ),
+    )
+
+    _, provenance = adapter.prepare(task, tmp_path / "prepared", "boltz2_predict")
+
+    assert (tmp_path / "prepared/inputs/alignments/q.a3m").read_text() == ">nested\nBBBB\n"
+    assert provenance["msa"][0]["consumed"] == "inputs/alignments/q.a3m"
+    assert provenance["msa"][0]["sha256"] == hashlib.sha256(b">nested\nBBBB\n").hexdigest()
+
+
+def test_nested_msa_must_resolve_to_a_supplied_asset(tmp_path: Path) -> None:
+    """A root-relative asset that upstream would not read is refused before the CLI."""
+    alignment = tmp_path / "q.a3m"
+    alignment.write_text(">q\nACDE\n")
+    task = _task(
+        tmp_path,
+        "version: 1\nsequences:\n- protein:\n    id: A\n    sequence: ACDE\n    msa: alignments/q.a3m\n",
+        spec_relative="inputs/system.yaml",
+        assets=((alignment, "alignments/q.a3m"),),
+    )
+
+    with pytest.raises(ValueError, match="not a supplied asset"):
         adapter.prepare(task, tmp_path / "prepared", "boltz2_predict")
 
 
@@ -192,6 +265,55 @@ out.mkdir(parents=True)
     with pytest.raises(ValueError, match=message):
         adapter.main()
     assert not (output / "task_finished").exists()
+
+
+def test_successful_run_records_verified_assets_and_consumed_msa(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, manifest = _assets(tmp_path)
+    alignment = tmp_path / "q.a3m"
+    alignment.write_text(">q\nACDE\n")
+    task = _task(
+        tmp_path,
+        "version: 1\nsequences:\n- protein:\n    id: A\n    sequence: ACDE\n    msa: alignments/q.a3m\n",
+        spec_relative="inputs/system.yaml",
+        assets=((alignment, "inputs/alignments/q.a3m"),),
+    )
+    cli = tmp_path / "fake-boltz"
+    cli.write_text(f"""#!/usr/bin/env python3
+import sys
+from pathlib import Path
+args = sys.argv
+input_path = Path(args[2])
+assert (input_path.parent / 'alignments/q.a3m').read_text() == '>q\\nACDE\\n'
+out = Path(args[args.index('--out_dir') + 1]) / f'boltz_results_{{input_path.stem}}' / 'predictions' / input_path.stem
+out.mkdir(parents=True)
+(out / f'{{input_path.stem}}_model_0.cif').write_text({_VALID_CIF!r})
+(out / f'confidence_{{input_path.stem}}_model_0.json').write_text('{{}}')
+""")
+    cli.chmod(0o755)
+    output = tmp_path / "output"
+    monkeypatch.setenv("TASK_TYPE", "boltz2_predict")
+    monkeypatch.setenv("BOLTZ_ASSET_ROOT", str(root))
+    monkeypatch.setenv("BOLTZ_ASSET_MANIFEST", str(manifest))
+    monkeypatch.setenv("BOLTZ_CLI", str(cli))
+    monkeypatch.setattr(sys, "argv", ["adapter.py", "structure", str(task), str(output)])
+
+    assert adapter.main() == 0
+
+    provenance = json.loads((output / "boltz2-input-provenance.json").read_text(encoding="utf-8"))
+    assert provenance["msa"] == [
+        {
+            "chain": "A",
+            "declared": "alignments/q.a3m",
+            "consumed": "inputs/alignments/q.a3m",
+            "sha256": hashlib.sha256(b">q\nACDE\n").hexdigest(),
+        }
+    ]
+    upstream = json.loads((output / "boltz2-upstream.json").read_text(encoding="utf-8"))
+    assert upstream["asset_status"] == "verified"
+    assert (output / "boltz2-model-assets.sha256").is_file()
+    assert (output / "task_finished").is_file()
 
 
 def test_affinity_task_fails_when_upstream_omits_affinity_json(

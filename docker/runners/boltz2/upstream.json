@@ -3,6 +3,5 @@
   "revision": "b1ebfc46ecf57f5414e0d1a6f9027bbb122c53bc",
   "release": "v2.2.1",
   "license": "MIT",
-  "model": "Boltz-2",
-  "asset_status": "ASSET_BLOCKED"
+  "model": "Boltz-2"
 }

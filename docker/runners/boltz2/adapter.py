@@ -176,7 +176,7 @@ def _reject_unconfined_references(value: object) -> None:
             _reject_unconfined_references(child)
 
 
-def prepare(task_path: Path, destination: Path, task_type: str) -> Path:
+def prepare(task_path: Path, destination: Path, task_type: str) -> tuple[Path, dict[str, object]]:
     task = json.loads(task_path.read_text(encoding="utf-8"))
     inputs = task.get("inputs", {})
     spec_role = inputs.get("specification", [])
@@ -190,6 +190,7 @@ def prepare(task_path: Path, destination: Path, task_type: str) -> Path:
     if len(assets) > 32:
         raise ValueError("too many supplied MSA files")
     destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
     used: set[Path] = set()
     for role, entries in (("specification", spec_role), ("assets", assets)):
         for entry in entries:
@@ -200,16 +201,19 @@ def prepare(task_path: Path, destination: Path, task_type: str) -> Path:
             if role == "assets" and src.suffix.lower() not in {".a3m", ".csv"}:
                 raise ValueError("MSA assets must be A3M or CSV")
             used.add(rel)
-            target = destination / rel
+            target = root / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(src.read_bytes())
-    spec = destination / _relative(spec_ent)
+    spec = (root / _relative(spec_ent)).resolve()
     document = yaml.safe_load(spec.read_text(encoding="utf-8"))
     if not isinstance(document, dict) or not isinstance(document.get("sequences"), list):
         raise ValueError("invalid Boltz-2 specification")
     _reject_unconfined_references(document)
-    # Paths in upstream YAML are confined to uploaded alignment assets only.
+    # Upstream resolves Path(msa) against the process CWD, which is the spec's
+    # parent. Verify the path upstream will actually consume, not a root-relative
+    # string that can name a different file.
     allowed = {_relative(item).as_posix() for item in assets}
+    msa_records: list[dict[str, object]] = []
     for item in document["sequences"]:
         if not isinstance(item, dict) or len(item) != 1:
             raise ValueError("each sequence entry must declare exactly one molecule")
@@ -220,13 +224,28 @@ def prepare(task_path: Path, destination: Path, task_type: str) -> Path:
             if "msa" not in entity:
                 raise ValueError("protein chain must explicitly declare msa: empty or a supplied A3M/CSV path")
             msa = entity["msa"]
+            chain_ids = entity.get("id")
+            chains = chain_ids if isinstance(chain_ids, list) else [chain_ids]
             if msa == "empty":
+                msa_records.extend({"chain": str(chain), "declared": "empty", "consumed": None, "sha256": None} for chain in chains)
                 continue
-            rel = PurePosixPath(str(msa))
-            if rel.is_absolute() or any(p in {"", ".", ".."} for p in rel.parts):
-                raise ValueError(f"unsafe MSA reference: {msa!r}")
-            if rel.as_posix() not in allowed:
-                raise ValueError(f"MSA reference is not a supplied asset: {msa!r}")
+            raw = str(msa)
+            relative = PurePosixPath(raw)
+            if relative.is_absolute() or any(p in {"", ".", ".."} for p in relative.parts):
+                raise ValueError(f"unsafe MSA reference: {raw!r}")
+            resolved = (spec.parent / relative).resolve()
+            if not resolved.is_relative_to(root):
+                raise ValueError(f"MSA reference escapes prepared inputs: {raw!r}")
+            consumed = resolved.relative_to(root).as_posix()
+            if consumed not in allowed or not resolved.is_file():
+                raise ValueError(
+                    f"MSA reference resolves to {consumed!r} relative to the specification, "
+                    "which is not a supplied asset; move the alignment to that path or correct the reference"
+                )
+            digest = hashlib.file_digest(resolved.open("rb"), "sha256").hexdigest()
+            msa_records.extend(
+                {"chain": str(chain), "declared": raw, "consumed": consumed, "sha256": digest} for chain in chains
+            )
     if task_type == "boltz2_affinity":
         properties = document.get("properties") or []
         affinity = [p["affinity"] for p in properties if isinstance(p, dict) and "affinity" in p]
@@ -248,7 +267,12 @@ def prepare(task_path: Path, destination: Path, task_type: str) -> Path:
             raise ValueError("affinity is qualified only for a protein target and small-molecule ligand")
     elif document.get("properties"):
         raise ValueError("structure prediction does not accept affinity properties; use boltz2_affinity")
-    return spec
+    provenance: dict[str, object] = {
+        "specification": spec.relative_to(root).as_posix(),
+        "specification_sha256": hashlib.file_digest(spec.open("rb"), "sha256").hexdigest(),
+        "msa": msa_records,
+    }
+    return spec, provenance
 
 
 def command(cli: str, spec: Path, output: Path, cache: Path, params: dict[str, object], affinity: bool) -> list[str]:
@@ -269,7 +293,7 @@ def main() -> int:
     if task_type not in {"boltz2_predict", "boltz2_affinity"} or (mode == "affinity") != (task_type == "boltz2_affinity"):
         raise ValueError(f"unsupported task type: {task_type}")
     task = json.loads(task_path.read_text(encoding="utf-8"))
-    spec = prepare(task_path, output / "prepared", task_type)
+    spec, provenance = prepare(task_path, output / "prepared", task_type)
     cache = Path(os.environ.get("BOLTZ_ASSET_ROOT", "/mnt/db/weights/boltz2"))
     verify_assets(cache, Path(os.environ.get("BOLTZ_ASSET_MANIFEST", "/app/revocompute/model-assets.sha256")))
     args = command(os.environ.get("BOLTZ_CLI", "/opt/venv/bin/boltz"), spec, output, cache, task["params"], mode == "affinity")
@@ -286,8 +310,14 @@ def main() -> int:
         raise ValueError("Boltz-2 affinity task produced no affinity JSON")
     if not list(prediction.glob("*/confidence_*_model_*.json")):
         raise ValueError("Boltz-2 produced no confidence JSON")
+    upstream = json.loads((Path(__file__).with_name("upstream.json")).read_text(encoding="utf-8"))
+    # The committed file is build provenance; verification is the runtime fact.
+    upstream["asset_status"] = "verified"
     (output / "boltz2-upstream.json").write_text(
-        (Path(__file__).with_name("upstream.json")).read_text(encoding="utf-8"), encoding="utf-8"
+        json.dumps(upstream, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (output / "boltz2-input-provenance.json").write_text(
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     (output / "boltz2-model-assets.sha256").write_text(
         Path(os.environ.get("BOLTZ_ASSET_MANIFEST", "/app/revocompute/model-assets.sha256")).read_text(

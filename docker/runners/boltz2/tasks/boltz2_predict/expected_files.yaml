@@ -20,3 +20,8 @@ result:
       cardinality: one
       required: true
       type: text
+    input_provenance:
+      path: boltz2-input-provenance.json
+      cardinality: one
+      required: true
+      type: json

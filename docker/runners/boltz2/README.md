@@ -16,11 +16,15 @@ experimental validation. `affinity_probability_binary` is an upstream
 binder-versus-decoy prediction score.
 
 Each protein must explicitly use `msa: empty` or reference a supplied A3M/CSV
-via a path confined to the uploaded alignment role. An omitted MSA is rejected
-rather than silently treated as single-sequence mode. No online MSA option is
-exposed. YAML is accepted only through named input roles; arbitrary path-bearing
-references and non-local MSA paths are rejected. Upstream mmCIF and JSON are
-retained without conversion.
+via a path confined to the uploaded alignment role. References resolve relative
+to the specification's own directory, matching upstream's `Path(msa)` lookup; the
+adapter verifies that exact resolved file and records its consumed path and hash
+in `boltz2-input-provenance.json`. A reference whose resolved path was not
+uploaded is refused during preparation. An omitted MSA is rejected rather than
+silently treated as single-sequence mode. No online MSA option is exposed. YAML
+is accepted only through named input roles; arbitrary path-bearing references and
+non-local MSA paths are rejected. Upstream mmCIF and JSON are retained without
+conversion.
 
 ## Source-only acceptance contract
 
@@ -81,11 +85,17 @@ download assets. No receipt or ready state exists.
    can read every file and that compute nodes see the same tree.
 6. Build the candidate SIF as `boltz2_v1.sif.next`, run `apptainer inspect` and
    `%test`, run strict Doctor, then run both `test.yaml` smoke cases on the
-   target Slurm/Apptainer host. The candidate build must record the resolved
-   dependency lock digest and `%test` output; the smoke receipt must record the
-   exact SIF, bundle, source commit, asset digests, MSA provenance, seed,
-   effective walltime, CPU/RSS, GPU memory, GPU utilisation, and the accepted
-   artifact tree. Absent any of these, report `NOT READY`.
+   target Slurm/Apptainer host. Record each fact where it is actually carried:
+   the live-test receipt carries the SIF and Runtime Bundle identities, execution
+   account, `resource_observations`, `output_check`, `artifact_count`, and
+   `gpu_accounting`; source commit, seed, and parameters are in the immutable
+   `task.json`/input snapshot; consumed MSA paths and hashes are in the accepted
+   `boltz2-input-provenance.json`; model-asset digests are in the accepted
+   `boltz2-model-assets.sha256`; and runtime provenance is
+   `boltz2-upstream.json` (`asset_status: verified`). The accepted artifact tree
+   is the evidence for the published outputs. Do not attribute facts to the
+   receipt that it does not carry. Absent the required build or smoke evidence,
+   report `NOT READY`.
 
 ## Dependencies
 
@@ -116,8 +126,10 @@ not measured affinity.
 ## Build and acceptance
 
 The direct Apptainer definition pins the upstream source commit and installs the
-committed hash-locked dependencies. Run Doctor and family fast tests without
-assets. A candidate SIF can be built and its CLI tested without weights, but
-scientific smoke cannot pass until all assets and reviewed digests are
-provisioned. This family is not ready for submissions before the runbook above
-completes.
+committed hash-locked dependencies. `upstream.json` is a build input and carries
+no runtime status; the adapter publishes `asset_status: verified` only after
+asset verification. Any change to it must precede the candidate build. Run
+Doctor and family fast tests without assets. A candidate SIF can be built and its
+CLI tested without weights, but scientific smoke cannot pass until all assets and
+reviewed digests are provisioned. This family is not ready for submissions before
+the runbook above completes.
