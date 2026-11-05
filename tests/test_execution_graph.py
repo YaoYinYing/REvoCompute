@@ -205,6 +205,16 @@ def test_execution_modes_require_full_covering_every_stage():
         _load_execution_modes({"full": {"stages": ["a"]}}, "task", stages)
     with pytest.raises(ValueError, match="unknown stage"):
         _load_execution_modes({"full": {"stages": ["a", "b", "c"]}}, "task", stages)
+    # A non-full mode never inherits the full contract implicitly.
+    implicit = _load_execution_modes(
+        {"full": {"stages": ["a", "b"]}, "prepare_only": {"stages": ["a"]}}, "task", stages
+    )
+    assert next(mode for mode in implicit if mode.id == "prepare_only").output_contract == "none"
+    with pytest.raises(ValueError, match="invalid output_contract"):
+        _load_execution_modes(
+            {"full": {"stages": ["a", "b"]}, "x": {"stages": ["a"], "output_contract": "bogus"}},
+            "task", stages,
+        )
 
 
 def test_a_port_name_cannot_escape_the_stage_input_directory():

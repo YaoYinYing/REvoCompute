@@ -183,6 +183,11 @@ class ExecutionMode:
     id: str
     label: str
     stages: tuple[str, ...]
+    #: Which output contract this mode must satisfy: ``full`` assesses the
+    #: Task's declared result contract; ``stages`` validates only the selected
+    #: stages' declared output ports; ``none`` publishes artifacts without a
+    #: scientific completeness claim.
+    output_contract: str = "full"
 
 
 @dataclass(frozen=True)
@@ -1428,8 +1433,15 @@ def _load_execution_modes(
             # Submission normalizes the field to lowercase, so an uppercase id
             # would be unaddressable.
             raise ValueError(f"Task type {task_name!r} has an invalid execution mode id")
-        if not isinstance(entry, dict) or set(entry) - {"label", "stages"}:
+        if not isinstance(entry, dict) or set(entry) - {"label", "stages", "output_contract"}:
             raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} has invalid fields")
+        output_contract = entry.get("output_contract", "full" if mode_id == "full" else "none")
+        if output_contract not in {"full", "stages", "none"}:
+            raise ValueError(
+                f"Task type {task_name!r} execution mode {mode_id!r} has an invalid output_contract"
+            )
+        if mode_id == "full" and output_contract != "full":
+            raise ValueError(f"Task type {task_name!r} execution mode 'full' must use the full output contract")
         label = entry.get("label", mode_id.replace("_", " ").title())
         if not isinstance(label, str) or not label.strip():
             raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} needs a label")
@@ -1445,7 +1457,12 @@ def _load_execution_modes(
                 )
             selected.add(qualified)
         modes.append(
-            ExecutionMode(mode_id, label.strip(), tuple(name for name in ordered if name in selected))
+            ExecutionMode(
+                mode_id,
+                label.strip(),
+                tuple(name for name in ordered if name in selected),
+                output_contract,
+            )
         )
     by_id = {mode.id: mode for mode in modes}
     full = by_id.get("full")

@@ -41,7 +41,13 @@ from revocompute.db import (
     StageDispatchOutcome,
     TaskDatabase,
 )
-from revocompute.execution_graph import GraphValidationError, _static_prefix, canonical_digest, compile_graph
+from revocompute.execution_graph import (
+    ArtifactPort,
+    GraphValidationError,
+    _static_prefix,
+    canonical_digest,
+    compile_graph,
+)
 from revocompute.infrastructure import (
     InfrastructureComponent,
     _gpu_inventory_probe,
@@ -576,6 +582,35 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
         if item["status"] == stage_state.SKIPPED:
             item["dependency"] = "skipped"
     return _stage_summary("record", items)
+
+
+def _mode_stage_output_problems(frozen: dict[str, Any] | None, output_dir: str) -> list[str]:
+    """Required output ports of the selected stages, checked in the result tree.
+
+    A preparation-only contract has no predicted structure to check, but it
+    still owns the artifacts its selected stages declared. This is the
+    mode-scoped equivalent of the full result contract, not an exemption.
+    """
+    if frozen is None:
+        return ["The submission-frozen execution graph is unavailable."]
+    problems: list[str] = []
+    for node in frozen["document"].get("nodes", ()):
+        for raw in node.get("outputs", ()):
+            path = raw.get("path")
+            if not path:
+                continue
+            port = ArtifactPort(
+                str(raw.get("name", "")),
+                str(raw.get("type", "")),
+                str(path),
+                bool(raw.get("required", True)),
+            )
+            matches = _port_matches(output_dir, port)
+            if matches is None:
+                problems.append(f"{node.get('id')}:{port.name} output path is unverifiable")
+            elif not matches and port.required:
+                problems.append(f"{node.get('id')}:{port.name} is missing from the selected-stage output")
+    return problems
 
 
 def _stage_outputs_present(output_dir: str, outputs) -> bool:
@@ -2894,38 +2929,61 @@ def _finalize_results_manifest(
     # the output check already carries, so a refused symlink, hard link, special
     # file, or over-capacity tree fails the output check instead of disappearing.
     problems.extend(publication_problems)
-    if task_type is not None:
-        try:
-            tree = expected_file_tree(task_type, CONFIG.server_dir)
-            declared_roles = declared_file_roles(tree, [item["path"] for item in artifacts])
-        except ResultContractError as exc:
-            problems.append(f"Result contract is invalid: {exc}")
-    views, view_checks, view_problems = _resolve_result_views(task_type, artifacts, result_dir, declared_roles)
-    checks.extend(view_checks)
-    problems.extend(view_problems)
-    if tree is not None:
-        try:
-            logical_files, tree_checks, tree_problems = resolve_expected_files(tree, artifacts)
-            checks.extend(tree_checks)
-            problems.extend(tree_problems)
-            declaration = storyboard_declaration(task_type, CONFIG.server_dir, set(tree))
-            if declaration is not None:
-                storyboard = declaration
-        except ResultContractError as exc:
-            problems.append(f"Result contract is invalid: {exc}")
     frozen = _frozen_execution_graph(task)
     execution_mode = str(frozen["document"].get("mode") or "full") if frozen else "full"
-    # A declared full result contract is not the contract of a preparation-only
-    # run: the omitted stage's outputs are absent by design, not missing. The
-    # run is reported as not assessed rather than failed, and the reason is
-    # machine-readable.
-    preparation_only = execution_mode != "full"
-    if execution_state == "failed" or preparation_only:
+    # Each mode owns which output contract it must satisfy. A non-full mode is
+    # never exempted from science by default: it either declares the full result
+    # contract, its own selected-stage artifact ports, or no completeness claim.
+    mode_contract = "full"
+    mode_problem: str | None = None
+    if task_type is not None and execution_mode != "full":
+        mode = next((item for item in task_type.execution_modes if item.id == execution_mode), None)
+        if mode is None:
+            mode_contract = "none"
+            mode_problem = f"Execution mode {execution_mode!r} is no longer declared by this Task."
+            problems.append(mode_problem)
+        else:
+            mode_contract = mode.output_contract
+    views: list[dict[str, Any]] = []
+    if mode_contract == "full":
+        if task_type is not None:
+            try:
+                tree = expected_file_tree(task_type, CONFIG.server_dir)
+                declared_roles = declared_file_roles(tree, [item["path"] for item in artifacts])
+            except ResultContractError as exc:
+                problems.append(f"Result contract is invalid: {exc}")
+        views, view_checks, view_problems = _resolve_result_views(task_type, artifacts, result_dir, declared_roles)
+        checks.extend(view_checks)
+        problems.extend(view_problems)
+        if tree is not None:
+            try:
+                logical_files, tree_checks, tree_problems = resolve_expected_files(tree, artifacts)
+                checks.extend(tree_checks)
+                problems.extend(tree_problems)
+                declaration = storyboard_declaration(task_type, CONFIG.server_dir, set(tree))
+                if declaration is not None:
+                    storyboard = declaration
+            except ResultContractError as exc:
+                problems.append(f"Result contract is invalid: {exc}")
+    elif mode_contract == "stages":
+        problems.extend(_mode_stage_output_problems(frozen, result_dir))
+    if execution_state == "failed":
         output_state = "not_assessed"
+    elif mode_problem is not None:
+        output_state = "failed"
+    elif mode_contract == "none":
+        output_state = "not_assessed"
+    elif mode_contract == "stages":
+        output_state = "failed" if problems else "passed"
     elif task_type is None or (not task_type.result_workspace and not logical_files and not problems):
         output_state = "not_configured"
     else:
         output_state = "failed" if problems else "passed"
+    mode_reason = (
+        f"mode_{execution_mode}"
+        if mode_contract == "none" and execution_state != "failed" and mode_problem is None
+        else None
+    )
     manifest = {
         "schema_version": 3,
         "task_id": task["md5sum"],
@@ -2936,7 +2994,7 @@ def _finalize_results_manifest(
             "state": output_state,
             "checks": checks,
             "problems": problems,
-            **({"reason": "preparation_only"} if preparation_only else {}),
+            **({"reason": mode_reason} if mode_reason else {}),
         },
         "limitations": list(task_type.considerations) if task_type else [],
         "artifacts": artifacts,

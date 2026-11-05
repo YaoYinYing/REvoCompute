@@ -21,8 +21,11 @@ Status: M1 delivered for PREPARE_ONLY; M2/M3 and UI remain. Base `6d726f54` + lo
 
 - Task identity now includes the execution mode, so prepare_only and full never deduplicate.
 - Omitted stages project as `SKIPPED` (`stage_omitted_by_mode`, dependency `skipped`); no StageRun.
-- A preparation-only run reports `output_check.state = not_assessed` with `reason = preparation_only`
-  instead of failing the full result contract.
+- The blanket non-full exemption is gone. Each mode declares `output_contract`: `full` (assess the
+  Task's result contract), `stages` (validate the selected stages' required output ports), or `none`
+  (no completeness claim, reason `mode_<id>`). AF2/AF3 `prepare_only` uses `stages`; `model_only` will
+  use `full`. Regression tests cover missing/present preparation artifacts and model-only missing/
+  complete scientific outputs.
 - `execution_modes` participates in the live-test `configuration_digest`.
 - The top-level `mode` duplicate is gone; the digest-covered `document` is the authority and the worker
   wraps mode resolution in the bounded `execution_graph_changed` refusal.

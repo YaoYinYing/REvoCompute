@@ -1502,33 +1502,40 @@ def test_result_output_check_reports_missing_required_artifact(monkeypatch, tmp_
     assert next(item for item in manifest["artifacts"] if item["path"] == "active_sites.csv")["role"] == "primary"
 
 
-def test_preparation_only_result_is_not_assessed_against_the_full_contract(monkeypatch, tmp_path):
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "profile_runner"},
-    )
-    md5sum = uuid.uuid4().hex
-    result_dir = tmp_path / "prepare_only_results"
-    result_dir.mkdir()
-    (result_dir / "active_sites.csv").write_text(
-        "chain,residue_index,site_class,site_name,probabilities\nA,28,active,Binding site,[]\n",
-        encoding="utf-8",
-    )
-    _upsert_task_for_user(
-        module,
-        md5sum,
-        filename="enzyme.pdb",
-        file_path=result_dir / "missing.pdb",
-        result_dir=result_dir,
-        username="tester",
-        status="finished",
-    )
-    from revocompute.execution_graph import canonical_digest
+def _mode_manifest(module, monkeypatch, tmp_path, mode, *, node_output=None, files=()):
+    """Finalize one synthetic profile_runner Task under a declared mode."""
+    from dataclasses import replace
 
+    from revocompute.execution_graph import canonical_digest
+    from revocompute.task_types import ExecutionMode
+
+    md5sum = uuid.uuid4().hex
+    result_dir = tmp_path / f"results_{mode}"
+    result_dir.mkdir()
+    for name, text in files:
+        (result_dir / name).write_text(text, encoding="utf-8")
+    _upsert_task_for_user(
+        module, md5sum, filename="enzyme.pdb", file_path=result_dir / "missing.pdb",
+        result_dir=result_dir, username="tester", status="finished",
+    )
+    task_type, runner = module.task_runtime._get_task_type("profile_runner")
+    task_type = replace(
+        task_type,
+        execution_modes=(
+            ExecutionMode("full", "Full", (), "full"),
+            ExecutionMode(mode, mode.replace("_", " ").title(), (), "stages" if mode == "prepare_only" else "full"),
+        ),
+    )
+    monkeypatch.setattr(module.task_runtime, "_get_task_type", lambda name: (task_type, runner))
     document = {
-        "ir_version": 1, "nodes": [], "graph_inputs": [], "execution_order": [],
-        "mode": "prepare_only",
+        "ir_version": 1,
+        "nodes": [{
+            "id": "profile_runner.features",
+            "outputs": [node_output] if node_output else [],
+        }],
+        "graph_inputs": [],
+        "execution_order": ["profile_runner.features"],
+        "mode": mode,
     }
     module.task_store.update_task(
         md5sum,
@@ -1542,10 +1549,57 @@ def test_preparation_only_result_is_not_assessed_against_the_full_contract(monke
     manifest = module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
     )
+    return manifest, md5sum
 
-    assert manifest["output_check"]["state"] == "not_assessed"
-    assert manifest["output_check"]["reason"] == "preparation_only"
-    assert any("structure output is missing or empty" in problem for problem in manifest["output_check"]["problems"])
+
+def _active_sites() -> tuple[str, str]:
+    return (
+        "active_sites.csv",
+        "chain,residue_index,site_class,site_name,probabilities\nA,28,active,Binding site,[]\n",
+    )
+
+
+def test_prepare_only_checks_its_own_required_stage_artifacts(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "profile_runner"},
+    )
+    output = {"name": "features", "type": "features", "path": "features.pkl", "required": True}
+    manifest, md5sum = _mode_manifest(module, monkeypatch, tmp_path, "prepare_only", node_output=output, files=[_active_sites()])
+    assert manifest["output_check"]["state"] == "failed"
+    assert any("profile_runner.features:features is missing" in item for item in manifest["output_check"]["problems"])
+    assert manifest["output_check"].get("reason") != "preparation_only"
+
+    result_dir = tmp_path / "results_prepare_only"
+    (result_dir / "features.pkl").write_text("prepared\n", encoding="utf-8")
+    manifest = module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(md5sum),
+        execution_state="completed", finished_at=1_700_000_000,
+    )
+    assert manifest["output_check"]["state"] == "passed"
+
+
+def test_model_only_must_satisfy_the_full_scientific_output_contract(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "profile_runner"},
+    )
+    missing, md5sum = _mode_manifest(module, monkeypatch, tmp_path, "model_only", files=[_active_sites()])
+    assert missing["output_check"]["state"] == "failed"
+    assert any("structure output is missing or empty" in item for item in missing["output_check"]["problems"])
+    assert missing["output_check"].get("reason") != "preparation_only"
+
+    result_dir = tmp_path / "results_model_only"
+    (result_dir / "enzyme_structure.pdb").write_text(
+        "ATOM      1  CA  GLY A   1      10.000  10.000  10.000  1.00 20.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    complete = module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(md5sum),
+        execution_state="completed", finished_at=1_700_000_000,
+    )
+    assert complete["output_check"]["state"] == "passed"
+    assert "reason" not in complete["output_check"]
 
 
 def test_task_identity_distinguishes_execution_modes(monkeypatch, tmp_path):

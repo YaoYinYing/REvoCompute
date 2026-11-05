@@ -152,6 +152,7 @@ execution_modes:
   prepare_only:
     label: Preparation only
     stages: [features]
+    output_contract: stages
 id: alphafold
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema

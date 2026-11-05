@@ -88,4 +88,5 @@ execution_modes:
   prepare_only:
     label: Preparation only
     stages: [features]
+    output_contract: stages
 gpus: true
