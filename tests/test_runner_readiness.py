@@ -27,9 +27,12 @@ from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.resource_policy import ResourcePolicyValues  # noqa: E402
 from revocompute.runner_readiness import (  # noqa: E402
     RunnerReadinessStatus,
+    activation_preflight_snapshot,
+    format_activation_preflight,
     format_readiness_json,
     format_readiness_text,
     invalidate_deployment_attestations,
+    run_activation_preflight,
     run_runner_status,
     resolve_runner_readiness,
 )
@@ -547,6 +550,43 @@ def test_runner_status_unknown_or_disabled_fails_cleanly(evidence, monkeypatch):
 
     with pytest.raises(RegistryError, match="Unknown or disabled Runner Family"):
         run_runner_status(state, runner="demo", all_runners=False, as_json=False)
+
+
+def test_activation_preflight_lists_requested_families_in_order_and_disabled_ones(
+    evidence, monkeypatch, capsys
+):
+    state, unchanged, active = evidence
+    _write_receipt(unchanged, active)
+    changed = RuntimeFamily(
+        "changed", "1", "changed.def", "changed.sif", str(state.root / "images" / "changed.sif"),
+        root=unchanged.root,
+    )
+    Path(changed.slurm_image).parent.mkdir(exist_ok=True)
+    Path(changed.slurm_image).write_bytes(b"old-sif")
+    state.get = lambda key: "demo" if key == "ENABLED_TASKRUNNERS" else ""
+    monkeypatch.setattr(
+        "revocompute.runner_readiness.load_instance_families", lambda _state: [unchanged, changed]
+    )
+    monkeypatch.setattr("revocompute.runner_readiness.sif_stale", lambda _state, family, _sif: family is changed)
+
+    results = run_activation_preflight(state, runners=("changed", "demo"), as_json=True)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert [item.runner_family for item in results] == ["changed", "demo"]
+    assert results[0].status is RunnerReadinessStatus.BUILD_STALE
+    assert results[0].next_action == "build-sif"
+    assert results[1].status is RunnerReadinessStatus.READY
+    assert results[1].next_action == "none"
+    assert [item["next_action"] for item in payload["runners"]] == ["build-sif", "none"]
+    assert "build-sif" in format_activation_preflight(results)
+
+
+def test_activation_preflight_unknown_family_fails_cleanly(evidence, monkeypatch):
+    state, _family, _active = evidence
+    monkeypatch.setattr("revocompute.runner_readiness.load_instance_families", lambda _state: [])
+
+    with pytest.raises(RegistryError, match="Unknown Runner Family: missing"):
+        activation_preflight_snapshot(state, runners=("missing",))
 
 
 def test_runner_status_all_accepts_zero_family_instance(evidence, monkeypatch, capsys):

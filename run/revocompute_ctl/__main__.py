@@ -136,9 +136,16 @@ def parse_args(argv: list[str]) -> tuple[str, str, RestartFlags]:
             flags.digest = rest[position]
         elif arg == "--all":
             flags.all_runners = True
+        elif arg == "--runners":
+            position += 1
+            if position >= len(rest) or rest[position].startswith("--"):
+                _usage_exit("--runners requires a comma-separated list of Runner Family names.")
+            flags.runners = tuple(name.strip() for name in rest[position].split(",") if name.strip())
+            if not flags.runners:
+                _usage_exit("--runners requires a comma-separated list of Runner Family names.")
         elif arg == "--json":
-            if subcommand != "runner-status":
-                _usage_exit("--json is only supported by runner-status.")
+            if subcommand not in ("runner-status", "activation-preflight"):
+                _usage_exit("--json is only supported by runner-status or activation-preflight.")
             flags.as_json = True
         else:
             _usage_exit(f"Unexpected argument: {arg}")
@@ -163,6 +170,12 @@ def parse_args(argv: list[str]) -> tuple[str, str, RestartFlags]:
             _usage_exit("rollback-bundle requires --runner <family> and --digest <sha256:...>.")
         if flags.task or flags.all_runners or collection_set:
             _usage_exit("rollback-bundle takes only --runner and --digest.")
+    if flags.runners and subcommand != "activation-preflight":
+        _usage_exit("--runners is only supported by activation-preflight.")
+    if subcommand == "activation-preflight" and not flags.runners:
+        _usage_exit("activation-preflight requires --runners <family>[,<family>...].")
+    if subcommand == "activation-preflight" and (flags.runner or flags.task or flags.all_runners or collection_set):
+        _usage_exit("activation-preflight takes only --runners.")
     return subcommand, reset_username, flags
 
 
@@ -236,7 +249,7 @@ def main() -> None:
     ):
         deployment_lock = None if flags.dry_run else acquire_deployment_lock(env_file)
 
-    if not (subcommand == "runner-status" and flags.as_json):
+    if not (subcommand in ("runner-status", "activation-preflight") and flags.as_json):
         print(f"Using env file: {env_file}")
     if os.environ.get("ENABLED_TASKRUNNERS"):
         state.runtime["ENABLED_TASKRUNNERS"] = os.environ["ENABLED_TASKRUNNERS"]
@@ -300,6 +313,16 @@ def main() -> None:
 
         try:
             run_runner_status(state, runner=flags.runner, all_runners=flags.all_runners, as_json=flags.as_json)
+        except RegistryError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from None
+    elif subcommand == "activation-preflight":
+        require_env_file(state)
+        from revocompute.runner_readiness import run_activation_preflight
+        from revocompute.runner_registry import RegistryError
+
+        try:
+            run_activation_preflight(state, runners=flags.runners, as_json=flags.as_json)
         except RegistryError as exc:
             print(str(exc), file=sys.stderr)
             raise SystemExit(1) from None

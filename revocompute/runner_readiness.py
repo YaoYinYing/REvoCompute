@@ -763,6 +763,37 @@ def run_runner_status(state, *, runner: str | None, all_runners: bool, as_json: 
     return readiness
 
 
+def activation_preflight_snapshot(state, *, runners: tuple[str, ...] | list[str]) -> list[RunnerReadiness]:
+    """Readiness for the families a pending source merge changes.
+
+    The rows come from the same resolver as ``runner-status``; nothing is built,
+    promoted, or mutated.  Disabled families are included because enabling them
+    is part of the activation the operator is preparing.
+    """
+    families = {family.name: family for family in load_instance_families(state)}
+    unknown = [name for name in runners if name not in families]
+    if unknown:
+        raise RegistryError(f"Unknown Runner Family: {', '.join(unknown)}")
+    return [resolve_runner_readiness(state, families[name]) for name in runners]
+
+
+def format_activation_preflight(readiness: list[RunnerReadiness]) -> str:
+    rows = [("Runner", "Status", "Build", "Next action")]
+    for item in readiness:
+        build = "unknown" if item.status is RunnerReadinessStatus.NOT_CONFIGURED else (
+            "current" if item.build_provenance_current else ("stale" if item.sif_exists else "missing")
+        )
+        rows.append((item.runner_family, item.status.value, build, item.next_action))
+    widths = [max(len(row[index]) for row in rows) for index in range(4)]
+    return "\n".join("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip() for row in rows)
+
+
+def run_activation_preflight(state, *, runners: tuple[str, ...] | list[str], as_json: bool) -> list[RunnerReadiness]:
+    readiness = activation_preflight_snapshot(state, runners=runners)
+    print(format_readiness_json(readiness) if as_json else format_activation_preflight(readiness))
+    return readiness
+
+
 def _remove_host_attestation_files(state) -> None:
     """Remove files left by the pre-service publication implementation."""
     server_root = Path(state.server_dir())

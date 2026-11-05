@@ -767,6 +767,21 @@ def test_runner_status_scope_and_json_arguments_are_command_specific():
         main_mod.parse_args(["runner-status", "--task", "cpu_runner"])
 
 
+def test_activation_preflight_takes_only_a_runner_list():
+    parsed, _username, flags = main_mod.parse_args(
+        ["activation-preflight", "--runners", "cpu_runner,other_runner", "--json"]
+    )
+    assert parsed == "activation-preflight"
+    assert flags.runners == ("cpu_runner", "other_runner")
+    assert flags.as_json
+    with pytest.raises(SystemExit):
+        main_mod.parse_args(["activation-preflight"])
+    with pytest.raises(SystemExit):
+        main_mod.parse_args(["activation-preflight", "--runners", "cpu_runner", "--all"])
+    with pytest.raises(SystemExit):
+        main_mod.parse_args(["runner-status", "--runner", "cpu_runner", "--runners", "other_runner"])
+
+
 def test_down_keep_gateway_leaves_gateway_serving_maintenance(monkeypatch, tmp_path):
     bin_dir = _write_shims(tmp_path)
     task_dir, _auth_dir, env_file = _deploy_env(tmp_path)

@@ -10,7 +10,7 @@ messages are pinned by test_process_isolation.py and the ops guide.
 
 from __future__ import annotations
 
-USAGE = """Usage: bash run/restart.sh [setup|prepare|build|live-test|runner-status|rollback-bundle|mcp-status|api-receipt|up|down|reload|restart|reset-passwd]
+USAGE = """Usage: bash run/restart.sh [setup|prepare|build|live-test|runner-status|activation-preflight|rollback-bundle|mcp-status|api-receipt|up|down|reload|restart|reset-passwd]
        bash run/restart.sh restart [--mode=dev|--mode=prod|--mode=prepared]
        bash run/restart.sh down [--keep-gateway]
        bash run/restart.sh reset-passwd <username>
@@ -29,6 +29,11 @@ USAGE = """Usage: bash run/restart.sh [setup|prepare|build|live-test|runner-stat
        Runner readiness (read-only):
            runner-status --runner <family> [--json]
            runner-status --all [--json]
+
+       Runner activation preflight (read-only):
+           activation-preflight --runners <family>[,<family>...] [--json]
+                                               List each family's readiness,
+                                               build identity, and next action.
 
        Runtime Bundle rollback (identity switch only):
            rollback-bundle --runner <family> --digest <sha256:...>
@@ -80,6 +85,7 @@ Subcommands:
   build    Build server web/worker images with Docker Compose.
   live-test Build, validate, run, and receipt exact candidate SIFs on real Slurm.
   runner-status Derive active Runner readiness from current contracts and evidence.
+  activation-preflight List readiness, build identity, and next action for a source merge's families.
   rollback-bundle Switch one family to an accepted prior Runtime Bundle digest.
   mcp-status Report whether the optional agent MCP surface is enabled and reachable.
   api-receipt Record the observed production API evidence for one finished task.
