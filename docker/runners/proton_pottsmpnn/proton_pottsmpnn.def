@@ -4,7 +4,7 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
 %labels
     org.opencontainers.image.source https://github.com/christian-creator/ProtonPottsMPNN
     org.opencontainers.image.revision 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
-    org.opencontainers.image.licenses MIT AND BSD-3-Clause
+    org.opencontainers.image.licenses MIT AND BSD-3-Clause AND LicenseRef-HBPLUS-Academic
 
 %files
     proton_pottsmpnn/requirements-extra.txt /tmp/proton-requirements-extra.txt
@@ -55,16 +55,19 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
     python - <<'PY'
 from pathlib import Path
 
+from mpnn.inference_engines.potts_mpnn_ph import PHDesignCriteria, PottsMPNNPHEngine
 from mpnn.potts_inference import prepare_potts_input
 from mpnn.transforms.ev6 import EV6Predictor
 
+assert PottsMPNNPHEngine.__name__ == 'PottsMPNNPHEngine'
+assert PHDesignCriteria.__name__ == 'PHDesignCriteria'
 example = Path('/opt/ProtonPottsMPNN/inference/examples/pdl1_seed_binder.pdb')
 assert example.is_file(), example
 batch = prepare_potts_input(example, extended_vocab='v6')
 assert batch['network_input'], 'v6 prepare_potts_input returned no model input'
 scored = EV6Predictor().predict(batch['atom_array'])
 assert len(scored), 'EV6 fold ensemble produced no protonation calls'
-print('v6 prepare_potts_input + EV6 fold ensembles executed')
+print(PottsMPNNPHEngine.__name__, PHDesignCriteria.__name__, 'v6 pipeline + EV6 fold ensembles executed')
 PY
 
 %runscript

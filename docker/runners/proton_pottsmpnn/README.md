@@ -13,10 +13,12 @@ of the first design. The adapter validates the pinned code's complete 30-token, 
 `token_atoms` vocabulary and constructs `PottsMPNNPHEngine` with `extended_vocab="v6"`.
 
 Licence: authored upstream code is MIT; the bundled `foundry` tree is BSD-3-Clause. Both notices ship in
-`/opt/ProtonPottsMPNN`, and the image label declares `MIT AND BSD-3-Clause`. HBPLUS is a separate program
+`/opt/ProtonPottsMPNN`, and the image label declares `MIT AND BSD-3-Clause AND
+LicenseRef-HBPLUS-Academic`. HBPLUS is a separate program
 (Copyright I K McDonald, D T Jones, D Naylor and J M Thornton; free to academic users under its own terms,
-not an OSI licence); its source notice is retained at `/usr/local/share/doc/hbplus/`. The design checkpoint
-and Git history are removed after installation, so no model weights are baked into the image.
+not an OSI licence); its source notice is retained at `/usr/local/share/doc/hbplus/`. The 21 MB design
+checkpoint and Git history are removed after installation; the EV6 labeller fold models that ship with
+`foundry` remain in site-packages because the v6 featurisation path requires them.
 
 ## Model asset provenance
 
