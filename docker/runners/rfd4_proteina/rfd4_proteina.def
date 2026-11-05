@@ -1,0 +1,93 @@
+Bootstrap: docker
+From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04@sha256:23debbe74125dc84df96df79cff42079b3b15265c27140714fd27b5aa718faa4
+
+%labels
+    org.opencontainers.image.source https://github.com/RosettaCommons/RFD4-Proteina
+    org.opencontainers.image.revision 68058693cb88762a8aaf806571e13b291ce6318a
+    org.opencontainers.image.licenses BSD-3-Clause
+
+%files
+    rfd4_proteina/requirements.lock /opt/rfd4-requirements.lock
+
+%post
+    set -eux
+    apt-get update
+    # build-essential and the Python headers cover torch.compile/Inductor, which
+    # the native inference backend may compile on first use. The CUDA runtime
+    # base and the cu126 wheels share the CUDA 12.6 minor.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates git build-essential python3 python3-dev python3-venv
+    rm -rf /var/lib/apt/lists/*
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    # Pinned upstream CUDA 12 profile: .[all-cuda12] with torch cu126. The lock
+    # carries every runtime dependency with its published hashes, including the
+    # fused cuEquivariance kernels the model loads even when metrics are skipped.
+    UV_HTTP_TIMEOUT=300 /opt/venv/bin/uv pip sync --python /opt/venv/bin/python --no-cache \
+        --require-hashes \
+        --index-url https://download.pytorch.org/whl/cu126 \
+        --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match \
+        /opt/rfd4-requirements.lock
+    git init /opt/RFD4-Proteina
+    git -C /opt/RFD4-Proteina remote add origin https://github.com/RosettaCommons/RFD4-Proteina.git
+    git -C /opt/RFD4-Proteina fetch --depth 1 origin 68058693cb88762a8aaf806571e13b291ce6318a
+    git -C /opt/RFD4-Proteina checkout --detach FETCH_HEAD
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache \
+        --no-build-isolation --no-deps /opt/RFD4-Proteina
+    rm -rf /opt/RFD4-Proteina/.git /opt/rfd4-requirements.lock
+    /opt/venv/bin/uv pip check --python /opt/venv/bin/python
+    # Reserved Runtime Bundle mount point. This image is the *environment*;
+    # REvoCompute's entrypoint, adapter, and asset manifest arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /mnt/db/weights/rfd4-proteina /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONNOUSERSITE=1
+    export HF_HOME=/tmp/hf-home
+    export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+    export TMOL_DISABLE_WHEEL_FETCH=1 TMOL_JIT_FALLBACK=0 TMOL_USE_JIT=0
+    # Only satisfies inference.yaml interpolation; the Task always passes
+    # hf_ckpt_path and never reads native checkpoints from DATA_PATH.
+    export DATA_PATH=/tmp/rfd4-data
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    # Fail on the first broken check: a later command must not mask a failed import.
+    set -e
+    # Environment validity only: the pinned CUDA/PyTorch ABI, the upstream
+    # package and its real import chain, and the fused cuEquivariance/TMol
+    # operators from the all-cuda12 extra. REvoCompute overlay modules are
+    # deliberately absent from the image, so importing them would test the
+    # wrong artifact.
+    python - <<'PY'
+import importlib.metadata as metadata
+
+import atomworks  # noqa: F401 -- upstream import chain
+import cuequivariance_torch  # noqa: F401 -- fused kernel package from all-cuda12
+import rfproteina  # noqa: F401 -- pinned upstream package
+import rfproteina.conditions  # noqa: F401 -- required registry side-effect
+import torch
+from openbabel import pybel
+from tmol.score.ljlk.potentials._compiled import ljlk_pose_scores
+
+assert torch.__version__ == "2.14.1+cu126", torch.__version__
+assert torch.version.cuda == "12.6", torch.version.cuda
+assert metadata.version("rfd4-proteina") == "0.0.3", metadata.version("rfd4-proteina")
+ops = {
+    dist.metadata["Name"].lower().replace("_", "-")
+    for dist in metadata.distributions()
+    if dist.metadata["Name"].lower().replace("_", "-").startswith("tmol-ops-")
+}
+assert ops == {"tmol-ops-cu12"}, ops
+assert callable(ljlk_pose_scores)
+assert pybel.readstring("smi", "CCO").OBMol.NumAtoms() == 3
+PY
+    rfd4-generate --help >/dev/null
+    test -d /opt/RFD4-Proteina
+    test -d /opt/revocompute/runtime
+    test ! -e /app/revocompute
+
+%runscript
+    exec "$@"

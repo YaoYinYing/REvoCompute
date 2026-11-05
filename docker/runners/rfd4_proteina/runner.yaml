@@ -1,0 +1,5 @@
+display_name: RFD4 Proteina
+mounts:
+- host_path: /mnt/db/weights/rfd4-proteina
+  container_path: /mnt/db/weights/rfd4-proteina
+  mode: ro

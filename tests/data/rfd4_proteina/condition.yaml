@@ -1,0 +1,7 @@
+motif_design:
+  # A1-2 is the preserved scaffold segment; the unnamed 5-10 segment is a fresh
+  # generated chain. Every preserved range must stay within scaffold.cif chain A.
+  contig: "A1-2, /0, 5-10"
+  conditions:
+    C_CRD: {true: [{select: "sel('A') and is_protein_backbone"}]}
+    C_SEQ: {true: [{select: "sel('A')"}]}
