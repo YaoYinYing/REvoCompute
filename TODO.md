@@ -55,6 +55,12 @@ earlier authorized run. One graph, one StageRun authority — no second DAG and 
       never ran, different-structure recorded identity, digest mismatch, not owned by caller.
 - [x] Preserve the original producing Task and its `ResultManifest`; reuse is a new provenance edge, not a
       mutation.
+- [x] The consumer Runner reads the staged artifact from `TASK_STAGE_INPUTS`: AF2 and AF3 re-verify its
+      size and sha256, place it where their model stage reads it, and derive the stage marker from those
+      bytes. A full-mode model stage keeps using its own tree.
+- [ ] Promote the runner-side consumption: AF2 `run.sh` is baked into the SIF, so it needs a rebuild;
+      AF3 and the shared resolver ride a runtime-overlay bundle. A real MODEL_ONLY target-host
+      acceptance has not run.
 - [ ] Accounting: a reused stage is not billed again; a stage attempt that never got an allocation creates
       no ledger fact. (Server-side materialization opens no attempt, so no ledger fact exists; the
       not-billed-again claim needs the AF2/AF3 target-host receipt to close.)

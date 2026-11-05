@@ -202,6 +202,15 @@ Rules the code enforces:
   refuses the stage as `stage_input_unavailable`/`stage_input_invalid` with no attempt and no
   allocation. The producing Task and its `ResultManifest` are never mutated, and reuse opens no
   producer StageRun in the consumer Task.
+- The Runner consumes the staged artifact from the same document. A model-only stage keys on the
+  document declaring its reuse role; a full-mode model stage also receives a document, for its
+  in-graph role, and keeps consuming the tree it built. AF2 places the verified `features.pkl` where
+  `run_alphafold.py --run_stage=model` reads it; AF3 keeps the staged `<job>/<job>_data.json` layout
+  that `find_processed_json` and `--json_path` already expect. Both re-verify size and sha256 from
+  `common/runtime/stage_inputs.py` before modeling and derive the stage marker from the verified
+  bytes. The declared ports are sufficient inputs: the pinned AF2 model stage reads only
+  `features.pkl`, and AF3 inference with `--run_data_pipeline=false` reads only the processed
+  `_data.json`.
 - `model_only` uses the `full` output contract: a model-only run that lacks the Task's required
   scientific outputs fails its output check.
 - The Create-Task upload surface for a model-only submission (choosing among the caller's validated

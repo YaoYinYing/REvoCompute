@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -197,6 +198,113 @@ def test_model_stage_recomputes_instead_of_reusing_finished_outputs(tmp_path):
     assert "REVODESIGN_STAGE:inference" in rerun.stdout
     assert len(call_log.read_text(encoding="utf-8").splitlines()) == 3
     assert (output / "task_finished").is_file()
+
+
+def _staged_processed_document(
+    tmp_path: Path, content: bytes = b'{"name": "Test Job"}', *, role: str = "prepared_features"
+):
+    """A Server-shaped document for the AF3 ``model.features`` reuse role."""
+    artifact = tmp_path / "stage_inputs" / role / "test_job" / "test_job_data.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(content)
+    document = tmp_path / "stage_inputs" / "stage_inputs.json"
+    document.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "stage": "model",
+                "inputs": {
+                    role: {
+                        "path": str(artifact),
+                        "files": [{
+                            "path": str(artifact),
+                            "sha256": hashlib.sha256(content).hexdigest(),
+                            "size": len(content),
+                        }],
+                        "producer": "features",
+                        "producer_attempt": 1,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return document, artifact
+
+
+def _stage_inputs_env(env: dict[str, str], document: Path) -> dict[str, str]:
+    env.update({
+        "TASK_STAGE_INPUTS": str(document),
+        "ALPHAFOLD3_STAGE_INPUTS_PY": str(ROOT / "docker" / "runners" / "common" / "runtime" / "stage_inputs.py"),
+    })
+    return env
+
+
+def test_model_stage_models_the_verified_staged_processed_json(tmp_path):
+    env, manifest, call_log = _runner_env(tmp_path)
+    output = tmp_path / "result"
+    document, staged = _staged_processed_document(tmp_path)
+    _stage_inputs_env(env, document)
+
+    model = _run_stage(env, manifest, output, "model")
+
+    assert model.returncode == 0, model.stderr
+    materialized = output / "features/test_job/test_job_data.json"
+    assert materialized.read_bytes() == staged.read_bytes()
+    assert (output / ".alphafold3-features-complete").read_text(encoding="utf-8").strip() == hashlib.sha256(
+        staged.read_bytes()
+    ).hexdigest()
+    calls = [json.loads(line) for line in call_log.read_text(encoding="utf-8").splitlines()]
+    assert len(calls) == 1
+    assert f"--json_path={materialized}" in calls[0]
+    assert (output / "task_finished").is_file()
+
+
+def test_model_stage_refuses_staged_processed_json_that_changed(tmp_path):
+    env, manifest, call_log = _runner_env(tmp_path)
+    output = tmp_path / "result"
+    document, staged = _staged_processed_document(tmp_path)
+    staged.write_bytes(b'{"name": "Test Jab"}')
+    _stage_inputs_env(env, document)
+
+    model = _run_stage(env, manifest, output, "model")
+
+    assert model.returncode != 0
+    assert "digest does not match" in model.stderr
+    assert not (output / "features/test_job/test_job_data.json").exists()
+    assert not (output / "task_finished").exists()
+    assert not call_log.exists()
+
+
+def test_model_stage_ignores_a_document_without_the_reuse_role(tmp_path):
+    # A full-mode model stage exports a document for its in-graph "features"
+    # role. Only the reuse role selects the staged artifact; without it the
+    # attempt still requires this Task's own validated feature tree.
+    env, manifest, call_log = _runner_env(tmp_path)
+    output = tmp_path / "result"
+    document, _ = _staged_processed_document(tmp_path, role="features")
+    _stage_inputs_env(env, document)
+
+    model = _run_stage(env, manifest, output, "model")
+
+    assert model.returncode != 0
+    assert "Validated AlphaFold 3 processed JSON is missing" in model.stderr
+    assert not call_log.exists()
+    assert not (output / "task_finished").exists()
+
+
+def test_full_mode_ignores_a_staged_reuse_document(tmp_path):
+    env, manifest, call_log = _runner_env(tmp_path)
+    output = tmp_path / "result"
+    document, staged = _staged_processed_document(tmp_path, content=b'{"name": "Other Task"}', role="features")
+    _stage_inputs_env(env, document)
+
+    full = _run_stage(env, manifest, output, "all")
+
+    assert full.returncode == 0, full.stderr
+    assert (output / "features/test_job/test_job_data.json").read_bytes() == b'{"name": "Test Job"}'
+    assert staged.read_bytes() == b'{"name": "Other Task"}'
+    assert len(call_log.read_text(encoding="utf-8").splitlines()) == 2
 
 
 def test_failed_attempt_publishes_no_output_from_the_previous_one(tmp_path):

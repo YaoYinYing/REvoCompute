@@ -58,6 +58,20 @@ UI/API presentation and target-host receipt remain. Base `6d726f54` + local comm
 - The Task Type API projects each mode's `output_contract` and `reuse` list; the live-test
   configuration digest now includes both. Docs: the reuse contract is recorded in
   `docs/developer-guide/composable-execution-architecture.md`.
+- The Runner consumes the staged artifact, not its own tree. `common/runtime/stage_inputs.py`
+  (`resolve`, `materialize`, `declares`) verifies each staged file's size and sha256 and is mounted by
+  both AF bundles. AF2 materializes the single `prepared_features` file to the `features.pkl` path
+  `run_alphafold.py --run_stage=model` reads; AF3 materializes the staged `<job>/<job>_data.json`
+  layout into its feature directory, which is what `find_processed_json` and `--json_path` expect.
+  Both derive the stage marker from the verified bytes. The stage is selected by the document
+  declaring the reuse role, so a full-mode model stage — whose document declares the in-graph
+  `features` role — keeps using the tree it built. The declared ports suffice: AF2's pinned model
+  stage reads only `features.pkl`; AF3 inference with `--run_data_pipeline=false` reads only the
+  processed `_data.json`.
+- Promotion is still pending: AF2's `run.sh` is a `build_inputs` entry baked into the SIF, so the
+  model-stage change needs a SIF rebuild plus a fresh live-test receipt; AF3's `run.sh` and both
+  bundles' new `common/runtime/stage_inputs.py` are runtime overlays, so a candidate bundle activation
+  carries them. No real MODEL_ONLY target-host acceptance has run.
 - Tests: compile digest/rejection cases, named submission refusals (each mutation fails its test),
   reuse-identity task separation, successful submission freeze, successful dispatch materialization
   with no producer StageRun, and changed/deleted/foreign-owner/removed source refusals. 208 focused
