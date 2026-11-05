@@ -231,8 +231,13 @@ def test_the_lifecycle_probe_distinguishes_a_format_dialect_from_a_logical_arm(i
         if str(role["type"]) == "boltz_specification"
     ]
     assert boltz, "the fleet declares a boltz_specification role"
-    for role in boltz:
-        assert "format_dialect_validation" in role["lifecycles"]
+    # The inventory unit is the (type, format) pair, so a role carries only the
+    # classes its declared formats exercise. The fleet must still cover both
+    # arms: a FASTA-declaring role uses the registered dialect, a YAML-only role
+    # the inline logical arm.
+    classes = {name for role in boltz for name in role["lifecycles"]}
+    assert "format_dialect_validation" in classes, "a FASTA-declaring boltz_specification role uses the dialect arm"
+    assert "inline_logical_validation" in classes, "a YAML-only boltz_specification role uses the logical arm"
 
     # A type the registries know nothing about is reported as having no semantic
     # validator rather than being given the nearest-sounding class.
