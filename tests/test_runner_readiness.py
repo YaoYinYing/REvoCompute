@@ -581,6 +581,24 @@ def test_activation_preflight_lists_requested_families_in_order_and_disabled_one
     assert "build-sif" in format_activation_preflight(results)
 
 
+def test_activation_preflight_resolves_a_declared_but_disabled_family(tmp_path, monkeypatch):
+    """A merge candidate is absent from the enabled instance snapshot until activation."""
+    source = tmp_path / "source" / "docker" / "runners"
+    shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "restricted_runner", source / "restricted_runner")
+    shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "common", source / "common")
+    state = _State(tmp_path)
+    state.get = lambda key: str(source) if key == "RUNNER_SOURCE_ROOT" else ""
+    monkeypatch.setattr("revocompute.runner_readiness.load_instance_families", lambda _state: [])
+    monkeypatch.setattr("revocompute.runner_readiness.diagnose", lambda *_args, **_kwargs: DoctorReport(()))
+
+    results = activation_preflight_snapshot(state, runners=("restricted_runner",))
+
+    assert [item.runner_family for item in results] == ["restricted_runner"]
+    assert results[0].status is RunnerReadinessStatus.NOT_BUILT
+    assert results[0].next_action == "build-sif"
+    assert results[0].sif_path == str(tmp_path / "images" / "restricted_runner_v1.sif")
+
+
 def test_activation_preflight_unknown_family_fails_cleanly(evidence, monkeypatch):
     state, _family, _active = evidence
     monkeypatch.setattr("revocompute.runner_readiness.load_instance_families", lambda _state: [])

@@ -700,16 +700,33 @@ def format_readiness_text(readiness: list[RunnerReadiness], *, detailed: bool = 
     return "\n".join("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip() for row in rows)
 
 
-def load_instance_families(state) -> list[RuntimeFamily]:
-    """Load the families and active SIF paths owned by the current deployment."""
-    source_root = deployment_plugin_root(state)
+def _instance_family(state, family: RuntimeFamily) -> RuntimeFamily:
+    """Point a family at the SIF path this deployment would execute."""
     image_root = Path(state.server_dir()).parent / "images"
-    return [
+    return (
         replace(family, slurm_image=str(image_root / family.slurm_image))
         if not Path(family.slurm_image).is_absolute()
         else family
-        for family in load_plugin_families(source_root)
-    ]
+    )
+
+
+def load_instance_families(state) -> list[RuntimeFamily]:
+    """Load the families and active SIF paths owned by the current deployment."""
+    return [_instance_family(state, family) for family in load_plugin_families(deployment_plugin_root(state))]
+
+
+def _source_families(state) -> list[RuntimeFamily]:
+    """Families declared in the source checkout, including not-yet-enabled ones.
+
+    The materialized instance snapshot holds only the families enabled at the
+    last prepare. A merge candidate is normally still disabled, so preflight
+    resolves it from the checkout rather than calling it unknown.
+    """
+    override = state.get("RUNNER_SOURCE_ROOT")
+    source_root = Path(override) if override else Path(SERVER_ROOT) / "docker" / "runners"
+    if not source_root.is_dir() or not any(source_root.glob("*/plugin.yaml")):
+        return []
+    return [_instance_family(state, family) for family in load_plugin_families(source_root)]
 
 
 def evaluate_runner_readiness(state, runner_family: str) -> RunnerReadiness:
@@ -777,6 +794,11 @@ def activation_preflight_snapshot(state, *, runners: tuple[str, ...] | list[str]
     sys.dont_write_bytecode = True
     try:
         families = {family.name: family for family in load_instance_families(state)}
+        missing = {name for name in runners if name not in families}
+        if missing:
+            families.update(
+                {family.name: family for family in _source_families(state) if family.name in missing}
+            )
         unknown = [name for name in runners if name not in families]
         if unknown:
             raise RegistryError(f"Unknown Runner Family: {', '.join(unknown)}")
