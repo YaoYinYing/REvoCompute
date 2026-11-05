@@ -64,7 +64,7 @@ chain identity and a real titratable residue.
 
 ## Activation status (source-only)
 
-The family is discoverable from this tree, but enrollment is deployment configuration: an empty `ENABLED_TASKRUNNERS` enables every discovered family, so whether this instance omits it is an operator/Maintainer check, not a source guarantee. Excluded, readiness resolves to `NOT_CONFIGURED` / `RUNNER_UNKNOWN`; enabled but without a SIF or receipt, it resolves to `NOT_BUILT` / `SIF_MISSING` with `next_action=build-sif`. No readiness attestation exists, so submission admission reports `RUNNER_UNAVAILABLE` even when discovered. No READY or admission claim is made. `docker/runners/proton_pottsmpnn/tests/fast/test_contract.py` exercises these paths.
+The family is discoverable from this tree, but enrollment is deployment configuration: an empty `ENABLED_TASKRUNNERS` enables every discovered family, so whether this instance omits it is an operator/Maintainer check, not a source guarantee. Excluded, readiness resolves to `NOT_CONFIGURED` / `RUNNER_UNKNOWN`; enabled without a SIF it resolves to `NOT_BUILT` / `SIF_MISSING` with `next_action=build-sif`, while a built SIF without a live-test receipt resolves to `NOT_VALIDATED` / `RECEIPT_MISSING` with `next_action=live-test`. No readiness attestation exists, so submission admission reports `RUNNER_UNAVAILABLE` even when discovered. No READY or admission claim is made. `docker/runners/proton_pottsmpnn/tests/fast/test_contract.py` exercises these paths.
 
 ## Activation gates
 
