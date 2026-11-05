@@ -3,3 +3,8 @@ mounts:
 - host_path: /mnt/db/weights/proton-pottsmpnn
   container_path: /mnt/db/weights/proton-pottsmpnn
   mode: ro
+- host_path: /mnt/db/tools/hbplus
+  container_path: /mnt/db/tools/hbplus
+  mode: ro
+env:
+  HBPLUS_PATH: /mnt/db/tools/hbplus/hbplus

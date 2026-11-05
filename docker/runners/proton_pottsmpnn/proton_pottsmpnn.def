@@ -4,7 +4,7 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
 %labels
     org.opencontainers.image.source https://github.com/christian-creator/ProtonPottsMPNN
     org.opencontainers.image.revision 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
-    org.opencontainers.image.licenses MIT AND BSD-3-Clause AND LicenseRef-HBPLUS-Academic
+    org.opencontainers.image.licenses MIT AND BSD-3-Clause
 
 %files
     proton_pottsmpnn/requirements-extra.txt /tmp/proton-requirements-extra.txt
@@ -13,25 +13,8 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
     set -eux
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        git ca-certificates curl build-essential
+        git ca-certificates
     rm -rf /var/lib/apt/lists/*
-
-    # HBPLUS 3.06 (RomanLas/HBPLUS, pinned commit) is required by the v6
-    # CalculateHbondsPlus transform inside prepare_potts_input; it is not
-    # pip-installable. The tarball SHA-256 is pinned, not just the Git commit.
-    curl -fsSL \
-        https://raw.githubusercontent.com/RomanLas/HBPLUS/0bd4df6aab49054322c23c4dcfcc07075a84bc05/hbplus.tar.gz \
-        -o /tmp/hbplus.tar.gz
-    echo '937467447bd2e429630cc9a226d7d967f728ca2d39bac3ffc70eb378f498fa20  /tmp/hbplus.tar.gz' \
-        | sha256sum -c -
-    mkdir -p /tmp/hbplus-src
-    tar xzf /tmp/hbplus.tar.gz -C /tmp/hbplus-src
-    make -C /tmp/hbplus-src/hbplus
-    install -m 0755 /tmp/hbplus-src/hbplus/hbplus /usr/local/bin/hbplus
-    install -d /usr/local/share/doc/hbplus
-    install -m 0644 /tmp/hbplus-src/hbplus/hbplus.c /usr/local/share/doc/hbplus/hbplus.c
-    install -m 0644 /tmp/hbplus-src/hbplus/hbplus.h /usr/local/share/doc/hbplus/hbplus.h
-    rm -rf /tmp/hbplus.tar.gz /tmp/hbplus-src
 
     git clone https://github.com/christian-creator/ProtonPottsMPNN.git /opt/ProtonPottsMPNN
     cd /opt/ProtonPottsMPNN
@@ -46,28 +29,25 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
     mkdir -p /mnt/db/weights/proton-pottsmpnn /opt/revocompute/runtime
 
 %environment
-    export HBPLUS_PATH=/usr/local/bin/hbplus
     export HF_HUB_OFFLINE=1
     export TRANSFORMERS_OFFLINE=1
 
 %test
-    export HBPLUS_PATH="${HBPLUS_PATH:-/usr/local/bin/hbplus}"
     python - <<'PY'
+import shutil
 from pathlib import Path
 
 from mpnn.inference_engines.potts_mpnn_ph import PHDesignCriteria, PottsMPNNPHEngine
-from mpnn.potts_inference import prepare_potts_input
 from mpnn.transforms.ev6 import EV6Predictor
 
 assert PottsMPNNPHEngine.__name__ == 'PottsMPNNPHEngine'
 assert PHDesignCriteria.__name__ == 'PHDesignCriteria'
-example = Path('/opt/ProtonPottsMPNN/inference/examples/pdl1_seed_binder.pdb')
-assert example.is_file(), example
-batch = prepare_potts_input(example, extended_vocab='v6')
-assert batch['network_input'], 'v6 prepare_potts_input returned no model input'
-scored = EV6Predictor().predict(batch['atom_array'])
-assert len(scored), 'EV6 fold ensemble produced no protonation calls'
-print(PottsMPNNPHEngine.__name__, PHDesignCriteria.__name__, 'v6 pipeline + EV6 fold ensembles executed')
+predictor = EV6Predictor()
+assert len(predictor._his_folds) == 5, 'His EV6 fold models did not unpickle'
+assert len(predictor._acid_folds) == 5, 'acid EV6 fold models did not unpickle'
+assert shutil.which('hbplus') is None, 'HBPLUS must not be bundled in the image'
+assert not Path('/usr/local/share/doc/hbplus').exists(), 'HBPLUS notice must not be bundled'
+print('engine imports + EV6 fold models loaded; no HBPLUS bundled')
 PY
 
 %runscript

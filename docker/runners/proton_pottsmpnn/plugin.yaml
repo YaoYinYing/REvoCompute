@@ -12,5 +12,11 @@ runtime:
     - proton_pottsmpnn/run.sh
     - proton_pottsmpnn/adapter.py
     - proton_pottsmpnn/model-assets.sha256
+  access_policy: proton_pottsmpnn_academic_only
   entrypoint: [bash, /opt/revocompute/runtime/proton_pottsmpnn/run.sh]
 tasks: [tasks/proton_pottsmpnn/task.yaml]
+access_policies:
+- common/policy/proton_pottsmpnn_academic_only.yaml
+contributions:
+  access_policies:
+  - proton_pottsmpnn_academic_only

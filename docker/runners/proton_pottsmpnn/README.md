@@ -5,20 +5,28 @@ Pinned source: `christian-creator/ProtonPottsMPNN` at `09682abfa7d20e0abcdeea049
 The image installs the pinned `foundry` package plus the pinned runtime entries from
 `requirements-extra.txt`. The v6 path is not import-only: every `PottsMPNNPHEngine.run_ph_redesign` call
 featurises through `prepare_potts_input(..., extended_vocab="v6")`, which unconditionally runs
-`CalculateHbondsPlus` and the EV6 FLAML labeller. The image therefore builds HBPLUS 3.06 from the pinned
-`RomanLas/HBPLUS` commit, exports `HBPLUS_PATH`, and pins the labeller stack (`flaml`, `xgboost`,
-`lightgbm`, `scikit-learn`). `%test` executes `prepare_potts_input` on the pinned upstream example PDB and
-runs `EV6Predictor.predict()`, so a missing HBPLUS binary or unpicklable fold model fails the build instead
-of the first design. The adapter validates the pinned code's complete 30-token, three-letter v6
-`token_atoms` vocabulary and constructs `PottsMPNNPHEngine` with `extended_vocab="v6"`.
+`CalculateHbondsPlus` and the EV6 FLAML labeller. HBPLUS is **not** bundled: the operator provisions the
+executable under HBPLUS's own licence terms and exports `HBPLUS_PATH` in the runner environment. The adapter
+fails closed before design if `HBPLUS_PATH` is unset, missing, or not executable; it never falls back to a
+bundled or default path. The image pins the labeller stack (`flaml`, `xgboost`, `lightgbm`,
+`scikit-learn`). `%test` imports the design engine and loads the EV6 fold models, and asserts that the image
+contains no HBPLUS binary or notice. The adapter validates the pinned code's complete 30-token, three-letter
+v6 `token_atoms` vocabulary and constructs `PottsMPNNPHEngine` with `extended_vocab="v6"`.
 
 Licence: authored upstream code is MIT; the bundled `foundry` tree is BSD-3-Clause. Both notices ship in
-`/opt/ProtonPottsMPNN`, and the image label declares `MIT AND BSD-3-Clause AND
-LicenseRef-HBPLUS-Academic`. HBPLUS is a separate program
-(Copyright I K McDonald, D T Jones, D Naylor and J M Thornton; free to academic users under its own terms,
-not an OSI licence); its source notice is retained at `/usr/local/share/doc/hbplus/`. The 21 MB design
+`/opt/ProtonPottsMPNN`, and the image label declares only those shipped licences (`MIT AND BSD-3-Clause`).
+HBPLUS (Copyright I K McDonald, D T Jones, D Naylor and J M Thornton) is not redistributed in any form and
+is not covered by that label; the operator supplies it under its own academic-use terms. The 21 MB design
 checkpoint and Git history are removed after installation; the EV6 labeller fold models that ship with
 `foundry` remain in site-packages because the v6 featurisation path requires them.
+
+## Access posture
+
+The plugin declares `runtime.access_policy: proton_pottsmpnn_academic_only` in
+`common/policy/proton_pottsmpnn_academic_only.yaml`. The policy requires operator approval, records that
+HBPLUS is operator-provisioned rather than distributed, and makes the family requestable only to entitled
+users. The family remains disabled until the operator provisions HBPLUS and the maintainer accepts a live
+receipt.
 
 ## Model asset provenance
 
@@ -40,10 +48,11 @@ These values are recorded in `model-assets.sha256`.
 2. Copy `checkpoints/potts_v6_afdb_edge_his0.3_acid0.06/epoch-0125.ckpt` from the pinned revision into that root — no runtime download, no write by the service account.
 3. Verify size is exactly 21,494,143 bytes and `sha256sum` matches the value above; record the verification with the deployment.
 4. Keep the mount read-only. The adapter verifies the hash from `model-assets.sha256` and fails closed on absence or mismatch.
+5. Provision an HBPLUS executable outside the image, under the operator's own HBPLUS licence terms. Do not bake it into the SIF. The checked-in `runner.yaml` binds `/mnt/db/tools/hbplus` read-only and sets `HBPLUS_PATH=/mnt/db/tools/hbplus/hbplus`; adjust those machine-specific values for the deployment. The adapter refuses to start if `HBPLUS_PATH` is unset, missing, or not executable, and never falls back.
 
 ## Binder residue indexing
 
-The pinned engine builds `chainA_all_idx` from the featurised token array, which follows the Biotite atom order supplied by `prepare_potts_input`; `_score_design` emits `canonical_sequence` and `extended_tokens` from that same index. Centres are matched by authored `res_id`. The adapter therefore supports ascending, possibly nonconsecutive, zero, or negative binder numbering, and refuses insertion codes, duplicate numbering, and out-of-order authored numbering before design. The authored mapping is reused unchanged for output offset validation, which checks that every canonical residue matches its protonation token's parent.
+The pinned engine builds `chainA_all_idx` from the featurised token array, which follows the Biotite atom order supplied by `prepare_potts_input`; `_score_design` emits `canonical_sequence` and `extended_tokens` from that same index. Centres are matched by authored `res_id` through `_PHContext.res_id_to_pos`, which maps each token's `res_id` to its context position. The adapter therefore supports ascending, possibly nonconsecutive, zero, or negative binder numbering, and refuses insertion codes, duplicate numbering, and out-of-order authored numbering before design. Because Biotite preserves PDB atom order and the parser refuses any reordering it cannot map, the adapter's ascending authored order is the same binder order the engine featurises. The authored mapping is reused unchanged for output offset validation, which fails closed on a binder-length mismatch, on any canonical residue that disagrees with its protonation token's parent, or on a pinned centre that does not occupy the expected offset.
 
 ## Smoke fixture
 
@@ -58,4 +67,4 @@ The family is discoverable from this tree, but it is not in the deployment's `EN
 
 ## ASSET_BLOCKED
 
-The mount is absent today, so the family is not READY. A candidate SIF may be built and `%test`-checked without the checkpoint; `%test` already exercises the v6 featurisation and EV6 fold ensembles at build time. No SIF build or model-backed design run has been executed in this change, so scientific execution and the live-test receipt require the provisioned, hash-verified checkpoint. Remaining gates: operator provisioning above, candidate SIF build and direct-API smoke, target-host live acceptance, then activation by the maintainer.
+The checkpoint mount is absent today and no HBPLUS executable is provisioned, so the family is not READY and is not enabled. A candidate SIF may be built and `%test`-checked without either asset; `%test` verifies the engine imports and EV6 fold models and asserts that no HBPLUS is bundled. No SIF build or model-backed design run has been executed in this change, so scientific execution and the live-test receipt require the operator-provisioned HBPLUS and the hash-verified checkpoint. Remaining gates: operator provisioning above, candidate SIF build and direct-API smoke, target-host live acceptance, then activation by the maintainer.

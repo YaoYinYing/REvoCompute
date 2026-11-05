@@ -5,8 +5,8 @@
 from __future__ import annotations
 
 import json
+import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -48,6 +48,22 @@ def verify_checkpoint(manifest_path: Path | None = None) -> Path:
     if digest.hexdigest() != rows[0][0]:
         raise RuntimeError(f'ASSET_BLOCKED: checkpoint SHA256 mismatch: {checkpoint}')
     return checkpoint
+
+
+def verify_hbplus() -> Path:
+    """Require the operator-provisioned HBPLUS executable; never fall back to a bundled path."""
+    configured = os.environ.get('HBPLUS_PATH', '').strip()
+    if not configured:
+        raise RuntimeError(
+            'ASSET_BLOCKED: HBPLUS_PATH is not set; the operator must provision HBPLUS under its own '
+            'licence terms and export HBPLUS_PATH in the runner environment'
+        )
+    executable = Path(configured)
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise RuntimeError(
+            f'ASSET_BLOCKED: HBPLUS_PATH does not name an executable file: {executable}'
+        )
+    return executable
 
 
 def read_binder_residues(path: Path, binder_chain: object,
@@ -274,6 +290,7 @@ def main() -> int:
     if len(input_roles) != 1 or Path(input_roles[0]['path']).resolve() != input_path.resolve():
         raise ValueError('complex input must be the single named complex role')
     checkpoint = verify_checkpoint()
+    os.environ['HBPLUS_PATH'] = str(verify_hbplus())
     from biotite.structure.io.pdb import PDBFile
     from mpnn.inference_engines.potts_mpnn_ph import PHDesignCriteria, PottsMPNNPHEngine
     from mpnn.transforms.feature_aggregation.token_encodings import POTTS_MPNN_V6_TOKEN_ENCODING

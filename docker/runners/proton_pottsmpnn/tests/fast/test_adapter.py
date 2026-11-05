@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 MODULE = Path(__file__).resolve().parents[2] / 'adapter.py'
 ROOT = Path(__file__).resolve().parents[5]
 
@@ -319,6 +321,53 @@ def test_canonical_sequence_must_match_every_token_parent(tmp_path):
         assert 'canonical residue' in str(exc)
     else:
         raise AssertionError('token/canonical-parent mismatch accepted')
+
+
+def test_operator_hbplus_provisioning_fails_closed(monkeypatch, tmp_path):
+    monkeypatch.delenv('HBPLUS_PATH', raising=False)
+    with pytest.raises(RuntimeError, match='HBPLUS_PATH is not set'):
+        adapter.verify_hbplus()
+
+    missing = tmp_path / 'missing-hbplus'
+    monkeypatch.setenv('HBPLUS_PATH', str(missing))
+    with pytest.raises(RuntimeError, match='does not name an executable'):
+        adapter.verify_hbplus()
+
+    not_executable = tmp_path / 'hbplus'
+    not_executable.write_text('#!/bin/sh\n', encoding='utf-8')
+    not_executable.chmod(0o644)
+    monkeypatch.setenv('HBPLUS_PATH', str(not_executable))
+    with pytest.raises(RuntimeError, match='does not name an executable'):
+        adapter.verify_hbplus()
+
+    not_executable.chmod(0o755)
+    assert adapter.verify_hbplus() == not_executable
+
+
+def test_shifted_sequence_mapping_is_refused_even_when_tokens_agree(tmp_path):
+    """A shifted binder order can keep canonical/token agreement but move the pinned centre."""
+    output = tmp_path / 'bad'
+    (output / 'candidates').mkdir(parents=True)
+    (output / 'candidates' / 'designs.fa').write_text('>bad\nDHEA\n', encoding='utf-8')
+    (output / 'candidates' / 'designs_states.fa').write_text(
+        '>bad\nASP-D HIS-P GLU-D ALA\n', encoding='utf-8'
+    )
+    (output / 'design_scores.json').write_text(json.dumps({'designs': [{
+        'design_id': 'bad', 'extended_tokens': 'ASP-D HIS-P GLU-D ALA',
+        'center_res_ids': [1], 'center_protonation_types': ['HIS-P'],
+    }]}), encoding='utf-8')
+    (output / 'task_config.json').write_text(
+        json.dumps({'checkpoint_path': '/mnt/model.ckpt'}), encoding='utf-8'
+    )
+    try:
+        adapter.validate_outputs(
+            output, {1: 'H', 2: 'D', 3: 'E', 4: 'A'},
+            [{'position': 1, 'state': 'HIS-P'}], ['HIS-P', 'HIS-S'],
+        )
+    except ValueError as exc:
+        assert 'does not preserve requested centre' in str(exc)
+    else:
+        raise AssertionError('shifted centre mapping accepted')
 
 
 def test_asset_manifest_remains_blocked_without_hash(tmp_path):
