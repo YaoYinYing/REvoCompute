@@ -1,0 +1,17 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-two-state-design
+      task: proton_pottsmpnn
+      input: {roles: {complex: [tests/data/complex.pdb]}}
+      parameters:
+        binder_chain: A
+        designable_residues: [1, 4]
+        locked_residues: [2, 3]
+        centres: [{position: 1, state: HIS-P}, {position: 2, state: ASP-D}, {position: 3, state: GLU-D}]
+        states: [HIS-P, HIS-S]
+        block_size: 1
+        neighbour_count: 1
+        mutation_cap: 1
+        seed: 7

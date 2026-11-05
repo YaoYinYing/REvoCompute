@@ -1,0 +1,5 @@
+display_name: Proton PottsMPNN
+mounts:
+- host_path: /mnt/db/weights/proton-pottsmpnn
+  container_path: /mnt/db/weights/proton-pottsmpnn
+  mode: ro

@@ -1,0 +1,142 @@
+display_name: Proton PottsMPNN pH-conditioned binder design
+category: sequence_design
+summary: Design binder sequences using model scores under two declared protonation-state conditions.
+use_when: Use to compare computational design scores across a requested pH-state contrast.
+input_summary: One target-binder complex structure with explicit chain and residue selections.
+output_summary: Candidate sequences and model-derived objective scores for the two conditions.
+considerations:
+- Scores are model proxies, never measured pKa, affinity, or pH-selective binding.
+- Protonation tokens use the checkpoint's v6 vocabulary, including HIS-P/HIS-S, ASP-P/ASP-D, and GLU-P/GLU-D.
+- Model assets are provisioned separately at /mnt/db/weights/proton-pottsmpnn; the Task fails closed when they are missing.
+inputs:
+  complex:
+    title: Target and binder complex
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb]
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the complex
+    description: Upload the target and binder complex structure.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Complex structure
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the complex
+      options: {source: source_files, select_chains: true, select_residues: true}
+  - id: settings
+    title: Define the design
+    description: Select the binder, mutable positions, and protonation conditions.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Design settings
+  - id: review
+    title: Review and run
+    description: Review chain, residue, and state selections.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: candidate_sequences
+    role: primary
+    title: Designed sequences
+    description: Candidate sequences with model-proxy objectives for the requested conditions.
+    sources:
+      candidates:
+      - glob: candidates/*.fa
+        required: true
+    mapping: {}
+stage_markers:
+  model_loading: Loading PottsMPNN model assets
+  design: Optimizing candidate sequences
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  required: [binder_chain, designable_residues, centres, states]
+  properties:
+    binder_chain:
+      type: string
+      description: One-character chain identifier for the binder.
+      pattern: '^[A-Za-z0-9]$'
+    designable_residues:
+      type: array
+      description: One-based binder residue positions allowed to mutate.
+      minItems: 1
+      maxItems: 500
+      uniqueItems: true
+      items: {type: integer, minimum: 1}
+    locked_residues:
+      type: array
+      description: One-based binder residue positions that must retain their input identity.
+      maxItems: 500
+      uniqueItems: true
+      items: {type: integer, minimum: 1}
+      default: []
+    centres:
+      type: array
+      description: One or more one-based centre positions paired with v6 protonation tokens.
+      minItems: 1
+      maxItems: 30
+      items:
+        type: object
+        additionalProperties: false
+        required: [position, state]
+        properties:
+          position: {type: integer, minimum: 1}
+          state:
+            type: string
+            enum: [HIS-P, HIS-S, ASP-P, ASP-D, GLU-P, GLU-D]
+    states:
+      type: array
+      description: Two v6 protonation-state conditions to compare.
+      minItems: 2
+      maxItems: 2
+      uniqueItems: true
+      items:
+        type: string
+        enum: [HIS-P, HIS-S, ASP-P, ASP-D, GLU-P, GLU-D]
+    lambda:
+      type: number
+      description: Weight for the condition contrast term in the model objective.
+      default: 1.0
+      minimum: 0
+      maximum: 10
+    block_size:
+      type: integer
+      description: Optimizer block size.
+      default: 1
+      minimum: 1
+      maximum: 64
+    temperature:
+      type: number
+      description: Sampling temperature.
+      default: 0.1
+      minimum: 0.0001
+      maximum: 2
+    neighbour_count:
+      type: integer
+      description: Number of sequence neighbours considered per optimization step.
+      default: 8
+      minimum: 1
+      maximum: 128
+    mutation_cap:
+      type: integer
+      description: Maximum number of mutated positions per candidate.
+      default: 20
+      minimum: 1
+      maximum: 500
+    seed:
+      type: integer
+      description: Reproducibility seed.
+      default: 0
+      minimum: 0
+      maximum: 2147483647

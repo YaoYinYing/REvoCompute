@@ -1,0 +1,28 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.04-py3
+
+%labels
+    org.opencontainers.image.source https://github.com/christian-creator/ProtonPottsMPNN
+    org.opencontainers.image.revision 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
+    org.opencontainers.image.licenses MIT
+
+%post
+    set -eux
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates
+    rm -rf /var/lib/apt/lists/*
+    git clone https://github.com/christian-creator/ProtonPottsMPNN.git /opt/ProtonPottsMPNN
+    cd /opt/ProtonPottsMPNN
+    git checkout --detach 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
+    python -m pip install --no-cache-dir ./mpnn
+    mkdir -p /mnt/db/weights/proton-pottsmpnn /opt/revocompute/runtime
+
+%environment
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+
+%test
+    python -c 'import torch; print(torch.__version__)'
+
+%runscript
+    exec "$@"

@@ -57,3 +57,7 @@ Design inference runs on CPU for the example but the Task must declare its real 
 
 No thermodynamic pKa/affinity claim, no mandatory FLAML/HBPLUS/RF3, no unreviewed bundled binaries, no
 upstream training.
+
+## ASSET_BLOCKED
+
+`/mnt/db/weights/proton-pottsmpnn/checkpoints/potts_v6_afdb_edge_his0.3_acid0.06/epoch-0125.ckpt` is absent. The pinned TODO evidence records 21,494,143 bytes, but its SHA256 and the checkpoint's complete 30-token vocabulary are not available in this worktree. No weights were provisioned or downloaded. The adapter also requires a verified vocabulary metadata file at `/mnt/db/weights/proton-pottsmpnn/vocab.json`; confirm that path against the pinned code before provisioning. Next: obtain the exact checkpoint via operator provisioning, record its SHA256 and provenance, verify the full vocabulary against the pinned code, then run target-host acceptance.
