@@ -271,7 +271,30 @@ const structurePlugin: WorkspacePlugin = {
           const mounted = await MolecularViewer.mount(host, { selectionEnabled: selectable, showControls: selectable });
           if (generation !== current) { mounted.dispose(); return; }
           viewer = mounted;
-          if (selectable) removeListener = mounted.onSelectionChanged(residues => { context.setStructureSelections(residues); context.changed(); });
+          if (selectable) removeListener = mounted.onSelectionChanged(residues => {
+            context.setStructureSelections(residues);
+            const names = new Set(context.form.params.map(parameter => parameter.name));
+            if (names.has('start_point_mode')) {
+              if (!residues.length) return context.changed();
+              const chains = new Set(residues.map(item => item.auth_chain));
+              const mode = residues.length > 1 ? 'group' : residues[0]!.hetero ? 'ligand' : 'residue';
+              const supported = residues.every(item => !item.insertion_code && !item.hetero === (mode !== 'ligand')) && chains.size === 1 && [...chains][0] !== '';
+              if (supported) {
+                context.setParameter('start_point_mode', mode);
+                context.setParameter('start_chain', residues[0]!.auth_chain);
+                if (mode === 'residue') {
+                  context.setParameter('start_residue_number', String(residues[0]!.auth_seq_id));
+                  context.setParameter('start_residue_name', residues[0]!.residue_name);
+                } else if (mode === 'ligand') {
+                  context.setParameter('start_residue_number', String(residues[0]!.auth_seq_id));
+                  context.setParameter('start_residue_name', residues[0]!.residue_name);
+                } else {
+                  context.setParameter('start_group', residues.map(item => `${item.auth_chain}:${item.auth_seq_id}`).join(','));
+                }
+              }
+            }
+            context.changed();
+          });
         }
         // ``.ent`` is the legacy PDB extension and must keep the viewer a Task
         // accepts it for; it is parsed as PDB, not as mmCIF.

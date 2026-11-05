@@ -15,6 +15,7 @@ export interface WorkspaceContext {
   sequence(): string;
   sequenceName(): string;
   parameters(): Record<string, string>;
+  setParameter(name: string, value: string): void;
   structureSelections(): SelectedResidue[];
   setStructureSelections(value: SelectedResidue[]): void;
   summaries(): WorkspaceSummary[];

@@ -41,7 +41,7 @@ input_workspace:
     - plugin: structure
       id: structure_summary
       title: Inspect the reference structure
-      options: {source: source_files, role: structure, select_chains: false, select_residues: false}
+      options: {source: source_files, role: structure, select_chains: false, select_residues: true}
   - id: settings
     title: Choose the start point and tunnel controls
     description: Select where tunnel exploration starts and set the CAVER parameters that define and cluster tunnels.
