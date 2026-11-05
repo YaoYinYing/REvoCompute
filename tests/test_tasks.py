@@ -1764,7 +1764,10 @@ def test_result_output_check_reports_missing_required_artifact(monkeypatch, tmp_
     assert next(item for item in manifest["artifacts"] if item["path"] == "active_sites.csv")["role"] == "primary"
 
 
-def _mode_manifest(module, monkeypatch, tmp_path, mode, *, node_output=None, files=()):
+def _mode_manifest(
+    module, monkeypatch, tmp_path, mode, *, node_output=None, files=(),
+    output_contract=None, execution_state="completed",
+):
     """Finalize one synthetic profile_runner Task under a declared mode."""
     from dataclasses import replace
 
@@ -1778,14 +1781,18 @@ def _mode_manifest(module, monkeypatch, tmp_path, mode, *, node_output=None, fil
         (result_dir / name).write_text(text, encoding="utf-8")
     _upsert_task_for_user(
         module, md5sum, filename="enzyme.pdb", file_path=result_dir / "missing.pdb",
-        result_dir=result_dir, username="tester", status="finished",
+        result_dir=result_dir, username="tester",
+        status="failed" if execution_state == "failed" else "finished",
     )
     task_type, runner = module.task_runtime._get_task_type("profile_runner")
     task_type = replace(
         task_type,
         execution_modes=(
             ExecutionMode("full", "Full", (), "full"),
-            ExecutionMode(mode, mode.replace("_", " ").title(), (), "stages" if mode == "prepare_only" else "full"),
+            ExecutionMode(
+                mode, mode.replace("_", " ").title(), (),
+                output_contract or ("stages" if mode == "prepare_only" else "full"),
+            ),
         ),
     )
     monkeypatch.setattr(module.task_runtime, "_get_task_type", lambda name: (task_type, runner))
@@ -1809,7 +1816,7 @@ def _mode_manifest(module, monkeypatch, tmp_path, mode, *, node_output=None, fil
         }),
     )
     manifest = module.task_runtime._finalize_results_manifest(
-        module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
+        module.task_store.get_task(md5sum), execution_state=execution_state, finished_at=1_700_000_000
     )
     return manifest, md5sum
 
@@ -1862,6 +1869,25 @@ def test_model_only_must_satisfy_the_full_scientific_output_contract(monkeypatch
     )
     assert complete["output_check"]["state"] == "passed"
     assert "reason" not in complete["output_check"]
+
+
+def test_a_none_contract_mode_makes_no_completeness_claim(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "profile_runner"},
+    )
+    manifest, _ = _mode_manifest(module, monkeypatch, tmp_path, "explore", output_contract="none")
+    assert manifest["output_check"]["state"] == "not_assessed"
+    assert manifest["output_check"]["reason"] == "mode_explore"
+    assert manifest["output_check"]["problems"] == []
+
+    # A failed execution reports its own failure, not the mode's no-claim reason.
+    failed, _ = _mode_manifest(
+        module, monkeypatch, tmp_path, "explore_failure",
+        output_contract="none", execution_state="failed",
+    )
+    assert failed["output_check"]["state"] == "not_assessed"
+    assert "reason" not in failed["output_check"]
 
 
 def test_task_identity_distinguishes_execution_modes(monkeypatch, tmp_path):
