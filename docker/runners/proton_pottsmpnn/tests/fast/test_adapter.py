@@ -383,3 +383,32 @@ def test_asset_manifest_remains_blocked_without_hash(tmp_path):
         assert 'ASSET_BLOCKED' in str(exc)
     else:
         raise AssertionError('unverified checkpoint manifest accepted')
+
+
+def test_activation_gates_fail_independently(monkeypatch, tmp_path):
+    """HBPLUS and the checkpoint are separate assets; either one's presence leaves the other blocked."""
+    import hashlib
+
+    hbplus = tmp_path / 'hbplus'
+    hbplus.write_text('#!/bin/sh\n', encoding='utf-8')
+    hbplus.chmod(0o755)
+    monkeypatch.setenv('HBPLUS_PATH', str(hbplus))
+
+    weights = tmp_path / 'weights'
+    monkeypatch.setattr(adapter, 'WEIGHTS', weights)
+    manifest = tmp_path / 'model-assets.sha256'
+    manifest.write_text(f"{'0' * 64}  {adapter.CHECKPOINT_RELATIVE}\n", encoding='utf-8')
+    with pytest.raises(RuntimeError, match='ASSET_BLOCKED.*checkpoint'):
+        adapter.verify_checkpoint(manifest)
+
+    checkpoint = weights / adapter.CHECKPOINT_RELATIVE
+    checkpoint.parent.mkdir(parents=True)
+    with checkpoint.open('wb') as handle:
+        handle.truncate(21494143)
+    digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    manifest.write_text(f'{digest}  {adapter.CHECKPOINT_RELATIVE}\n', encoding='utf-8')
+    assert adapter.verify_checkpoint(manifest) == checkpoint
+
+    monkeypatch.delenv('HBPLUS_PATH')
+    with pytest.raises(RuntimeError, match='ASSET_BLOCKED.*HBPLUS'):
+        adapter.verify_hbplus()

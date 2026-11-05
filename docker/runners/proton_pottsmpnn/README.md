@@ -26,8 +26,7 @@ checkpoint and Git history are removed after installation; the EV6 labeller fold
 The plugin declares `runtime.access_policy: proton_pottsmpnn_academic_only` in
 `common/policy/proton_pottsmpnn_academic_only.yaml`. The policy requires operator approval, records that
 HBPLUS is operator-provisioned rather than distributed, and enforces that only entitled users may use the
-family. The family remains disabled until the operator provisions HBPLUS and the maintainer accepts a live
-receipt.
+family. The family remains disabled until all three activation gates below are satisfied.
 
 ## Model asset provenance
 
@@ -66,6 +65,24 @@ chain identity and a real titratable residue.
 
 The family is discoverable from this tree, but it is not in the deployment's `ENABLED_TASKRUNNERS` list. With the family excluded, readiness resolves to `NOT_CONFIGURED` / `RUNNER_UNKNOWN`; with it enabled but no SIF or receipt, readiness resolves to `NOT_BUILT` / `SIF_MISSING` with `next_action=build-sif`. No readiness attestation exists, so submission admission reports `RUNNER_UNAVAILABLE`. No READY or admission claim is made. `docker/runners/proton_pottsmpnn/tests/fast/test_contract.py` exercises these paths.
 
-## ASSET_BLOCKED
+## Activation gates
 
-The checkpoint mount is absent today and no HBPLUS executable is provisioned, so the family is not READY and is not enabled. A candidate SIF may be built and `%test`-checked without either asset; `%test` verifies the engine imports and EV6 fold models and asserts no PATH-resolvable HBPLUS binary or known notice directory. No SIF build or model-backed design run has been executed in this change, so scientific execution and the live-test receipt require the operator-provisioned HBPLUS and the hash-verified checkpoint. Remaining gates: operator provisioning above, candidate SIF build and direct-API smoke, target-host live acceptance, then activation by the maintainer.
+Three gates stand between this source-only family and activation. They are independent: satisfying one neither
+implies nor satisfies another, and each fails closed on its own.
+
+1. **Checkpoint.** Provision the 21,494,143-byte
+   `checkpoints/potts_v6_afdb_edge_his0.3_acid0.06/epoch-0125.ckpt` under `/mnt/db/weights/proton-pottsmpnn`
+   with its reviewed SHA-256 recorded in `model-assets.sha256`. `verify_checkpoint()` raises `ASSET_BLOCKED`
+   when the manifest is malformed, or the file is missing, the wrong size, or does not match the recorded
+   digest.
+2. **HBPLUS.** Provision the HBPLUS executable under its own terms and set an absolute `HBPLUS_PATH`; the
+   image never bundles or redistributes it. `verify_hbplus()` raises `ASSET_BLOCKED` when the variable is
+   unset, relative, missing, or not executable. Provisioning HBPLUS does not satisfy gate 1, and a verified
+   checkpoint does not satisfy this gate.
+3. **Live receipt.** Produce a real live-inference receipt on the target Slurm/Apptainer host; only then may
+   the SIF be promoted and the family activated. A green build or `%test` satisfies neither asset gate, and
+   neither asset gate establishes a live receipt.
+
+A candidate SIF may be built and `%test`-checked without gates 1 and 2; that is not activation. None of the
+gates is satisfied in this change, so the family is not READY and is not enabled. `%test` verifies the engine
+imports and EV6 fold models and asserts no PATH-resolvable HBPLUS binary or known notice directory.
