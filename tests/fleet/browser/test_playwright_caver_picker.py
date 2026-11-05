@@ -35,7 +35,7 @@ from frontend_fixtures import (
 pytestmark = pytest.mark.browser
 
 ORIGIN = "https://revocompute.example"
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 # The fixture harness otherwise builds the app with the result-viewer double;
 # the picker is a viewer behavior and must run against the shipped Mol* bundle.
 PRODUCTION_DIST = ROOT / "frontend" / "dist"
