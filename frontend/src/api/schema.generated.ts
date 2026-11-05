@@ -2604,6 +2604,18 @@ export interface components {
             id: string;
             label: string;
             stages: string[];
+            /**
+             * @description Which output contract this mode must satisfy.
+             * @enum {string}
+             */
+            output_contract?: "full" | "stages" | "none";
+            /** @description Typed artifacts this mode consumes from an earlier authorized Task; each entry names the consumer port and its required role/type. */
+            reuse?: {
+                /** @description Fully qualified consumer port, for example model.features. */
+                port: string;
+                role: string;
+                type: string;
+            }[];
         };
         TaskCitation: {
             num: number;
@@ -2816,6 +2828,8 @@ export interface components {
             task_type?: string;
             /** @description Manifest-declared execution mode from the Task Type projection; defaults to full. */
             execution_mode?: string;
+            /** @description Optional JSON-encoded object mapping each declared reuse role to {source_task, stage, port, digest}. */
+            reuse?: string;
             /** @description Optional JSON-encoded version-2 workspace document. */
             workspace?: string;
         } & {

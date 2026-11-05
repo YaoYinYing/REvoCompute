@@ -60,10 +60,18 @@ export interface WorkspaceContract {
   steps: WorkspaceStep[];
 }
 
+export interface ExecutionModeReuse {
+  port: string;
+  role: string;
+  type: string;
+}
+
 export interface ExecutionModeOption {
   id: string;
   label: string;
   stages: string[];
+  output_contract?: "full" | "stages" | "none";
+  reuse?: ExecutionModeReuse[];
 }
 
 export interface TaskFormDefinition {

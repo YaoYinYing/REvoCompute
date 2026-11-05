@@ -142,10 +142,20 @@ export async function getTaskDefinition(name: string, signal?: AbortSignal): Pro
       if (!item || typeof item !== 'object') return [];
       const mode = item as Record<string, unknown>;
       if (typeof mode.id !== 'string' || typeof mode.label !== 'string') return [];
+      const output_contract = mode.output_contract === 'full' || mode.output_contract === 'stages'
+        || mode.output_contract === 'none' ? mode.output_contract : undefined;
+      const reuse = Array.isArray(mode.reuse) ? mode.reuse.flatMap((rawReuse) => {
+        if (!rawReuse || typeof rawReuse !== 'object') return [];
+        const entry = rawReuse as Record<string, unknown>;
+        if (typeof entry.port !== 'string' || typeof entry.role !== 'string' || typeof entry.type !== 'string') return [];
+        return [{ port: entry.port, role: entry.role, type: entry.type }];
+      }) : [];
       return [{
         id: mode.id,
         label: mode.label,
         stages: Array.isArray(mode.stages) ? mode.stages.filter((stage): stage is string => typeof stage === 'string') : [],
+        ...(output_contract ? { output_contract } : {}),
+        ...(reuse.length ? { reuse } : {}),
       }];
     }) : [],
     max_request_bytes: typeof raw.max_request_bytes === 'number' ? raw.max_request_bytes : Number.MAX_SAFE_INTEGER,
