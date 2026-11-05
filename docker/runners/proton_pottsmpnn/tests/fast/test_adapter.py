@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 MODULE = Path(__file__).resolve().parents[2] / 'adapter.py'
@@ -10,64 +11,159 @@ adapter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(adapter)
 
 
-def test_command_is_argv_only(tmp_path):
-    assert adapter.build_command(tmp_path / 'x.pdb', tmp_path / 'config.json', tmp_path) == [
-        'python', '/opt/ProtonPottsMPNN/inference/design_ph.py', '--input', str(tmp_path / 'x.pdb'),
-        '--config', str(tmp_path / 'config.json'), '--output', str(tmp_path),
-    ]
+class FakeDesign:
+    canonical_sequence = 'HDEA'
+    extended_tokens = ['HIS-P', 'ASP-D', 'GLU-D', 'ALA']
+
+    def design_id(self):
+        return 'fake-design'
+
+    def to_metadata(self):
+        return {'potts_energy': -2.0, 'selective_energy': -1.0,
+                'global_protonation_dH': -0.5, 'extended_tokens': ' '.join(self.extended_tokens)}
 
 
-def test_state_grammar_chain_centres_and_locks(tmp_path):
-    chains = {'A': {1: 'H', 2: 'D', 3: 'E', 4: 'A'}}
-    request = {'binder_chain':'A','designable_residues':[1,4], 'locked_residues':[2], 'mutation_cap':1,
-               'centres':[{'position':1,'state':'HIS-P'}], 'states':['HIS-P','HIS-S']}
-    assert adapter.validate_request(request, chains) == request
+class FakeCriteria:
+    @classmethod
+    def from_params(cls, params):
+        cls.params = params
+        return ('criteria', params)
+
+
+class FakeEngine:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.__class__.instances.append(self)
+
+    def run_ph_redesign(self, **kwargs):
+        self.run_kwargs = kwargs
+        return [FakeDesign()]
+
+
+def test_pinned_v6_vocabulary_and_state_pair():
+    vocab = set('ACDEFGHIKLMNPQRSTVWY') | {'UNK'} | {
+        'HIS-P','HIS-S','HIS-A','ASP-P','ASP-D','ASP-A','GLU-P','GLU-D','GLU-A'
+    }
+    assert len(vocab) == 30
+    adapter.validate_vocabulary(vocab)
+    adapter.validate_vocabulary({token: None for token in vocab})
+    bad = vocab - {'HIS-P'} | {'HIS-X'}
+    try:
+        adapter.validate_vocabulary(bad)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('wrong checkpoint vocabulary accepted')
+    assert adapter.STATE_PAIRS == {'HIS-P': 'HIS-S', 'ASP-P': 'ASP-D', 'GLU-P': 'GLU-D'}
+
+
+def test_api_binding_uses_task_input_parameters_checkpoint_and_output(tmp_path):
+    pdb = tmp_path / 'complex.pdb'
+    pdb.write_text(
+        'ATOM      1  CA  HIS A   1      11.000  12.000  13.000  1.00 20.00           C\n'
+        'ATOM      2  CA  ASP A   2      12.000  12.000  13.000  1.00 20.00           C\n'
+        'ATOM      3  CA  GLU B   1      13.000  12.000  13.000  1.00 20.00           C\n',
+        encoding='utf-8',
+    )
+    checkpoint = tmp_path / 'epoch-0125.ckpt'
+    checkpoint.write_bytes(b'pinned-checkpoint-fixture')
+    output = tmp_path / 'out'
+    task = {
+        'binder_chain': 'A', 'centres': [{'position': 1, 'state': 'HIS-P'}],
+        'states': ['HIS-P', 'HIS-S'], 'combined_lambda': 0.4,
+        'block_size': 3, 'temperature': 0.05, 'neighbour_k': 7,
+        'max_mutations': 12, 'samples_per_site': 2, 'seed': 17,
+    }
+    atom_array = object()
+    FakeEngine.instances.clear()
+    adapter.run_design(pdb, output, task, checkpoint=checkpoint,
+                       engine_type=FakeEngine, criteria_type=FakeCriteria,
+                       load_structure=lambda path: atom_array)
+
+    engine = FakeEngine.instances[-1]
+    assert engine.kwargs == {
+        'checkpoint_path': str(checkpoint), 'extended_vocab': 'v6', 'out_directory': None,
+        'write_fasta': False, 'write_structures': False,
+    }
+    assert engine.run_kwargs['atom_array'] is atom_array
+    assert engine.run_kwargs['binder_chain'] == 'A'
+    assert engine.run_kwargs['seed'] == 17
+    assert engine.run_kwargs['criteria_list'] == [('criteria', FakeCriteria.params)]
+    scores = json.loads((output / 'design_scores.json').read_text(encoding='utf-8'))
+    assert scores['designs'][0]['potts_energy'] == -2.0
+    assert scores['designs'][0]['extended_tokens'] == 'HIS-P ASP-D GLU-D ALA'
+    assert scores['checkpoint_path'] == str(checkpoint)
+    assert (output / 'candidates' / 'designs.fa').read_text(encoding='utf-8') == '>fake-design\nHDEA\n'
+    assert (output / 'candidates' / 'designs_states.fa').read_text(encoding='utf-8') == '>fake-design\nHIS-P ASP-D GLU-D ALA\n'
+    adapter.validate_outputs(output)
+
+
+def test_engine_receives_checkpoint_v6_and_task_bound_inputs(tmp_path):
+    pdb = tmp_path / 'complex.pdb'
+    pdb.write_text(
+        'ATOM      1  CA  HIS A   1      11.000  12.000  13.000  1.00 20.00           C\n',
+        encoding='utf-8',
+    )
+    checkpoint = tmp_path / 'epoch-0125.ckpt'
+    checkpoint.write_bytes(b'checkpoint')
+    task = {'binder_chain':'A','centres':[{'position':1,'state':'HIS-P'}],
+            'states':['HIS-P','HIS-S'],'seed':9}
+    captured = {}
+
+    class Engine(FakeEngine):
+        def __init__(self, **kwargs):
+            captured['engine'] = kwargs
+
+        def run_ph_redesign(self, **kwargs):
+            captured['run'] = kwargs
+            return [FakeDesign()]
+
+    adapter.run_design(pdb, tmp_path / 'output', task, checkpoint=checkpoint,
+                       engine_type=Engine, criteria_type=FakeCriteria,
+                       load_structure=lambda path: 'parsed-atom-array')
+    assert captured['engine'] == {
+        'checkpoint_path': str(checkpoint), 'extended_vocab': 'v6', 'out_directory': None,
+        'write_fasta': False, 'write_structures': False,
+    }
+    assert captured['run']['atom_array'] == 'parsed-atom-array'
+    assert captured['run']['binder_chain'] == 'A'
+    assert captured['run']['criteria_list'] == [('criteria', FakeCriteria.params)]
+    assert captured['run']['seed'] == 9
+
+
+def test_invalid_task_mapping_and_empty_results_fail_closed(tmp_path):
+    chains = {'A': {1: 'H', 2: 'D'}}
+    valid = {'binder_chain':'A','centres':[{'position':1,'state':'HIS-P'}],
+             'states':['HIS-P','HIS-S']}
+    assert adapter.validate_request(valid, chains) == valid
     for bad in [
-        {**request, 'states':['HIS-X','HIS-S']},
-        {**request, 'states':['HIS-P','HIS-P']},
-        {**request, 'centres':[{'position':2,'state':'GLU-D'}]},
-        {**request, 'binder_chain':'Z'},
-        {**request, 'locked_residues':[1]},
+        {**valid, 'states':['HIS-P','ASP-D']},
+        {**valid, 'centres':[{'position':2,'state':'HIS-P'}]},
+        {**valid, 'centres':[{'position':1,'state':'HIS-S'}]},
+        {**valid, 'unexpected':'shell'},
     ]:
         try:
             adapter.validate_request(bad, chains)
-        except (ValueError, TypeError):
-            pass
-        else:
-            raise AssertionError(f'invalid design request accepted: {bad}')
-
-
-def test_vocabulary_and_candidate_output_validation(tmp_path):
-    vocab = list('ACDEFGHIKLMNPQRSTVWY') + sorted(adapter.STATES) + ['<a>','<b>','<c>','<d>']
-    adapter.validate_vocabulary(vocab)
-    bad_vocab = vocab.copy()
-    bad_vocab[bad_vocab.index('HIS-P')] = 'HIS-X'
-    for wrong in [vocab[:-1], bad_vocab, vocab[:-1] + [vocab[0]]]:
-        try:
-            adapter.validate_vocabulary(wrong)
         except ValueError:
             pass
         else:
-            raise AssertionError('wrong checkpoint vocabulary accepted')
-    (tmp_path / 'candidates').mkdir()
-    (tmp_path / 'candidates' / 'a.fa').write_text('>design\nHDEA\n', encoding='utf-8')
-    (tmp_path / 'design_scores.json').write_text('{"objective":1}', encoding='utf-8')
-    adapter.validate_outputs(tmp_path, {1:'H',2:'D',3:'E',4:'A'}, [2], 1)
-    (tmp_path / 'candidates' / 'a.fa').write_text('>design\nHAAA\n', encoding='utf-8')
+            raise AssertionError(f'invalid Task parameters accepted: {bad}')
     try:
-        adapter.validate_outputs(tmp_path, {1:'H',2:'D',3:'E',4:'A'}, [2], 1)
+        adapter.write_outputs(tmp_path, [], valid, tmp_path / 'model.ckpt')
     except ValueError:
         pass
     else:
-        raise AssertionError('locked-residue mutation accepted')
+        raise AssertionError('empty design set accepted')
 
 
-def test_missing_score_and_bad_fasta_are_rejected(tmp_path):
-    (tmp_path / 'candidates').mkdir()
-    (tmp_path / 'candidates' / 'a.fa').write_text('broken', encoding='utf-8')
+def test_asset_manifest_remains_blocked_without_hash(tmp_path):
+    manifest = tmp_path / 'model-assets.sha256'
+    manifest.write_text('# ASSET_BLOCKED\n', encoding='utf-8')
     try:
-        adapter.validate_outputs(tmp_path, {1:'A'}, [], 1)
-    except ValueError:
-        pass
+        adapter.verify_checkpoint(manifest)
+    except RuntimeError as exc:
+        assert 'ASSET_BLOCKED' in str(exc)
     else:
-        raise AssertionError('malformed candidate output accepted')
+        raise AssertionError('unverified checkpoint manifest accepted')

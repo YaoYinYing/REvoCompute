@@ -14,7 +14,7 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
     git clone https://github.com/christian-creator/ProtonPottsMPNN.git /opt/ProtonPottsMPNN
     cd /opt/ProtonPottsMPNN
     git checkout --detach 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
-    python -m pip install --no-cache-dir ./mpnn
+    python -m pip install --no-cache-dir ./foundry
     mkdir -p /mnt/db/weights/proton-pottsmpnn /opt/revocompute/runtime
 
 %environment
@@ -22,7 +22,7 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
     export TRANSFORMERS_OFFLINE=1
 
 %test
-    python -c 'import torch; print(torch.__version__)'
+    python -c 'from mpnn.inference_engines.potts_mpnn_ph import PottsMPNNPHEngine, PHDesignCriteria; print(PottsMPNNPHEngine.__name__, PHDesignCriteria.__name__)'
 
 %runscript
     exec "$@"

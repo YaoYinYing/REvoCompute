@@ -1,10 +1,10 @@
 id: proton_pottsmpnn
 display_name: Proton PottsMPNN pH-conditioned binder design
 category: sequence_design
-summary: Design binder sequences using model scores under two declared protonation-state conditions.
-use_when: Use to compare computational design scores across a requested pH-state contrast.
-input_summary: One target-binder complex structure with explicit chain and residue selections.
-output_summary: Candidate sequences and model-derived objective scores for the two conditions.
+summary: Design binder sequences using pinned v6 model energies under one explicit protonated/deprotonated state contrast.
+use_when: Use to compare computational design scores across a requested protonation-state contrast.
+input_summary: One target-binder complex structure, binder chain, and protonation centres.
+output_summary: Candidate sequences with v6 protonation tokens and model-proxy objective terms.
 considerations:
 - Scores are model proxies, never measured pKa, affinity, or pH-selective binding.
 - Protonation tokens use the checkpoint's v6 vocabulary, including HIS-P/HIS-S, ASP-P/ASP-D, and GLU-P/GLU-D.
@@ -30,7 +30,7 @@ input_workspace:
       options: {source: source_files, select_chains: true, select_residues: true}
   - id: settings
     title: Define the design
-    description: Select the binder, mutable positions, and protonation conditions.
+    description: Select the binder chain, protonation contrast, and bounded model optimizer settings.
     capabilities:
     - plugin: parameters
       id: task_parameters
@@ -62,29 +62,15 @@ parameters:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   additionalProperties: false
-  required: [binder_chain, designable_residues, centres, states]
+  required: [binder_chain, centres, states]
   properties:
     binder_chain:
       type: string
       description: One-character chain identifier for the binder.
       pattern: '^[A-Za-z0-9]$'
-    designable_residues:
-      type: array
-      description: One-based binder residue positions allowed to mutate.
-      minItems: 1
-      maxItems: 500
-      uniqueItems: true
-      items: {type: integer, minimum: 1}
-    locked_residues:
-      type: array
-      description: One-based binder residue positions that must retain their input identity.
-      maxItems: 500
-      uniqueItems: true
-      items: {type: integer, minimum: 1}
-      default: []
     centres:
       type: array
-      description: One or more one-based centre positions paired with v6 protonation tokens.
+      description: PDB residue numbers for fixed protonation centres in the binder chain.
       minItems: 1
       maxItems: 30
       items:
@@ -95,46 +81,51 @@ parameters:
           position: {type: integer, minimum: 1}
           state:
             type: string
-            enum: [HIS-P, HIS-S, ASP-P, ASP-D, GLU-P, GLU-D]
+            enum: [HIS-P, ASP-P, GLU-P]
     states:
       type: array
-      description: Two v6 protonation-state conditions to compare.
+      description: One supported v6 protonated/deprotonated contrast pair.
       minItems: 2
       maxItems: 2
-      uniqueItems: true
       items:
         type: string
         enum: [HIS-P, HIS-S, ASP-P, ASP-D, GLU-P, GLU-D]
-    lambda:
+    combined_lambda:
       type: number
-      description: Weight for the condition contrast term in the model objective.
-      default: 1.0
+      description: Relative weight for the v6 condition-selectivity term in the model objective.
+      default: 0.5
       minimum: 0
-      maximum: 10
+      maximum: 1
     block_size:
       type: integer
-      description: Optimizer block size.
-      default: 1
+      description: Number of sequence positions optimized jointly in each block-descent step.
+      default: 2
       minimum: 1
-      maximum: 64
+      maximum: 8
     temperature:
       type: number
-      description: Sampling temperature.
-      default: 0.1
-      minimum: 0.0001
+      description: Sampling temperature for block-descent assignments.
+      default: 0.05
+      minimum: 0
       maximum: 2
-    neighbour_count:
+    neighbour_k:
       type: integer
-      description: Number of sequence neighbours considered per optimization step.
+      description: Maximum coupled sequence neighbours redesigned around each centre.
       default: 8
       minimum: 1
       maximum: 128
-    mutation_cap:
+    max_mutations:
       type: integer
-      description: Maximum number of mutated positions per candidate.
+      description: Hard cap on total redesigned binder positions.
       default: 20
       minimum: 1
       maximum: 500
+    samples_per_site:
+      type: integer
+      description: Number of candidate designs sampled for each explicit centre set.
+      default: 1
+      minimum: 1
+      maximum: 8
     seed:
       type: integer
       description: Reproducibility seed.

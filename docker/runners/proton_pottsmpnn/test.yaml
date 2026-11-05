@@ -7,11 +7,11 @@ collections:
       input: {roles: {complex: [tests/data/proton_pottsmpnn/complex.pdb]}}
       parameters:
         binder_chain: A
-        designable_residues: [1, 4]
-        locked_residues: [2, 3]
-        centres: [{position: 1, state: HIS-P}, {position: 2, state: ASP-D}, {position: 3, state: GLU-D}]
+        centres: [{position: 1, state: HIS-P}]
         states: [HIS-P, HIS-S]
+        combined_lambda: 0.5
         block_size: 1
-        neighbour_count: 1
-        mutation_cap: 1
+        neighbour_k: 1
+        max_mutations: 1
+        samples_per_site: 1
         seed: 7
