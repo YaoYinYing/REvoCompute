@@ -1,6 +1,6 @@
 # RFD4 Proteina
 
-Pinned source: `RosettaCommons/RFD4-Proteina` at `68058693cb88762a8aaf806571e13b291ce6318a` (BSD-3-Clause). The bounded Task uses the pinned Hydra CLI (`rfd4-generate inputs=... out_dir=... num_replicates=... seed=... generation.args.nsteps=...`) with a native YAML/JSON condition specification plus scaffold, or a native annotated CIF. It publishes the upstream annotated CIF designs under `inference_samples/` and selects no inline metrics. Condition satisfaction is computational; it does not establish biochemical activity, binding, or function. The Task requires a GPU (`gpus: true`) because the pinned model runs on an accelerator.
+Pinned source: `RosettaCommons/RFD4-Proteina` at `68058693cb88762a8aaf806571e13b291ce6318a` (BSD-3-Clause). The bounded Task uses the pinned Hydra CLI (`rfd4-generate inputs=... out_dir=... num_replicates=... seed=... generation.args.nsteps=...`) with a native YAML/JSON condition specification plus scaffold, or a native annotated CIF. It publishes the upstream `inference_samples/*/*_generated.cif` designs and selects no inline metrics. Condition satisfaction is computational; it does not establish biochemical activity, binding, or function. The Task requires a GPU (`gpus: true`) because the pinned model runs on an accelerator.
 
 ## ASSET_BLOCKED
 

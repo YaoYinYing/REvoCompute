@@ -53,7 +53,7 @@ result_workspace:
     description: Native annotated CIF designs. Condition satisfaction is computational and not evidence of biochemical activity.
     sources:
       structure:
-      - glob: inference_samples/*/*.cif
+      - glob: inference_samples/*/*_generated.cif
         required: true
     mapping: {}
 stage_markers:

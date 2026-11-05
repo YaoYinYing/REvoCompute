@@ -1,7 +1,7 @@
 result:
   files:
     generated_designs:
-      pattern: 'inference_samples/*/*.cif'
+      pattern: 'inference_samples/*/*_generated.cif'
       cardinality: many
       required: true
       type: structure

@@ -48,7 +48,15 @@ def test_zero_cif_output_is_refused(tmp_path):
     designs = output / 'inference_samples' / 'example'
     designs.mkdir(parents=True)
     (designs / 'design_0.cif').write_text('data_x\n#\n', encoding='utf-8')
-    assert adapter.validate_outputs(output) == [designs / 'design_0.cif']
+    try:
+        adapter.validate_outputs(output)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('a non-generated CIF substituted for a generated design')
+    generated = designs / 'design_0_generated.cif'
+    generated.write_text('data_x\n#\n', encoding='utf-8')
+    assert adapter.validate_outputs(output) == [generated]
 
 
 def test_condition_spec_refuses_unsupported_directives_and_shell_text(tmp_path):

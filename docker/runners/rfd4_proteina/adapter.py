@@ -131,7 +131,7 @@ def build_command(input_path: Path, output: Path, num_designs: int, steps: int, 
 
 def validate_outputs(output: Path) -> list[Path]:
     sample_dir = output / 'inference_samples'
-    designs = sorted(path for path in sample_dir.rglob('*.cif')
+    designs = sorted(path for path in sample_dir.rglob('*_generated.cif')
                      if path.is_file() and path.stat().st_size > 0) if sample_dir.is_dir() else []
     if not designs:
         raise ValueError('RFD4 produced zero non-empty annotated CIF designs')
