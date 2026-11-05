@@ -165,6 +165,13 @@ cannot drop a producer another selected stage requires. Admission, GPU entitleme
 the selected stages, and an omitted stage opens no StageRun, reservation or allocation. A Task that
 declares no modes keeps its previous graph document and accepts only `full`.
 
+An omitted stage still appears in the status projection as `SKIPPED` with reason
+`stage_omitted_by_mode` and dependency `skipped`; readers must accept that dependency value rather than
+treat the status as unreadable. Each mode declares an `output_contract`: `full` assesses the Task's
+complete result contract, `stages` validates only the selected stages' required output ports, and
+`none` makes no completeness claim (reason `mode_<id>`). `execution_modes` participates in the
+live-test `configuration_digest`, so editing a mode requires that family's receipt to be re-accepted.
+
 ### Provenance-bound artifact reuse (delivered contract)
 
 A mode that omits a producer may bind the consumer port to a verified artifact of an earlier Task:
@@ -202,7 +209,9 @@ Rules the code enforces:
 - Before the consumer stage owns an attempt, dispatch re-reads the source Task and re-verifies
   ownership, status, stage identity and every file's size and sha256, then copies the verified bytes
   into the existing `stage_inputs` directory and writes the same server-owned document, naming the
-  source Task, stage and attempt as producer provenance. A missing, changed or superseded source
+  source Task, stage and attempt as producer provenance. The staged directory and its document entry are
+  keyed by the manifest-declared reuse role — the name the Runner probes — not by the consumer input
+  role the artifact fills. A missing, changed or superseded source
   refuses the stage as `stage_input_unavailable`/`stage_input_invalid` with no attempt and no
   allocation. The producing Task and its `ResultManifest` are never mutated, and reuse opens no
   producer StageRun in the consumer Task.
