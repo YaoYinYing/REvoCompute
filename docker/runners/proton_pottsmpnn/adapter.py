@@ -193,6 +193,7 @@ def run_design(input_path: Path, output: Path, params: dict, *, checkpoint: Path
     )
     output.mkdir(parents=True, exist_ok=True)
     write_outputs(output, list(designs), params, checkpoint)
+    validate_outputs(output, chains[params['binder_chain']], params['centres'], params['states'])
 
 
 def main() -> int:
@@ -212,29 +213,53 @@ def main() -> int:
     run_design(input_path, output, params, checkpoint=checkpoint,
                engine_type=PottsMPNNPHEngine, criteria_type=PHDesignCriteria,
                load_structure=lambda path: PDBFile.read(str(path)).get_structure(model=1))
-    validate_outputs(output)
     return 0
 
 
-def validate_outputs(output: Path) -> None:
+def validate_outputs(output: Path, binder_residues: dict[int, str], centres: list[dict],
+                     states: list[str]) -> None:
     canonical = output / 'candidates' / 'designs.fa'
-    states = output / 'candidates' / 'designs_states.fa'
+    states_file = output / 'candidates' / 'designs_states.fa'
     try:
         canonical_records = [line.strip() for line in canonical.read_text(encoding='utf-8').splitlines()
                              if line.strip() and not line.startswith('>')]
-        state_records = [line.strip() for line in states.read_text(encoding='utf-8').splitlines()
+        state_records = [line.strip() for line in states_file.read_text(encoding='utf-8').splitlines()
                          if line.strip() and not line.startswith('>')]
         scores = json.loads((output / 'design_scores.json').read_text(encoding='utf-8'))
         config = json.loads((output / 'task_config.json').read_text(encoding='utf-8'))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError('missing or malformed Proton-PottsMPNN result artifacts') from exc
     designs = scores.get('designs', [])
-    if (not canonical_records or any(set(seq) - set(AA3.values()) for seq in canonical_records)
-            or len(canonical_records) != len(designs) or len(state_records) != len(designs)
-            or any(len(tokens.split()) != len(seq) or set(tokens.split()) - V6_TOKENS
-                   for tokens, seq in zip(state_records, canonical_records))
-            or not config.get('checkpoint_path')):
-        raise ValueError('candidate sequences and protonation/objective metadata are missing or misaligned')
+    if not isinstance(designs, list) or not canonical_records or not state_records:
+        raise ValueError('PottsMPNN produced no aligned candidate designs')
+    if not (len(canonical_records) == len(state_records) == len(designs)):
+        raise ValueError('candidate sequences, protonation states, and score records are misaligned')
+    positions = sorted(binder_residues)
+    expected_centres = sorted((int(c['position']), str(c['state'])) for c in centres)
+    requested_tokens = {str(c['state']) for c in centres}
+    for index, (sequence, state_line, design) in enumerate(zip(canonical_records, state_records, designs)):
+        tokens = state_line.split()
+        if len(sequence) != len(positions) or len(tokens) != len(positions):
+            raise ValueError(f'design {index} does not match the binder chain length')
+        if set(sequence) - set(AA3.values()) or set(tokens) - V6_TOKENS:
+            raise ValueError(f'design {index} contains an unsupported sequence or protonation token')
+        for position, state in expected_centres:
+            if position not in binder_residues:
+                raise ValueError(f'requested centre {position} is absent from the binder chain')
+            offset = positions.index(position)
+            if tokens[offset] != state or sequence[offset] != STATES[state][0]:
+                raise ValueError(f'design {index} does not preserve requested centre {position}:{state}')
+        if not isinstance(design, dict) or not design.get('design_id'):
+            raise ValueError(f'design {index} has no score metadata identity')
+        if str(design.get('extended_tokens', '')) != state_line:
+            raise ValueError(f'design {index} score metadata disagrees with its protonation sequence')
+        recorded = sorted(zip(design.get('center_res_ids') or [], design.get('center_protonation_types') or []))
+        if recorded != expected_centres:
+            raise ValueError(f'design {index} score metadata does not match the requested centres')
+        if set(design.get('center_protonation_types') or []) != requested_tokens:
+            raise ValueError(f'design {index} score metadata does not match the requested states')
+    if not config.get('checkpoint_path'):
+        raise ValueError('result provenance omits the checkpoint path')
 
 
 if __name__ == '__main__':

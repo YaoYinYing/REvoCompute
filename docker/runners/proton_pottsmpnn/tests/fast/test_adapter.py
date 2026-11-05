@@ -27,8 +27,9 @@ class FakeDesign:
         return 'fake-design'
 
     def to_metadata(self):
-        return {'potts_energy': -2.0, 'selective_energy': -1.0,
-                'global_protonation_dH': -0.5, 'extended_tokens': ' '.join(self.extended_tokens)}
+        return {'design_id': self.design_id(), 'potts_energy': -2.0, 'selective_energy': -1.0,
+                'global_protonation_dH': -0.5, 'extended_tokens': ' '.join(self.extended_tokens),
+                'center_res_ids': [1], 'center_protonation_types': ['HIS-P']}
 
 
 class FakeCriteria:
@@ -72,7 +73,9 @@ def test_api_binding_uses_task_input_parameters_checkpoint_and_output(tmp_path):
     pdb.write_text(
         'ATOM      1  CA  HIS A   1      11.000  12.000  13.000  1.00 20.00           C\n'
         'ATOM      2  CA  ASP A   2      12.000  12.000  13.000  1.00 20.00           C\n'
-        'ATOM      3  CA  GLU B   1      13.000  12.000  13.000  1.00 20.00           C\n',
+        'ATOM      3  CA  GLU A   3      13.000  12.000  13.000  1.00 20.00           C\n'
+        'ATOM      4  CA  ALA A   4      14.000  12.000  13.000  1.00 20.00           C\n'
+        'ATOM      5  CA  GLU B   1      15.000  12.000  13.000  1.00 20.00           C\n',
         encoding='utf-8',
     )
     checkpoint = tmp_path / 'epoch-0125.ckpt'
@@ -105,13 +108,16 @@ def test_api_binding_uses_task_input_parameters_checkpoint_and_output(tmp_path):
     assert scores['checkpoint_path'] == str(checkpoint)
     assert (output / 'candidates' / 'designs.fa').read_text(encoding='utf-8') == '>fake-design\nHDEA\n'
     assert (output / 'candidates' / 'designs_states.fa').read_text(encoding='utf-8') == '>fake-design\nHIS-P ASP-D GLU-D ALA\n'
-    adapter.validate_outputs(output)
+    adapter.validate_outputs(output, {1:'H',2:'D',3:'E',4:'A'}, task['centres'], task['states'])
 
 
 def test_engine_receives_checkpoint_v6_and_task_bound_inputs(tmp_path):
     pdb = tmp_path / 'complex.pdb'
     pdb.write_text(
-        'ATOM      1  CA  HIS A   1      11.000  12.000  13.000  1.00 20.00           C\n',
+        'ATOM      1  CA  HIS A   1      11.000  12.000  13.000  1.00 20.00           C\n'
+        'ATOM      2  CA  ASP A   2      12.000  12.000  13.000  1.00 20.00           C\n'
+        'ATOM      3  CA  GLU A   3      13.000  12.000  13.000  1.00 20.00           C\n'
+        'ATOM      4  CA  ALA A   4      14.000  12.000  13.000  1.00 20.00           C\n',
         encoding='utf-8',
     )
     checkpoint = tmp_path / 'epoch-0125.ckpt'
@@ -181,6 +187,34 @@ def test_runtime_build_inputs_declare_pinned_inference_extras():
     assert requirements['propka'].specifier.contains('3.5')
     assert requirements['pandas'].specifier.contains('2.2', prereleases=True)
     assert not requirements['pandas'].specifier.contains('3.0', prereleases=True)
+
+
+def test_output_identity_counterexample_is_refused(tmp_path):
+    """A 50-residue binder must not accept a 4-residue design with the wrong centre state."""
+    output = tmp_path / 'bad'
+    (output / 'candidates').mkdir(parents=True)
+    (output / 'candidates' / 'designs.fa').write_text('>bad\nHAAA\n', encoding='utf-8')
+    (output / 'candidates' / 'designs_states.fa').write_text('>bad\nHIS-S ALA ALA ALA\n', encoding='utf-8')
+    (output / 'design_scores.json').write_text(json.dumps({'designs': [{
+        'design_id': 'bad', 'extended_tokens': 'HIS-S ALA ALA ALA',
+        'center_res_ids': [1], 'center_protonation_types': ['HIS-S'],
+    }]}), encoding='utf-8')
+    (output / 'task_config.json').write_text(json.dumps({'checkpoint_path': '/mnt/model.ckpt'}), encoding='utf-8')
+    binder = {position: 'A' for position in range(1, 51)}
+    binder[1] = 'H'
+    try:
+        adapter.validate_outputs(output, binder, [{'position': 1, 'state': 'HIS-P'}], ['HIS-P', 'HIS-S'])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('wrong-length/wrong-state design accepted')
+    binder_small = {1: 'H', 2: 'D', 3: 'E', 4: 'A'}
+    try:
+        adapter.validate_outputs(output, binder_small, [{'position': 1, 'state': 'HIS-P'}], ['HIS-P', 'HIS-S'])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('wrong centre state accepted')
 
 
 def test_asset_manifest_remains_blocked_without_hash(tmp_path):
