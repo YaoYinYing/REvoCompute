@@ -6,6 +6,9 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
     org.opencontainers.image.revision 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
     org.opencontainers.image.licenses MIT
 
+%files
+    proton_pottsmpnn/requirements-extra.txt /tmp/proton-requirements-extra.txt
+
 %post
     set -eux
     apt-get update
@@ -15,6 +18,7 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
     cd /opt/ProtonPottsMPNN
     git checkout --detach 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
     python -m pip install --no-cache-dir ./foundry
+    python -m pip install --no-cache-dir -r /tmp/proton-requirements-extra.txt
     mkdir -p /mnt/db/weights/proton-pottsmpnn /opt/revocompute/runtime
 
 %environment
@@ -22,7 +26,7 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
     export TRANSFORMERS_OFFLINE=1
 
 %test
-    python -c 'from mpnn.inference_engines.potts_mpnn_ph import PottsMPNNPHEngine, PHDesignCriteria; print(PottsMPNNPHEngine.__name__, PHDesignCriteria.__name__)'
+    python -c 'import mpnn.potts_inference; import mpnn.pipelines.potts_mpnn; import mpnn.transforms.bond_annotation; import mpnn.transforms.pka_annotation; from mpnn.inference_engines.potts_mpnn_ph import PottsMPNNPHEngine, PHDesignCriteria; print(PottsMPNNPHEngine.__name__, PHDesignCriteria.__name__)'
 
 %runscript
     exec "$@"

@@ -4,6 +4,6 @@ Pinned source: `christian-creator/ProtonPottsMPNN` at `09682abfa7d20e0abcdeea049
 
 ## ASSET_BLOCKED
 
-The expected checkpoint is `/mnt/db/weights/proton-pottsmpnn/checkpoints/potts_v6_afdb_edge_his0.3_acid0.06/epoch-0125.ckpt` (21,494,143 bytes per the pinned TODO). It is absent and no SHA256 is available yet. Provision the exact checkpoint read-only and record its SHA256 and provenance. The adapter validates the pinned code's complete 30-token v6 vocabulary and constructs `PottsMPNNPHEngine` with `extended_vocab="v6"`; the selected CPU path does not require a GPU for a small binder.
+The expected checkpoint is `/mnt/db/weights/proton-pottsmpnn/checkpoints/potts_v6_afdb_edge_his0.3_acid0.06/epoch-0125.ckpt` (21,494,143 bytes per the pinned TODO). It is absent and no SHA256 is available yet. Provision the exact checkpoint read-only and record its SHA256 and provenance. The image installs the pinned `foundry` package plus the inference-relevant entries from the pinned `requirements-extra.txt` (`pandas>=2.1,<3`, `ipdb`, `propka>=3.5`) and `%test` imports the full runtime chain. The adapter validates the pinned code's complete 30-token v6 vocabulary and constructs `PottsMPNNPHEngine` with `extended_vocab="v6"`; the selected CPU path does not require a GPU for a small binder.
 
 The scientific smoke test and readiness receipt are pending. This family is not READY.

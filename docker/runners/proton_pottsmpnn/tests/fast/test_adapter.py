@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
+from packaging.requirements import Requirement
+
 MODULE = Path(__file__).resolve().parents[2] / 'adapter.py'
+ROOT = Path(__file__).resolve().parents[5]
+sys.path.insert(0, str(ROOT))
+
+from revocompute import task_types  # noqa: E402
+
 spec = importlib.util.spec_from_file_location('proton_adapter', MODULE)
 assert spec and spec.loader
 adapter = importlib.util.module_from_spec(spec)
@@ -156,6 +164,23 @@ def test_invalid_task_mapping_and_empty_results_fail_closed(tmp_path):
         pass
     else:
         raise AssertionError('empty design set accepted')
+
+
+def test_runtime_build_inputs_declare_pinned_inference_extras():
+    task_types.discover_plugins(str(ROOT / 'docker' / 'runners'), enabled={'proton_pottsmpnn'})
+    family, _runner = task_types.get_family('proton_pottsmpnn')
+    relative = 'proton_pottsmpnn/requirements-extra.txt'
+    assert relative in family.build_inputs
+    requirements = {}
+    for line in (ROOT / 'docker' / 'runners' / relative).read_text(encoding='utf-8').splitlines():
+        entry = line.split('#', 1)[0].strip()
+        if entry:
+            requirement = Requirement(entry)
+            requirements[requirement.name] = requirement
+    assert {'ipdb', 'propka', 'pandas'} <= set(requirements)
+    assert requirements['propka'].specifier.contains('3.5')
+    assert requirements['pandas'].specifier.contains('2.2', prereleases=True)
+    assert not requirements['pandas'].specifier.contains('3.0', prereleases=True)
 
 
 def test_asset_manifest_remains_blocked_without_hash(tmp_path):

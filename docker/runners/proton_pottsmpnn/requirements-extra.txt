@@ -1,0 +1,7 @@
+# Runtime extras pinned from christian-creator/ProtonPottsMPNN
+# requirements-extra.txt at 09682abfa7d20e0abcdeea0490b7a4b1c190aee3.
+# Only the entries required by the direct design-inference import chain are
+# installed; the upstream file's labeller/notebook extras are not used here.
+pandas>=2.1,<3
+ipdb
+propka>=3.5

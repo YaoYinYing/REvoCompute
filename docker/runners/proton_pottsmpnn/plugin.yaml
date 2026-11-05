@@ -5,7 +5,8 @@ name: Proton PottsMPNN pH-conditioned design
 runtime:
   image_artifact: proton_pottsmpnn_v1.sif
   definition: proton_pottsmpnn.def
-  build_inputs: []
+  build_inputs:
+    - proton_pottsmpnn/requirements-extra.txt
   runtime_overlay:
     - common/runtime/
     - proton_pottsmpnn/run.sh
