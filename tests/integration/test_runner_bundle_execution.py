@@ -56,7 +56,7 @@ run_with_manifest = _load_run_with_manifest()
 # The checker forbids concrete family identities in generic tests, so select the
 # migrated adapters by the overlay shape each one declares: the PSSM adapter
 # ships a ``scripts/`` directory, the LH adapter ships ``fit_model.py``, and the
-# AF3 adapter ships only its own entrypoint plus the two shared helpers.
+# AF3 adapter ships only its own entrypoint plus the three shared helpers.
 
 
 def _overlay_leaf_names(family) -> set[str]:
@@ -66,7 +66,9 @@ def _overlay_leaf_names(family) -> set[str]:
 _FAMILY_SELECTORS = {
     "pssm": lambda family: "scripts" in _overlay_leaf_names(family),
     "lh": lambda family: "fit_model.py" in _overlay_leaf_names(family),
-    "af3": lambda family: _overlay_leaf_names(family) == {"task_context.sh", "task_context.py", "run.sh"},
+    "af3": lambda family: _overlay_leaf_names(family) == {
+        "task_context.sh", "task_context.py", "stage_inputs.py", "run.sh",
+    },
 }
 
 
