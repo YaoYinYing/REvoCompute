@@ -1008,6 +1008,11 @@ def test_merged_build_input_with_the_old_sif_is_refused(monkeypatch, tmp_path):
     )
     assert response.status_code == 503, response.get_data(as_text=True)
     body = response.get_json()
+    # The refusal is operator-visible: it names the affected family, the stale
+    # build identity, and the recovery, so a bare source merge cannot cause a
+    # silent, unexplained admission outage.
     assert body["runner"] == "cpu_runner"
     assert body["status"] == "BUILD_STALE"
+    assert body["reason"] == "BUILD_PROVENANCE_STALE"
+    assert body["next_action"] == "build-sif"
     assert queued == []

@@ -26,12 +26,19 @@ existing retained pin.
 For each changed family, the installed SIF was built from the previous build
 identity. After the source merge, readiness re-derives the current identity from
 the merged definition and build inputs, finds no SIF or receipt for it, and
-reports `BUILD_STALE`. Submission admission refuses that family.
+reports `BUILD_STALE`. Submission admission refuses that family, and the refusal
+names the affected family, the stale build identity (`BUILD_PROVENANCE_STALE`),
+and the recovery action (`build-sif`).
 
 This is intentional fail-closed safety, not silent activation. A merge, a green
 CI run, or a passed Doctor check never makes a family READY. Only a SIF built
 from the merged recipe, accepted on the target host for that exact build
 identity, and promoted can do so.
+
+A source merge to these five families must therefore be paired with an
+operator-planned rebuild and re-acceptance window: schedule the candidate
+builds, live tests, and promotions for each family before or immediately after
+merging, so the admission refusal window is planned rather than discovered.
 
 The family remains on its previous recipe until the candidate is promoted: a
 deployment that keeps the old SIF is not silently served the new code, because

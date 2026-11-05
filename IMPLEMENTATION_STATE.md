@@ -57,9 +57,15 @@ acceptance are.
   digest, `sif_stale == false`, and READY readiness. The new
   `test_merged_build_input_with_the_old_sif_is_refused` proves that a merged
   declared build input with the old installed SIF yields `BUILD_STALE` and a 503
-  admission refusal. The actual Foundry SIF/evidence is not present in this
+  admission refusal that names the family, `BUILD_PROVENANCE_STALE`, and the
+  `build-sif` recovery. The actual Foundry SIF/evidence is not present in this
   workspace, so no deployment image status is claimed; the restored Foundry
   definition and declared build-input bytes match the branch base.
+- `tests/server/test_stage_state_contract.py`: 52 passed. The unaccounted-run
+  RUNNING assertion now polls within the existing 10 s deadline (asserting the
+  command is still executing each iteration) because the allocation-start
+  observation can land after the command-start marker under xdist load; the same
+  flake appeared once on PR #137.
 - Test-boundary check: clean. `mkdocs build --strict` (system binary): exit 0.
 - `bash -n` on `opendde/run.sh`; shellcheck reports only pre-existing informational
   warnings (dynamic source, unused exported runscript path).
