@@ -295,7 +295,7 @@ const structurePlugin: WorkspacePlugin = {
     const status = element('p', 'ct-help', prompt);
     const host = element('div', 'ct-structure-viewer'); host.hidden = true; target.append(status, host);
     let generation = 0; let viewer: Awaited<ReturnType<(typeof import('../../structure/MolecularViewer'))['MolecularViewer']['mount']>> | null = null; let removeListener: (() => void) | null = null;
-    let selectedFile: File | null = null; let queue = Promise.resolve(); let selectionError: string | null = null;
+    let selectedFile: File | null = null; let queue = Promise.resolve(); let selectionError: string | null = null; let appliedSelection: string | null = null;
     const render = async (current: number, file: File | null) => {
       if (generation !== current) return;
       context.setStructureSelections([]);
@@ -312,10 +312,16 @@ const structurePlugin: WorkspacePlugin = {
           if (selectable) removeListener = mounted.onSelectionChanged(residues => {
             context.setStructureSelections(residues);
             if (context.form.params.some(parameter => parameter.name === 'start_point_mode')) {
-              const mapped = caverSelectionParameters(residues);
-              if (!('params' in mapped) || !mapped.params) { selectionError = 'error' in mapped ? mapped.error || 'Unsupported selection.' : 'Unsupported selection.'; status.textContent = selectionError; context.changed(); return; }
-              selectionError = null; status.textContent = prompt;
-              Object.entries(mapped.params).forEach(([name, value]) => context.setParameter(name, value));
+              if (!residues.length && context.parameters().start_point_mode === 'point') {
+                // Manual XYZ is authoritative in point mode, so an empty viewer
+                // selection is not an input error there.
+                selectionError = null; status.textContent = prompt;
+              } else {
+                const mapped = caverSelectionParameters(residues);
+                if (!('params' in mapped) || !mapped.params) { selectionError = 'error' in mapped ? mapped.error || 'Unsupported selection.' : 'Unsupported selection.'; status.textContent = selectionError; context.changed(); return; }
+                selectionError = null; status.textContent = prompt;
+                Object.entries(mapped.params).forEach(([name, value]) => context.setParameter(name, value));
+              }
             }
             context.changed();
           });
@@ -330,14 +336,20 @@ const structurePlugin: WorkspacePlugin = {
       const role = typeof definition.options.role === 'string' ? definition.options.role : undefined; const file = context.structureFile(role);
       if (file === selectedFile) {
         const selection = caverParameterSelection(context.parameters());
-        if (viewer) {
-          viewer.select(selection.residues.length > 1 ? { residues: selection.residues } : selection.residues[0] || { residues: [] });
+        const applied = JSON.stringify(selection);
+        // Only a concrete residue or manual point re-places the marker. An empty
+        // state is not applied, so a refused pick's highlight and its error are
+        // not erased by the next refresh.
+        if (viewer && applied !== appliedSelection && (selection.residues.length || selection.point)) {
+          appliedSelection = applied;
+          if (selection.residues.length) viewer.select(selection.residues.length > 1 ? { residues: selection.residues } : selection.residues[0]!);
+          else viewer.select({ residues: [] });
           viewer.annotate(selection.point ? { point: selection.point, label: 'Manual start point' } : null);
           if (selection.residues.length) viewer.focus(selection.residues.length > 1 ? { residues: selection.residues } : selection.residues[0]!);
         }
         return queue;
       }
-      selectedFile = file; const current = ++generation;
+      selectedFile = file; appliedSelection = null; const current = ++generation;
       queue = queue.catch(() => undefined).then(() => render(current, file));
       return queue;
     };
@@ -350,7 +362,7 @@ const structurePlugin: WorkspacePlugin = {
       residue_name: item.residue_name,
       hetero: item.hetero,
     });
-    return { refresh, validate: () => selectionError, readValue: () => ({ selected_residues: context.structureSelections().map(authored) }), summarize: () => context.structureSelections().length ? { label: t('ct.summary.selection'), value: t('ct.sequence.residues', { count: context.structureSelections().length }) } : null, destroy: () => { generation++; selectedFile = null; removeListener?.(); removeListener = null; viewer?.dispose(); viewer = null; } };
+    return { refresh, validate: () => selectionError, readValue: () => ({ selected_residues: context.structureSelections().map(authored) }), summarize: () => context.structureSelections().length ? { label: t('ct.summary.selection'), value: t('ct.sequence.residues', { count: context.structureSelections().length }) } : null, destroy: () => { generation++; selectedFile = null; appliedSelection = null; removeListener?.(); removeListener = null; viewer?.dispose(); viewer = null; } };
   },
 };
 

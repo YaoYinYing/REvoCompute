@@ -154,6 +154,8 @@ export class InputWorkspace {
         const parameter = form.params.find(item => item.name === name);
         const control = inputByParameter(name);
         if (!parameter || !control) return;
+        const current = parameterValue(parameter, control);
+        if (current === value) return;
         writeParameter(parameter, control, value);
         control.dispatchEvent(new Event('input', { bubbles: true }));
       },
