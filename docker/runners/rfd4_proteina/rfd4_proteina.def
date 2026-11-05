@@ -1,0 +1,31 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.04-py3
+
+%labels
+    org.opencontainers.image.source https://github.com/RosettaCommons/RFD4-Proteina
+    org.opencontainers.image.revision 68058693cb88762a8aaf806571e13b291ce6318a
+    org.opencontainers.image.licenses BSD-3-Clause
+
+%post
+    set -eux
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates
+    rm -rf /var/lib/apt/lists/*
+    git clone https://github.com/RosettaCommons/RFD4-Proteina.git /opt/RFD4-Proteina
+    cd /opt/RFD4-Proteina
+    git checkout --detach 68058693cb88762a8aaf806571e13b291ce6318a
+    python -m pip install --no-cache-dir .
+    mkdir -p /mnt/db/weights/rfd4-proteina /opt/revocompute/runtime
+    # Model weights are provisioned externally; no downloads occur during task execution.
+
+%environment
+    export HF_HOME=/tmp/hf-home
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+
+%test
+    python -c 'import torch; print(torch.__version__)'
+    command -v rfd4-generate
+
+%runscript
+    exec "$@"

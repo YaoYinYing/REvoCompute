@@ -1,0 +1,8 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-conditioned-design
+      task: rfd4_proteina
+      input: {roles: {condition: [tests/data/condition.json]}}
+      parameters: {num_designs: 1, steps: 1, seed: 7}

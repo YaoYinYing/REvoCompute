@@ -56,3 +56,7 @@ the upgrade.
 
 No upstream training, RL/search orchestration, biological success claim, hidden network access, or
 RFD4-specific Core branch.
+
+## ASSET_BLOCKED
+
+`/mnt/db/weights/rfd4-proteina/` is absent. The pinned TODO evidence describes a roughly 1.7 GB Hugging Face bundle including the autoencoder, but individual required paths and SHA256 values have not been verified. No files were provisioned or downloaded. Next: inspect the pinned revision's loader, acquire the licensed bundle through operator provisioning, record every file hash and provenance, then run target-host acceptance.

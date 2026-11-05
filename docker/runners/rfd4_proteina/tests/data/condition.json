@@ -1,0 +1,7 @@
+{
+  "contig": "A:1-20/10",
+  "motif": "ACDEFG",
+  "chain": "A",
+  "residues": [1, 2, 3, 4, 5, 6],
+  "sequence": "ACDEFG"
+}
