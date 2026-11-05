@@ -273,6 +273,41 @@ input workbenches explicitly enable them for selection-oriented work. A
 selection-enabled workbench also enters Mol* selection mode automatically and
 reports canonical residue locations from the structure-selection manager.
 
+## Molecular selection scope
+
+The implemented picker is residue-level: one authored residue, one ligand, or a
+multi-residue group. A pick resolves to the owning Task's projected canonical
+parameters through the parameter vocabulary its `task.yaml` already declares;
+the viewer never defines a centroid rule, a resolved point, or a Runner
+semantic. CAVER's residue, ligand and group start-point modes are the first
+end-to-end consumer.
+
+Selection identity is authored: auth chain, auth residue number, insertion code,
+residue name and hetero flag. Label identity stays viewer-local. Manual XYZ is
+authoritative only in the Runner mode that resolves a manual point; elsewhere it
+is a preview of the Runner's answer, and a difference is not a submission error.
+
+### Deferred: atom-level selection and chain selection
+
+Atom-level selection is a separate Viewer/workspace capability, not a Runner
+contract gap. It needs authored atom identity (atom name, altloc, serial) added
+to the selection payload, the refusal rules for missing, unsupported or
+out-of-range atom identities, and the owning Task's atom-mode parameters. For
+CAVER those are `start_point_mode=atom`, `start_chain`,
+`start_residue_number`, `start_atom_name` and `start_altloc`; the Runner already
+resolves them. The UI must write those declared parameters only.
+
+`select_chains` is not implemented and is not a silent no-op alias. A chain-only
+pick has no authored point, so it needs a separate decision: either map it to an
+explicit owning-Task parameter or remove it from Task manifests.
+
+Viewer capability never changes Runner semantics. A new selection capability may
+drive only parameters the owning Task already declares; it may not add,
+reinterpret or bypass Runner scientific meaning.
+
+The residue-level picker is implemented. CAVER live scientific acceptance remains
+a Runner gate; browser and server checks do not substitute for it.
+
 ## Implemented browser boundary
 
 The Vite application owns both workspace hosts. Create Task composes files,

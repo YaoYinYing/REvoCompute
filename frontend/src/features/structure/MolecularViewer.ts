@@ -67,13 +67,19 @@ export interface MolecularSelection {
 }
 
 export interface SelectedResidue {
-  /** Stable molecular identity: label_asym_id plus label_seq_id. */
+  /** Mol* label identity: label_asym_id plus label_seq_id. Viewer-local. */
   chain: string;
   residue: number;
+  /** Authored PDB identity: the one the source structure and Runner use. */
+  auth_chain: string;
   auth_seq_id: number;
   label_seq_id: number;
   /** PDB insertion code ('' when absent), part of the residue identity. */
   insertion_code?: string;
+  /** Authored residue name, such as ALA or HEM. */
+  residue_name: string;
+  /** Non-polymer/water entity (a PDB HETATM-like residue), not a polymer residue. */
+  hetero: boolean;
 }
 
 export interface MolecularViewerOptions {
@@ -90,6 +96,43 @@ export interface MolecularViewerOptions {
 }
 
 type SelectionListener = (residues: SelectedResidue[]) => void;
+
+/** The Mol* properties one selected residue contributes to its authored identity. */
+export interface ResidueIdentity {
+  authChain: string;
+  labelChain: string;
+  authSeqId: number;
+  labelSeqId: number;
+  insCode: string;
+  residueName: string;
+  /** The source record class: ATOM is a polymer residue, HETATM a hetero one. */
+  groupPDB: string;
+}
+
+/**
+ * Project Mol* residue properties onto the workspace's authored identity.
+ *
+ * Auth chain/residue are the source structure's addresses; label identity is
+ * viewer-local and kept beside them. An absent insertion code is omitted, so a
+ * bare residue number and an empty code mean the same thing.
+ */
+export function authoredResidue(properties: ResidueIdentity): SelectedResidue {
+  const insCode = String(properties.insCode || '').trim();
+  // Non-polymer residues (ligands, waters) may carry no label_seq_id. The
+  // authored number is the address that matters; fall back to it rather than
+  // publishing NaN as a label. Auth identity stays the Runner-facing value.
+  const label = Number.isFinite(properties.labelSeqId) ? properties.labelSeqId : properties.authSeqId;
+  return {
+    chain: properties.labelChain,
+    residue: label,
+    auth_chain: properties.authChain,
+    auth_seq_id: properties.authSeqId,
+    label_seq_id: label,
+    ...(insCode ? { insertion_code: insCode } : {}),
+    residue_name: String(properties.residueName || '').trim(),
+    hetero: String(properties.groupPDB || '').trim().toUpperCase() === 'HETATM',
+  };
+}
 
 // Mol*'s native panels are a single all-or-nothing disclosure. `showControls`
 // gates every region, and the viewport-overlay button that owns that disclosure
@@ -524,6 +567,26 @@ export class MolecularViewer {
     return elements.length ? StructureElement.Loci(structure, elements) : null;
   }
 
+  /**
+   * The authored identity of one Mol* location.
+   *
+   * Auth chain and auth residue number are what the source structure and the
+   * owning Runner address; label identity is retained beside them because it is
+   * the viewer's own key. Hetero means "not a polymer residue" (non-polymer or
+   * water), which is the scientific distinction a Runner selector needs.
+   */
+  static authoredResidue(location: any): SelectedResidue {
+    return authoredResidue({
+      authChain: String(StructureProperties.chain.auth_asym_id(location) || ''),
+      labelChain: String(StructureProperties.chain.label_asym_id(location) || ''),
+      authSeqId: Number(StructureProperties.residue.auth_seq_id(location)),
+      labelSeqId: Number(StructureProperties.residue.label_seq_id(location)),
+      insCode: String(StructureProperties.residue.pdbx_PDB_ins_code(location) || ''),
+      residueName: String(StructureProperties.residue.auth_comp_id(location) || ''),
+      groupPDB: String(StructureProperties.residue.group_PDB(location) || ''),
+    });
+  }
+
   private selectedResidues(): SelectedResidue[] {
     if (!this.plugin) return [];
     const residues = new Map<string, SelectedResidue>();
@@ -534,20 +597,11 @@ export class MolecularViewer {
       if (!loci?.elements) continue;
       StructureElement.Loci.forEachLocation(loci, (location: any) => {
         if (location.unit?.kind !== 0) return;
-        const authChain = String(StructureProperties.chain.auth_asym_id(location) || '');
-        const labelChain = String(StructureProperties.chain.label_asym_id(location) || '');
-        const auth = Number(StructureProperties.residue.auth_seq_id(location));
-        const label = Number(StructureProperties.residue.label_seq_id(location));
-        const insCode = String(StructureProperties.residue.pdbx_PDB_ins_code(location) || '').trim();
-        residues.set(`${labelChain}:${label}:${authChain}:${auth}:${insCode}`, {
-          chain: labelChain,
-          residue: label,
-          auth_seq_id: auth,
-          label_seq_id: label,
-          // An absent/empty insertion code is omitted rather than published as an
-          // empty string; both mean the bare residue number.
-          ...(insCode ? { insertion_code: insCode } : {}),
-        });
+        const authored = MolecularViewer.authoredResidue(location);
+        residues.set(
+          `${authored.chain}:${authored.residue}:${authored.auth_chain}:${authored.auth_seq_id}:${authored.insertion_code || ''}`,
+          authored,
+        );
       });
     }
     return Array.from(residues.values());
