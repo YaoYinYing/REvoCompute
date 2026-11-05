@@ -3100,7 +3100,7 @@
         "required": ["state", "checks", "problems"],
         "properties": {
           "state": {"type": "string", "enum": ["passed", "failed", "not_configured", "not_assessed"]},
-          "reason": {"type": "string", "description": "Why the full result contract was not assessed, for example preparation_only."},
+          "reason": {"type": "string", "description": "Why the full result contract was not assessed; a mode that declares no completeness claim reports mode_<execution_mode>."},
           "checks": {
             "type": "array",
             "items": {

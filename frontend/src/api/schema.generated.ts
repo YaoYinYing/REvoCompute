@@ -3025,7 +3025,7 @@ export interface components {
         OutputCheck: {
             /** @enum {string} */
             state: "passed" | "failed" | "not_configured" | "not_assessed";
-            /** @description Why the full result contract was not assessed, for example preparation_only. */
+            /** @description Why the full result contract was not assessed; a mode that declares no completeness claim reports mode_<execution_mode>. */
             reason?: string;
             checks: ({
                 view_id?: string;
