@@ -84,6 +84,14 @@ def parse_condition_spec(path: Path) -> dict:
             raise ValueError('invalid design name')
         if not isinstance(design, dict) or set(design) - SPEC_KEYS:
             raise ValueError('unsupported condition-spec directive')
+        if 'input_as_annotated_cif' in design and type(design['input_as_annotated_cif']) is not bool:
+            raise ValueError('input_as_annotated_cif must be a boolean, not a path')
+        if 'input' in design:
+            supplied = design['input']
+            if not isinstance(supplied, (str, list)) or (
+                isinstance(supplied, list) and any(not isinstance(item, str) for item in supplied)
+            ):
+                raise ValueError('condition-spec input must be a path string or a list of path strings')
         validate_contig(design.get('contig'))
         conditions = design.get('conditions')
         if not isinstance(conditions, dict) or not conditions or set(conditions) - CONDITION_KEYS:
@@ -129,12 +137,57 @@ def build_command(input_path: Path, output: Path, num_designs: int, steps: int, 
     ]
 
 
+def validate_generated_cif(path: Path) -> None:
+    """Require a real atom record, not an empty generation placeholder."""
+    text = path.read_text(encoding='utf-8', errors='replace')
+    if len(text) > 10 * 1024 * 1024:
+        raise ValueError(f'generated CIF exceeds the supported size: {path.name}')
+    columns: list[str] = []
+    rows: list[list[str]] = []
+    in_loop = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line == 'loop_':
+            in_loop, columns = True, []
+            continue
+        if in_loop and line.startswith('_atom_site.'):
+            columns.append(line.lower())
+            continue
+        if in_loop and columns:
+            if not line or line.startswith(('#', '_', 'loop_', 'data_')):
+                in_loop = False
+                continue
+            rows.append(line.split())
+    if not columns:
+        raise ValueError(f'generated CIF has no atom_site loop: {path.name}')
+    index = {name: position for position, name in enumerate(columns)}
+    required = ('_atom_site.group_pdb', '_atom_site.cartn_x', '_atom_site.cartn_y', '_atom_site.cartn_z')
+    if any(name not in index for name in required):
+        raise ValueError(f'generated CIF omits atom coordinates or record type: {path.name}')
+    residue_columns = [name for name in ('_atom_site.label_comp_id', '_atom_site.auth_comp_id') if name in index]
+    sequence_columns = [name for name in ('_atom_site.label_seq_id', '_atom_site.auth_seq_id') if name in index]
+    for row in rows:
+        if len(row) < len(columns) or row[index['_atom_site.group_pdb']].upper() not in {'ATOM', 'HETATM'}:
+            continue
+        try:
+            coordinates = [float(row[index[name]]) for name in required[1:]]
+        except ValueError:
+            continue
+        residue = next((row[index[name]] for name in residue_columns if row[index[name]] not in {'.', '?'}), '')
+        sequence = next((row[index[name]] for name in sequence_columns if row[index[name]] not in {'.', '?'}), '')
+        if residue and sequence and all(abs(value) < 1e6 for value in coordinates):
+            return
+    raise ValueError(f'generated CIF has no atom record with coordinates and a residue: {path.name}')
+
+
 def validate_outputs(output: Path) -> list[Path]:
     sample_dir = output / 'inference_samples'
     designs = sorted(path for path in sample_dir.rglob('*_generated.cif')
                      if path.is_file() and path.stat().st_size > 0) if sample_dir.is_dir() else []
     if not designs:
         raise ValueError('RFD4 produced zero non-empty annotated CIF designs')
+    for design in designs:
+        validate_generated_cif(design)
     return designs
 
 

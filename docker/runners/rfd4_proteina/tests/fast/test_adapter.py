@@ -56,6 +56,26 @@ def test_zero_cif_output_is_refused(tmp_path):
         raise AssertionError('a non-generated CIF substituted for a generated design')
     generated = designs / 'design_0_generated.cif'
     generated.write_text('data_x\n#\n', encoding='utf-8')
+    try:
+        adapter.validate_outputs(output)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('header-only generated CIF accepted as a design')
+    generated.write_text(
+        'data_design\n'
+        'loop_\n'
+        '_atom_site.group_PDB\n'
+        '_atom_site.id\n'
+        '_atom_site.Cartn_x\n'
+        '_atom_site.Cartn_y\n'
+        '_atom_site.Cartn_z\n'
+        '_atom_site.label_comp_id\n'
+        '_atom_site.label_seq_id\n'
+        'ATOM 1 0.000 0.000 0.000 ALA 1\n'
+        '#\n',
+        encoding='utf-8',
+    )
     assert adapter.validate_outputs(output) == [generated]
 
 
@@ -72,6 +92,7 @@ def test_condition_spec_refuses_unsupported_directives_and_shell_text(tmp_path):
         'design:\n  contig: "A1-4"\n  conditions: {C_CRD: {true: [{select: "$HOME"}]}}\n',
         'design:\n  contig: "A1-4; touch /tmp/x"\n  conditions: {C_CRD: {true: []}}\n',
         'design:\n  contig: "A1-4"\n  conditions: {C_CRD: {true: []}}\n  shell: "rm -rf /"\n',
+        'design:\n  contig: "A1-4"\n  input_as_annotated_cif: /etc/passwd\n  conditions: {C_CRD: {true: []}}\n',
         'global_args: {seed: 1}\n',
     ]:
         path = tmp_path / 'bad.yaml'
