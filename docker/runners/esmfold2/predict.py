@@ -60,8 +60,12 @@ from persistent_runner import (  # noqa: E402
 )
 from work_items import InputError, build_config, read_task_manifest, record_problem  # noqa: E402
 
-UPSTREAM_COMMIT = "bf343ba264b650dff7a073643725f9aaa1fdbe8d"
-UPSTREAM_VERSION = "3.4.1"
+UPSTREAM_COMMIT = "8f0834cbc350aeaf507f755475873f7c61fa44a1"
+UPSTREAM_VERSION = "3.4.2"
+#: Upstream v3.4.2 defaults the ESMC backbone to fp8. The adapter deliberately
+#: keeps bf16, the precision the provisioned weights and prior Task results were
+#: validated with, and publishes that choice with every prediction.
+ESMC_PRECISION = "bf16"
 MODEL_REVISIONS = {
     "standard": "8fc3ff471022fdce52c77030685eb775de0c00a3",
     "fast": "c6c7958d63f5f2f1f0fed0bb9462316f8ccceea6",
@@ -124,7 +128,10 @@ ASSET_SPECS = {
 #: rather than to the file total: a task may legitimately carry many records.
 MAX_ITEM_RESIDUES = 1024
 SEQUENCE_EXTENSIONS = (".fasta", ".fa", ".faa")
-KERNEL_BACKENDS = ("reference", "cuequivariance")
+#: Upstream replaces the cuEquivariance backend with its own Triton kernels:
+#: ``fused`` is bit-exact against the reference path, while ``fast`` also
+#: enables the approximate bf16 MSA-encoder triangle multiplication.
+KERNEL_BACKENDS = ("reference", "fused", "fast")
 #: User settings this plugin requires from the owning task manifest.
 REQUIRED_PARAMS = (
     "model_variant",
@@ -700,7 +707,7 @@ class ESMFold2Plugin:
             model_dir,
             config=config,
             device="cuda",
-            esmc_precision="bf16",
+            esmc_precision=ESMC_PRECISION,
         ).eval()
         model.set_kernel_backend(None if self.params["kernel_backend"] == "reference" else self.params["kernel_backend"])
         # The model's residency right after it reached the device: this is the
@@ -890,6 +897,7 @@ class ESMFold2Plugin:
                 "repository": "https://github.com/Biohub/esm",
                 "commit": UPSTREAM_COMMIT,
                 "version": UPSTREAM_VERSION,
+                "esmc_precision": ESMC_PRECISION,
             },
             "models": {
                 "variant_revision": MODEL_REVISIONS[self.params["model_variant"]],

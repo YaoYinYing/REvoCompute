@@ -18,4 +18,6 @@ esmfold2/
     `-- model-00001-of-00006.safetensors ... model-00006-of-00006.safetensors
 ```
 
-Provision snapshots only from the official Hugging Face repositories at the immutable revisions recorded in `predict.py` and `assets.json`. The manifest's `files` object maps each relative path to its exact `size` and `sha256`; the runner verifies every consumed file before model loading. The ESMFold 2 head, CCD data, and ESMC-6B backbone are MIT-licensed upstream assets. Do not copy them into the SIF or a task workspace.
+Provision snapshots only from the official Hugging Face repositories at the immutable revisions recorded in `predict.py`, `upstream.json`, and `assets.json`. The manifest's `files` object maps each relative path to its exact `size` and `sha256`; the runner verifies every consumed file before model loading. The ESMFold 2 head, CCD data, and ESMC-6B backbone are MIT-licensed upstream assets. Do not copy them into the SIF or a task workspace.
+
+ESM v3.4.2 defaults the ESMC-6B backbone to fp8. This Runner deliberately loads it in bf16, the precision the provisioned weights were validated with, and records `esmc_precision: bf16` with every prediction. The provisioned weight files and revisions are unchanged.

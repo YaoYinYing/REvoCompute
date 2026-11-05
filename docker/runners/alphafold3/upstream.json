@@ -1,0 +1,32 @@
+{
+  "repository": "https://github.com/google-deepmind/alphafold3",
+  "upstream_version": "3.0.5",
+  "upstream_tag": "v3.0.5",
+  "upstream_commit": "37e3c57fe123fc51f6d96236320b8b657afb11ac",
+  "upstream_commit_date": "2026-11-04",
+  "install_method": "source at upstream_commit with uv sync --frozen from that commit's uv.lock",
+  "code_license": "Apache-2.0",
+  "model_weights_license": "Google AlphaFold 3 model parameters terms of use; use requires direct distribution from Google",
+  "runtime_network": false,
+  "python_requires": ">=3.12",
+  "cuda_minor": "12.9",
+  "native_dependencies": {
+    "hmmer": "3.4 (sha256 ca70d94fd0cf271bd7063423aabb116d42de533117343a9b27a65c17ff06fbf3)",
+    "hmmer_patches": [
+      "docker/jackhmmer_seq_limit.patch",
+      "docker/easel_fast_fasta_parsing.patch",
+      "docker/jackhmmer_parallel_fasta.patch"
+    ],
+    "pybind11": "2e0815278cb899b20870a67ca8205996ef47e70f",
+    "pybind11_abseil": "bddf30141f9fec8e577f515313caec45f559d319",
+    "abseil-cpp": "d7aaad83b488fd62bd51c81ecf16cd938532cc0a",
+    "libcifpp": "ac98531a2fc8daf21131faa0c3d73766efa46180",
+    "dssp": "57560472b4260dc41f457706bc45fc6ef0bc0f10",
+    "transitive_archives": [
+      "boost-1.83.0",
+      "eigen-3.4.0",
+      "libmcfp-1.3.1"
+    ]
+  },
+  "notes": "The native dependencies are pinned URL archives with SHA256 in the upstream CMake build; the image does not float on default branches. v3.0.5+ replaces the pickle CCD with MessagePack: build_data writes ccd.msgpack and chemical_component_sets.msgpack into the installed package, and the image test loads them. The no-MSA, supplied-MSA, and template input paths must be revalidated on a candidate image."
+}

@@ -13,7 +13,7 @@ collections:
         seed: 0
         lm_dropout: 0.0
         lm_mask_pct: 0.0
-        kernel_backend: cuequivariance
+        kernel_backend: fused
         include_embeddings: false
     - id: multi-record-esmfold2-fast
       task: esmfold2_predict
@@ -26,5 +26,5 @@ collections:
         seed: 0
         lm_dropout: 0.0
         lm_mask_pct: 0.0
-        kernel_backend: cuequivariance
+        kernel_backend: fused
         include_embeddings: false

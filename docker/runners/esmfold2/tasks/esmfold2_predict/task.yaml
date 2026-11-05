@@ -271,12 +271,14 @@ parameters:
       maximum: 0.5
     kernel_backend:
       type: string
-      description: Triangle-update kernel implementation; reference prioritizes portability
-        and cuequivariance uses the pinned CUDA kernels.
-      default: cuequivariance
+      description: Triangle-update kernel implementation; reference prioritizes portability,
+        fused uses the upstream Triton kernels and is bit-exact against reference,
+        and fast adds the approximate MSA-encoder triangle multiplication.
+      default: fused
       enum:
       - reference
-      - cuequivariance
+      - fused
+      - fast
     include_embeddings:
       type: boolean
       description: Save pooled pair embeddings for downstream analysis; this can produce

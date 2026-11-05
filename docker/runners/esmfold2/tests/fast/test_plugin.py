@@ -37,7 +37,7 @@ DEFAULT_PARAMS = {
     "lm_mask_pct": 0.0,
     "msa_max_depth": 1024,
     "msa_column_mask_rate": 0.1,
-    "kernel_backend": "cuequivariance",
+    "kernel_backend": "fused",
     "include_embeddings": False,
 }
 PLANS = {
@@ -470,16 +470,16 @@ def test_the_reference_kernel_fallback_switches_the_model_backend(tmp_path, plug
     result = _run(plugin_module, manifest, output, asset_root=assets)
 
     assert result["outcome"] == "SUCCESS"
-    assert {fold["model_backend"] for fold in fake.fake_folds()} == {"cuequivariance", "reference"}, (
+    assert {fold["model_backend"] for fold in fake.fake_folds()} == {"fused", "reference"}, (
         "the fallback must reach the model"
     )
-    assert [fold["model_backend"] for fold in fake.fake_folds()][0] == "cuequivariance", (
+    assert [fold["model_backend"] for fold in fake.fake_folds()][0] == "fused", (
         "the default path runs the user's backend first"
     )
     record = json.loads((output / "a" / "prediction.json").read_text(encoding="utf-8"))
     assert record["effective"]["kernel_backend"] == "reference"
     assert record["effective"]["sample_group_size"] == 1, "the reference plan keeps the lower concurrency"
-    assert record["parameters"]["kernel_backend"] == "cuequivariance", "the user's choice is unchanged"
+    assert record["parameters"]["kernel_backend"] == "fused", "the user's choice is unchanged"
     # A material execution setting the attempt actually applied reaches the
     # observation; the default path's absent one does not.
     events = result["items"][0]["resource_events"]
@@ -637,9 +637,9 @@ def test_the_runner_reports_the_device_and_the_model_baseline(tmp_path, plugin_m
 
 
 def test_the_runtime_fingerprint_changes_with_the_environment_not_a_constant(plugin_module):
-    fast = plugin_module.ESMFold2Plugin({"kernel_backend": "cuequivariance", "model_variant": "fast"}, asset_root="/x")
+    fast = plugin_module.ESMFold2Plugin({"kernel_backend": "fused", "model_variant": "fast"}, asset_root="/x")
     reference = plugin_module.ESMFold2Plugin({"kernel_backend": "reference", "model_variant": "fast"}, asset_root="/x")
-    standard = plugin_module.ESMFold2Plugin({"kernel_backend": "cuequivariance", "model_variant": "standard"}, asset_root="/x")
+    standard = plugin_module.ESMFold2Plugin({"kernel_backend": "fused", "model_variant": "standard"}, asset_root="/x")
 
     assert "torch=" in fast.runtime_fingerprint and "cuda=" in fast.runtime_fingerprint
     assert fast.runtime_fingerprint != reference.runtime_fingerprint
@@ -796,13 +796,13 @@ def test_a_backend_rung_matching_the_requested_backend_is_a_no_op(plugin_module)
     failed. The plans here differ only in the backend, so nothing else masks it.
     """
     requested_reference = {"id": "a", "length": 10, "sample_count": 4, "kernel_backend": "reference"}
-    requested_default = {"id": "a", "length": 10, "sample_count": 4, "kernel_backend": "cuequivariance"}
+    requested_default = {"id": "a", "length": 10, "sample_count": 4, "kernel_backend": "fused"}
     one_at_a_time = {"sample_group_size": 1}
     reference = {"sample_group_size": 1, "kernel_backend": "reference"}
 
     assert plugin_module.effective_plan_key(
-        requested_default, {}, default_backend="cuequivariance"
-    ) != plugin_module.effective_plan_key(requested_default, reference, default_backend="cuequivariance")
+        requested_default, {}, default_backend="fused"
+    ) != plugin_module.effective_plan_key(requested_default, reference, default_backend="fused")
     # Already on the reference kernels, so naming them changes nothing.
     assert plugin_module.effective_plan_key(
         requested_reference, reference, default_backend="reference"
@@ -836,7 +836,7 @@ def test_no_adjustment_key_names_a_scientific_parameter(plugin_module):
     # ones the task schema allows — so an adaptation can never change the model,
     # the sample count, a sampling parameter, or the seed.
     assert (plugin_module.SUPPORTED_ADJUSTMENTS & scientific) == {"kernel_backend"}
-    assert set(plugin_module.KERNEL_BACKENDS) == {"reference", "cuequivariance"}
+    assert set(plugin_module.KERNEL_BACKENDS) == {"reference", "fused", "fast"}
 
     # A plan naming the model, the sample count, a sampling parameter, or the
     # seed is rejected at load — the whole scientific parameter surface a task
@@ -849,5 +849,5 @@ def test_no_adjustment_key_names_a_scientific_parameter(plugin_module):
             )
     with pytest.raises(ValueError, match="unknown kernel backend"):
         plugin_module.declared_plans(
-            {"fallback_plans": [{"label": "cheat", "title": "x", "adjustments": {"kernel_backend": "fast"}}]}
+            {"fallback_plans": [{"label": "cheat", "title": "x", "adjustments": {"kernel_backend": "bogus"}}]}
         )

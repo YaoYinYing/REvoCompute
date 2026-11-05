@@ -10,6 +10,7 @@ runtime:
   build_inputs:
   - esmfold2/requirements.in
   - esmfold2/requirements.lock
+  - esmfold2/upstream.json
   runtime_overlay:
   - common/runtime/
   - esmfold2/run.sh

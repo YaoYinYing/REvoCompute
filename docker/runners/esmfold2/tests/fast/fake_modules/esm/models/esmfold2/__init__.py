@@ -172,7 +172,7 @@ class EsmFold2Model:
     """The loader counts itself; the instance records the backend it is set to."""
 
     def __init__(self) -> None:
-        self.backend = "cuequivariance"
+        self.backend = "fused"
 
     @classmethod
     def from_pretrained(cls, model_dir, config=None, device=None, esmc_precision=None):
