@@ -1,3 +1,4 @@
+id: proton_pottsmpnn
 display_name: Proton PottsMPNN pH-conditioned binder design
 category: sequence_design
 summary: Design binder sequences using model scores under two declared protonation-state conditions.
