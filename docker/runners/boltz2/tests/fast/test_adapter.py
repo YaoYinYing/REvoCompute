@@ -18,6 +18,16 @@ assert SPEC and SPEC.loader
 adapter = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(adapter)
 
+_VALID_CIF = """data_model
+loop_
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+CA ALA 1.0 2.0 3.0
+"""
+
 
 def _assets(tmp_path: Path) -> tuple[Path, Path]:
     root = tmp_path / "assets"
@@ -134,6 +144,56 @@ def test_empty_manifest_still_blocks_execution(tmp_path: Path) -> None:
         adapter.verify_assets(root, manifest)
 
 
+def test_structure_parser_requires_coordinates_and_identity(tmp_path: Path) -> None:
+    valid = tmp_path / "valid.cif"
+    valid.write_text(_VALID_CIF)
+    assert adapter.structure_atom_count(valid) == 1
+    no_identity = tmp_path / "no_identity.cif"
+    no_identity.write_text(_VALID_CIF.replace("CA ALA", "CA ?"))
+    assert adapter.structure_atom_count(no_identity) == 0
+    bad_coords = tmp_path / "bad_coords.cif"
+    bad_coords.write_text(_VALID_CIF.replace("1.0 2.0 3.0", "x 2.0 3.0"))
+    assert adapter.structure_atom_count(bad_coords) == 0
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("", "empty structure file"),
+        ("data_model\n# header only\n", "no parseable atom record"),
+    ],
+)
+def test_predict_refuses_zero_byte_or_header_only_structure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str, message: str
+) -> None:
+    """A published structure must contain a real atom, not just a CIF header or empty file."""
+    root, manifest = _assets(tmp_path)
+    task = _task(tmp_path, "version: 1\nsequences:\n- protein:\n    id: A\n    sequence: ACDE\n    msa: empty\n")
+    cli = tmp_path / "fake-boltz"
+    cli.write_text("""#!/usr/bin/env python3
+import os, sys
+from pathlib import Path
+args = sys.argv
+input_path = Path(args[2])
+out = Path(args[args.index('--out_dir') + 1]) / f'boltz_results_{input_path.stem}' / 'predictions' / input_path.stem
+out.mkdir(parents=True)
+(out / f'{input_path.stem}_model_0.cif').write_text(os.environ['FAKE_CIF'])
+(out / f'confidence_{input_path.stem}_model_0.json').write_text('{}')
+""")
+    cli.chmod(0o755)
+    output = tmp_path / "output"
+    monkeypatch.setenv("TASK_TYPE", "boltz2_predict")
+    monkeypatch.setenv("BOLTZ_ASSET_ROOT", str(root))
+    monkeypatch.setenv("BOLTZ_ASSET_MANIFEST", str(manifest))
+    monkeypatch.setenv("BOLTZ_CLI", str(cli))
+    monkeypatch.setenv("FAKE_CIF", content)
+    monkeypatch.setattr(sys, "argv", ["adapter.py", "structure", str(task), str(output)])
+
+    with pytest.raises(ValueError, match=message):
+        adapter.main()
+    assert not (output / "task_finished").exists()
+
+
 def test_affinity_task_fails_when_upstream_omits_affinity_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -147,7 +207,15 @@ args=sys.argv
 input_path=Path(args[2])
 out=Path(args[args.index('--out_dir')+1])/f'boltz_results_{input_path.stem}'/'predictions'/input_path.stem
 out.mkdir(parents=True)
-(out/f'{input_path.stem}_model_0.cif').write_text('data_x')
+(out/f'{input_path.stem}_model_0.cif').write_text('''data_model
+loop_
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+CA ALA 1.0 2.0 3.0
+''')
 (out/f'confidence_{input_path.stem}_model_0.json').write_text('{}')
 """)
     cli.chmod(0o755)

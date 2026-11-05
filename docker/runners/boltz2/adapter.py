@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import subprocess
@@ -65,6 +66,95 @@ def verify_assets(root: Path, manifest: Path) -> None:
             actual = hashlib.file_digest(path.open("rb"), "sha256").hexdigest()
         if actual != digest:
             raise ValueError(f"Boltz-2 asset digest mismatch: {name}")
+
+
+def _cif_tokens(line: str) -> list[str]:
+    """Split one CIF row, honouring simple single/double-quoted values."""
+    tokens: list[str] = []
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if char.isspace():
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            start = index
+            while index < len(line) and line[index] != quote:
+                index += 1
+            tokens.append(line[start:index])
+            index += 1
+            continue
+        start = index
+        while index < len(line) and not line[index].isspace():
+            index += 1
+        tokens.append(line[start:index])
+    return tokens
+
+
+def _valid_atom(values: list[str], columns: dict[str, int]) -> bool:
+    def value(name: str) -> str:
+        index = columns.get(name)
+        return values[index].strip() if index is not None and index < len(values) else ""
+
+    residue = value("_atom_site.label_comp_id") or value("_atom_site.auth_comp_id")
+    atom = value("_atom_site.label_atom_id") or value("_atom_site.auth_atom_id")
+    if residue in {"", ".", "?"} or atom in {"", ".", "?"}:
+        return False
+    try:
+        coords = [float(value(f"_atom_site.cartn_{axis}")) for axis in "xyz"]
+    except ValueError:
+        return False
+    return all(math.isfinite(coord) for coord in coords)
+
+
+# ponytail: line-oriented _atom_site reader, sufficient for upstream-emitted mmCIF;
+# a wrapped or multi-block CIF needs a real parser (gemmi is available in the SIF).
+def structure_atom_count(path: Path) -> int:
+    """Count atom-site rows with finite coordinates and a residue/atom identity."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if not text.strip():
+        raise ValueError(f"empty structure file: {path.name}")
+    lines = text.splitlines()
+    atoms = 0
+    index = 0
+    while index < len(lines):
+        if lines[index].strip().lower() != "loop_":
+            index += 1
+            continue
+        index += 1
+        tags: list[str] = []
+        while index < len(lines) and lines[index].strip().startswith("_"):
+            tags.append(lines[index].strip().split()[0].lower())
+            index += 1
+        if not tags or not all(tag.startswith("_atom_site.") for tag in tags):
+            continue
+        columns = {tag: position for position, tag in enumerate(tags)}
+        if not {
+            "_atom_site.cartn_x",
+            "_atom_site.cartn_y",
+            "_atom_site.cartn_z",
+        } <= set(columns) or not (
+            {"_atom_site.label_comp_id", "_atom_site.auth_comp_id"} & set(columns)
+            and {"_atom_site.label_atom_id", "_atom_site.auth_atom_id"} & set(columns)
+        ):
+            return 0
+        while index < len(lines):
+            row = lines[index].strip()
+            if (
+                not row
+                or row.startswith("#")
+                or row.startswith("_")
+                or row.lower() == "loop_"
+                or row.lower().startswith("data_")
+            ):
+                break
+            values = _cif_tokens(row)
+            if len(values) >= len(tags) and _valid_atom(values, columns):
+                atoms += 1
+            index += 1
+    return atoms
 
 
 def _relative(entity: dict[str, object]) -> Path:
@@ -186,8 +276,12 @@ def main() -> int:
     print("REVODESIGN_STAGE:boltz2_predict")
     subprocess.run(args, check=True, cwd=spec.parent)
     prediction = output / f"boltz_results_{spec.stem}" / "predictions"
-    if not list(prediction.glob("*/*_model_*.cif")):
+    structures = list(prediction.glob("*/*_model_*.cif"))
+    if not structures:
         raise ValueError("Boltz-2 produced no native mmCIF structure")
+    for structure in structures:
+        if structure_atom_count(structure) == 0:
+            raise ValueError(f"Boltz-2 produced no parseable atom record in {structure.name}")
     if mode == "affinity" and not list(prediction.glob("*/affinity_*.json")):
         raise ValueError("Boltz-2 affinity task produced no affinity JSON")
     if not list(prediction.glob("*/confidence_*_model_*.json")):

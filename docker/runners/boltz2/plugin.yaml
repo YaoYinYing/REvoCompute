@@ -10,6 +10,7 @@ runtime:
   - boltz2/adapter.py
   - boltz2/model-assets.sha256
   - boltz2/upstream.json
+  - boltz2/requirements.lock
   runtime_overlay: []
   entrypoint: [bash, /app/revocompute/run.sh]
 tasks:
