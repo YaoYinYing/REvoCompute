@@ -59,11 +59,15 @@ def verify_hbplus() -> Path:
             'licence terms and export HBPLUS_PATH in the runner environment'
         )
     executable = Path(configured)
+    if not executable.is_absolute():
+        raise RuntimeError(
+            f'ASSET_BLOCKED: HBPLUS_PATH must be an absolute path: {configured}'
+        )
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise RuntimeError(
             f'ASSET_BLOCKED: HBPLUS_PATH does not name an executable file: {executable}'
         )
-    return executable
+    return executable.resolve()
 
 
 def read_binder_residues(path: Path, binder_chain: object,

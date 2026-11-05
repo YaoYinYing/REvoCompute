@@ -328,6 +328,10 @@ def test_operator_hbplus_provisioning_fails_closed(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match='HBPLUS_PATH is not set'):
         adapter.verify_hbplus()
 
+    monkeypatch.setenv('HBPLUS_PATH', 'relative/hbplus')
+    with pytest.raises(RuntimeError, match='must be an absolute path'):
+        adapter.verify_hbplus()
+
     missing = tmp_path / 'missing-hbplus'
     monkeypatch.setenv('HBPLUS_PATH', str(missing))
     with pytest.raises(RuntimeError, match='does not name an executable'):
@@ -341,7 +345,7 @@ def test_operator_hbplus_provisioning_fails_closed(monkeypatch, tmp_path):
         adapter.verify_hbplus()
 
     not_executable.chmod(0o755)
-    assert adapter.verify_hbplus() == not_executable
+    assert adapter.verify_hbplus() == not_executable.resolve()
 
 
 def test_shifted_sequence_mapping_is_refused_even_when_tokens_agree(tmp_path):

@@ -10,7 +10,8 @@ notice:
   summary: >-
     REvoCompute does not distribute HBPLUS. The operator provisions the executable under its own
     academic-use terms; approval records operator authorization and does not create or expand any
-    rights in HBPLUS. The image carries only MIT/BSD-3-Clause code.
+    rights in HBPLUS. Bundled project code is MIT/BSD-3-Clause; the base image and third-party
+    dependencies carry their own licences.
 license:
-  name: HBPLUS academic-use terms; MIT and BSD-3-Clause model code
+  name: HBPLUS academic-use terms; MIT and BSD-3-Clause project code
   url: https://www.ebi.ac.uk/thornton-srv/software/HBPLUS/

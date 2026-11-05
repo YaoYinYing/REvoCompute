@@ -21,6 +21,7 @@ From: nvcr.io/nvidia/pytorch:25.04-py3
     git checkout --detach 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
     python -m pip install --no-cache-dir ./foundry
     python -m pip install --no-cache-dir -r /tmp/proton-requirements-extra.txt
+    rm -f /tmp/proton-requirements-extra.txt
 
     # The design checkpoint is mounted read-only at runtime, never baked into
     # the image. Remove it and Git history after installation; the MIT and

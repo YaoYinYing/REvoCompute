@@ -7,11 +7,12 @@ The image installs the pinned `foundry` package plus the pinned runtime entries 
 featurises through `prepare_potts_input(..., extended_vocab="v6")`, which unconditionally runs
 `CalculateHbondsPlus` and the EV6 FLAML labeller. HBPLUS is **not** bundled: the operator provisions the
 executable under HBPLUS's own licence terms and exports `HBPLUS_PATH` in the runner environment. The adapter
-fails closed before design if `HBPLUS_PATH` is unset, missing, or not executable; it never falls back to a
-bundled or default path. The image pins the labeller stack (`flaml`, `xgboost`, `lightgbm`,
-`scikit-learn`). `%test` imports the design engine and loads the EV6 fold models, and asserts that the image
-contains no HBPLUS binary or notice. The adapter validates the pinned code's complete 30-token, three-letter
-v6 `token_atoms` vocabulary and constructs `PottsMPNNPHEngine` with `extended_vocab="v6"`.
+fails closed before design if `HBPLUS_PATH` is unset, relative, missing, or not executable; it never falls
+back to a bundled or default path. The image pins the labeller stack (`flaml`, `xgboost`, `lightgbm`,
+`scikit-learn`). `%test` imports the design engine and loads the EV6 fold models, and asserts that no
+PATH-resolvable HBPLUS binary and no known HBPLUS notice directory are present. The adapter validates the
+pinned code's complete 30-token, three-letter v6 `token_atoms` vocabulary and constructs `PottsMPNNPHEngine`
+with `extended_vocab="v6"`.
 
 Licence: authored upstream code is MIT; the bundled `foundry` tree is BSD-3-Clause. Both notices ship in
 `/opt/ProtonPottsMPNN`, and the image label declares only those shipped licences (`MIT AND BSD-3-Clause`).
@@ -24,8 +25,8 @@ checkpoint and Git history are removed after installation; the EV6 labeller fold
 
 The plugin declares `runtime.access_policy: proton_pottsmpnn_academic_only` in
 `common/policy/proton_pottsmpnn_academic_only.yaml`. The policy requires operator approval, records that
-HBPLUS is operator-provisioned rather than distributed, and makes the family requestable only to entitled
-users. The family remains disabled until the operator provisions HBPLUS and the maintainer accepts a live
+HBPLUS is operator-provisioned rather than distributed, and enforces that only entitled users may use the
+family. The family remains disabled until the operator provisions HBPLUS and the maintainer accepts a live
 receipt.
 
 ## Model asset provenance
@@ -48,7 +49,7 @@ These values are recorded in `model-assets.sha256`.
 2. Copy `checkpoints/potts_v6_afdb_edge_his0.3_acid0.06/epoch-0125.ckpt` from the pinned revision into that root — no runtime download, no write by the service account.
 3. Verify size is exactly 21,494,143 bytes and `sha256sum` matches the value above; record the verification with the deployment.
 4. Keep the mount read-only. The adapter verifies the hash from `model-assets.sha256` and fails closed on absence or mismatch.
-5. Provision an HBPLUS executable outside the image, under the operator's own HBPLUS licence terms. Do not bake it into the SIF. The checked-in `runner.yaml` binds `/mnt/db/tools/hbplus` read-only and sets `HBPLUS_PATH=/mnt/db/tools/hbplus/hbplus`; adjust those machine-specific values for the deployment. The adapter refuses to start if `HBPLUS_PATH` is unset, missing, or not executable, and never falls back.
+5. Provision an HBPLUS executable outside the image, under the operator's own HBPLUS licence terms. Do not bake it into the SIF. The checked-in `runner.yaml` binds `/mnt/db/tools/hbplus` read-only and sets `HBPLUS_PATH=/mnt/db/tools/hbplus/hbplus`; adjust those machine-specific values for the deployment. The adapter requires an absolute path, refuses to start if `HBPLUS_PATH` is unset, relative, missing, or not executable, and never falls back. It checks executability, not binary identity or version; the live-test receipt is the compatibility gate. The host directory must be operator/root-owned and must not be writable by the service or task users.
 
 ## Binder residue indexing
 
@@ -67,4 +68,4 @@ The family is discoverable from this tree, but it is not in the deployment's `EN
 
 ## ASSET_BLOCKED
 
-The checkpoint mount is absent today and no HBPLUS executable is provisioned, so the family is not READY and is not enabled. A candidate SIF may be built and `%test`-checked without either asset; `%test` verifies the engine imports and EV6 fold models and asserts that no HBPLUS is bundled. No SIF build or model-backed design run has been executed in this change, so scientific execution and the live-test receipt require the operator-provisioned HBPLUS and the hash-verified checkpoint. Remaining gates: operator provisioning above, candidate SIF build and direct-API smoke, target-host live acceptance, then activation by the maintainer.
+The checkpoint mount is absent today and no HBPLUS executable is provisioned, so the family is not READY and is not enabled. A candidate SIF may be built and `%test`-checked without either asset; `%test` verifies the engine imports and EV6 fold models and asserts no PATH-resolvable HBPLUS binary or known notice directory. No SIF build or model-backed design run has been executed in this change, so scientific execution and the live-test receipt require the operator-provisioned HBPLUS and the hash-verified checkpoint. Remaining gates: operator provisioning above, candidate SIF build and direct-API smoke, target-host live acceptance, then activation by the maintainer.

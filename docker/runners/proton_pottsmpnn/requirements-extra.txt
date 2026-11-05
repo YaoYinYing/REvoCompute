@@ -1,8 +1,8 @@
 # Runtime extras pinned from christian-creator/ProtonPottsMPNN
 # requirements-extra.txt at 09682abfa7d20e0abcdeea0490b7a4b1c190aee3.
 # prepare_potts_input(..., extended_vocab="v6") runs CalculateHbondsPlus (HBPLUS
-# is installed in the image) and the EV6 FLAML fold ensemble, so the labeller
-# stack is a mandatory runtime dependency, not a training-only extra.
+# is operator-provisioned at runtime) and the EV6 FLAML fold ensemble, so the
+# labeller stack is a mandatory runtime dependency, not a training-only extra.
 pandas==2.2.3
 ipdb==0.13.13
 propka==3.5.1
