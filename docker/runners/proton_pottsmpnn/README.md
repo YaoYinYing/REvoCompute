@@ -25,6 +25,14 @@ These values are recorded in `model-assets.sha256`.
 3. Verify size is exactly 21,494,143 bytes and `sha256sum` matches the value above; record the verification with the deployment.
 4. Keep the mount read-only. The adapter verifies the hash from `model-assets.sha256` and fails closed on absence or mismatch.
 
+## Binder residue indexing
+
+The pinned engine builds `chainA_all_idx` from the featurised token array, which follows the Biotite atom order supplied by `prepare_potts_input`; `_score_design` emits `canonical_sequence` and `extended_tokens` from that same index. Centres are matched by authored `res_id`. The adapter therefore supports ascending, possibly nonconsecutive binder numbering, and refuses insertion codes, duplicate numbering, and out-of-order authored numbering before design. The authored mapping is reused unchanged for output offset validation.
+
+## Activation status (source-only)
+
+The family is discoverable from this tree, but it is not in the deployment's `ENABLED_TASKRUNNERS` list. With the family excluded, readiness resolves to `NOT_CONFIGURED` / `RUNNER_UNKNOWN`; with it enabled but no SIF or receipt, readiness resolves to `NOT_BUILT` / `SIF_MISSING` with `next_action=build-sif`. No readiness attestation exists, so submission admission reports `RUNNER_UNAVAILABLE`. No READY or admission claim is made. `docker/runners/proton_pottsmpnn/tests/fast/test_contract.py` exercises these paths.
+
 ## ASSET_BLOCKED
 
 The mount is absent today, so the family is not READY. A candidate SIF may be built and `%test`-checked without the checkpoint, but scientific execution and the live-test receipt require the provisioned, hash-verified checkpoint. Remaining gates: operator provisioning above, candidate SIF build and direct-API smoke, target-host live acceptance, then activation by the maintainer.

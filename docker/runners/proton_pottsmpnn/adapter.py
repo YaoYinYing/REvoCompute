@@ -50,6 +50,7 @@ def read_binder_residues(path: Path, binder_chain: object,
         raise ValueError('binder_chain must be one PDB chain identifier')
     residues: dict[int, dict[str, object]] = {}
     after_ter = False
+    previous_position: int | None = None
     for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
         if line.startswith('TER'):
             after_ter = True
@@ -65,10 +66,19 @@ def read_binder_residues(path: Path, binder_chain: object,
             raise ValueError(
                 f'binder residue {position} uses insertion code {insertion!r}; residue addressing is ambiguous'
             )
+        entry = residues.get(position)
+        if entry is None:
+            if previous_position is not None and position < previous_position:
+                raise ValueError(
+                    f'binder residues must appear in ascending authored order; '
+                    f'{position} follows {previous_position}'
+                )
+            previous_position = position
+        elif position != previous_position:
+            raise ValueError(f'binder residue numbering repeats or is out of order at {position}')
         name = AA3.get(line[17:20].strip())
         if name is None:
             continue
-        entry = residues.get(position)
         if entry is None:
             residues[position] = {'names': {name}, 'altlocs': {line[16]}, 'after_ter': after_ter}
             continue
@@ -277,7 +287,7 @@ def validate_outputs(output: Path, binder_residues: dict[int, str], centres: lis
         raise ValueError('PottsMPNN produced no aligned candidate designs')
     if not (len(canonical_records) == len(state_records) == len(designs)):
         raise ValueError('candidate sequences, protonation states, and score records are misaligned')
-    positions = sorted(binder_residues)
+    positions = list(binder_residues)
     expected_centres = sorted((int(c['position']), str(c['state'])) for c in centres)
     requested_tokens = {str(c['state']) for c in centres}
     for index, (sequence, state_line, design) in enumerate(zip(canonical_records, state_records, designs)):

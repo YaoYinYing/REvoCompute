@@ -161,6 +161,34 @@ def test_unambiguous_binder_addressing_is_accepted():
     assert mapping == {1: 'H', 2: 'D', 3: 'E', 4: 'A'}
 
 
+def test_nonconsecutive_ascending_binder_numbering_is_supported(tmp_path):
+    pdb = tmp_path / 'complex.pdb'
+    pdb.write_text(
+        ''.join([
+            pdb_line(1, 'CA', 'HIS', 'A', 1),
+            pdb_line(2, 'CA', 'ASP', 'A', 5),
+            pdb_line(3, 'CA', 'GLU', 'A', 9),
+        ]),
+        encoding='utf-8',
+    )
+    mapping = adapter.read_binder_residues(pdb, 'A', {5})
+    assert mapping == {1: 'H', 5: 'D', 9: 'E'}
+    output = tmp_path / 'out'
+    (output / 'candidates').mkdir(parents=True)
+    (output / 'candidates' / 'designs.fa').write_text('>d\nHDE\n', encoding='utf-8')
+    (output / 'candidates' / 'designs_states.fa').write_text(
+        '>d\nHIS-P ASP-P GLU-D\n', encoding='utf-8'
+    )
+    (output / 'design_scores.json').write_text(json.dumps({'designs': [{
+        'design_id': 'd', 'extended_tokens': 'HIS-P ASP-P GLU-D',
+        'center_res_ids': [5], 'center_protonation_types': ['ASP-P'],
+    }]}), encoding='utf-8')
+    (output / 'task_config.json').write_text(
+        json.dumps({'checkpoint_path': '/mnt/model.ckpt'}), encoding='utf-8'
+    )
+    adapter.validate_outputs(output, mapping, [{'position': 5, 'state': 'ASP-P'}], ['ASP-P', 'ASP-D'])
+
+
 def test_ambiguous_binder_addressing_is_refused_before_design(tmp_path):
     task = {'binder_chain': 'A', 'centres': [{'position': 1, 'state': 'HIS-P'}],
             'states': ['HIS-P', 'HIS-S']}
@@ -171,6 +199,7 @@ def test_ambiguous_binder_addressing_is_refused_before_design(tmp_path):
     for lines, message in [
         ([pdb_line(1, 'CA', 'HIS', 'A', 1, icode='A')], 'insertion code'),
         ([pdb_line(1, 'CA', 'HIS', 'A', 1), pdb_line(2, 'CA', 'ASP', 'A', 1)], 'duplicate numbering'),
+        ([pdb_line(1, 'CA', 'HIS', 'A', 5), pdb_line(2, 'CA', 'ASP', 'A', 1)], 'ascending authored order'),
         ([pdb_line(1, 'CA', 'HIS', 'A', 1, altloc='A')], 'alternate locations'),
     ]:
         pdb.write_text(''.join(lines), encoding='utf-8')
