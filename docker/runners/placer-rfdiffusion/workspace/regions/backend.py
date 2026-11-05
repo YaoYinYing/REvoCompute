@@ -181,14 +181,29 @@ def validate_rfdiffusion_structure(
     if len(structures) != 1:
         raise WorkspaceValidationError("This RFdiffusion mode requires one guiding structure")
     present: set[tuple[str, int]] = set()
+    insertion_coded: set[tuple[str, int]] = set()
+    hetero: set[tuple[str, int]] = set()
     with open(structures[0], encoding="utf-8", errors="replace") as handle:
         for line in handle:
             if not line.startswith(("ATOM  ", "HETATM")):
                 continue
             try:
-                present.add(((line[21:22].strip() or "_"), int(line[22:26].strip())))
+                identity = ((line[21:22].strip() or "_"), int(line[22:26].strip()))
             except ValueError:
                 continue
+            if line[26:27].strip():
+                insertion_coded.add(identity)
+            elif line.startswith("HETATM"):
+                hetero.add(identity)
+            else:
+                present.add(identity)
+    unsupported = sorted(references & (insertion_coded | hetero))
+    if unsupported:
+        preview = ", ".join(f"{chain}{residue}" for chain, residue in unsupported[:8])
+        raise WorkspaceValidationError(
+            "RFdiffusion cannot address insertion-coded or hetero residue selections: "
+            f"{preview}. Pick standard protein residues."
+        )
     missing = sorted(references - present)
     if missing:
         preview = ", ".join(f"{chain}{residue}" for chain, residue in missing[:8])
