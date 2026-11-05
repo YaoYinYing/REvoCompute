@@ -23,7 +23,7 @@ const VIEW_ROLES = new Set<ResultView['role']>(['primary', 'evidence']);
 type ApiStage = components['schemas']['TaskStageItem'];
 const STAGE_STATUSES = new Set<ApiStage['status']>(['NOT_STARTED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED', 'SKIPPED']);
 const STAGE_SOURCES = new Set<ApiStage['source']>(['record', 'legacy', 'definition']);
-const STAGE_DEPENDENCIES = new Set<ApiStage['dependency']>(['completed', 'blocked', 'ready', 'waiting']);
+const STAGE_DEPENDENCIES = new Set<ApiStage['dependency']>(['completed', 'blocked', 'ready', 'waiting', 'skipped']);
 const VALIDATION_KEY = 'results.invalid.manifest';
 /*
  * Every parse fault the Result manifest projection can raise, as a catalog key.
