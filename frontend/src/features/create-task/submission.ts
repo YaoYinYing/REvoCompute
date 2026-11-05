@@ -15,6 +15,7 @@ export interface SubmissionSource {
   sequenceName(): string;
   sequenceRole(): string | null;
   parameters(): Record<string, string>;
+  executionMode(): string;
 }
 
 export function buildSubmissionFormData(form: TaskFormDefinition, source: SubmissionSource, values: WorkspaceValues): FormData {
@@ -27,7 +28,8 @@ export function buildSubmissionFormData(form: TaskFormDefinition, source: Submis
   }
   const data = new FormData();
   inputFiles.forEach(item => { data.append('files', item.file); data.append('input_paths', (item.file as File & { webkitRelativePath?: string }).webkitRelativePath || item.file.name); data.append('input_roles', item.role); });
-  data.append('task_type', form.name); data.append('workspace', JSON.stringify({ version: 2, capabilities: values }));
+  data.append('task_type', form.name); data.append('execution_mode', source.executionMode());
+  data.append('workspace', JSON.stringify({ version: 2, capabilities: values }));
   Object.entries(source.parameters()).forEach(([name, value]) => data.append(`params[${name}]`, value));
   return data;
 }

@@ -52,6 +52,11 @@ itself at ``stage_index = 0``. stdout markers stay optional progress detail
 (``tasks.run_stage``, execution-progress rows); they never create, advance, or
 settle a StageRun.
 
+A declared stage that the submission's frozen execution mode omits is projected
+as ``SKIPPED`` with ``reason_code = stage_omitted_by_mode``. It has no StageRun:
+the frozen graph document is the only writer of that projection, and an omitted
+stage never becomes ``QUEUED`` or consumes a reservation.
+
 ## Statuses and transitions
 
 ```text
@@ -68,9 +73,10 @@ set); attempt identity is enforced by unique indexes. Terminal statuses
 (``COMPLETED``, ``FAILED``, ``CANCELLED``, ``INTERRUPTED``) have no outgoing
 edge, so late markers and stale/duplicate callbacks cannot regress an attempt.
 ``NOT_STARTED`` is not stored: it is what the API reports for a declared stage
-with no record, and every attempt opens directly in ``QUEUED``. A future stage
-selector adds its own skipped state together with the writer that produces it;
-the contract does not pre-declare one.
+with no record, and every attempt opens directly in ``QUEUED``. ``SKIPPED`` is a
+projection of the submission's frozen execution mode, not a stored attempt
+state: a stage the mode omits opens no record and has no transition for a marker
+to advance.
 
 **Retries.** One attempt = one allocation attempt. A launch claim on the attempt
 row is taken before the job adapter exists, so a duplicate or resumed dispatch

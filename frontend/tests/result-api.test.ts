@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { downloadUrl, getCurrentUser, loadAuthorizedResult, parseResultManifest, requestResultArchive } from '../src/api/result-api';
-import type { ResultManifest } from '../src/api/result-types';
+import type { ResultManifest, TaskStatus } from '../src/api/result-types';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -80,6 +80,28 @@ describe('Result API boundary', () => {
       task_id: 'a'.repeat(32), task_type: 'example', display_name: 'result', status: 'failed', terminal: true,
       result_available: false, status_url: '/status', results_url: '/result', error: 'Runner stopped safely',
     })).toEqual(expect.objectContaining({ status: 'failed', error: 'Runner stopped safely' }));
+  });
+
+  it('parses a stage the execution mode omitted from the status projection', () => {
+    // A prepare-only Task omits its model stage; the status projection reports
+    // that stage as SKIPPED with dependency "skipped", which the parser must
+    // accept or every such Task becomes an unreadable running status.
+    const status = parseResultManifest({
+      task_id: 'a'.repeat(32), task_type: 'alphafold3', display_name: 'run', status: 'running', terminal: false,
+      status_url: '/status', results_url: '/result', result_available: false,
+      stages: {
+        source: 'record', total: 2, completed: 1, current: null,
+        items: [
+          { index: 0, name: 'alphafold3.features', display_name: 'Feature generation', status: 'COMPLETED',
+            source: 'record', attempt: 1, started_at: null, ended_at: null, reason_code: null,
+            planned_resources: null, dependency: 'completed' },
+          { index: 1, name: 'alphafold3.model', display_name: 'Structure inference', status: 'SKIPPED',
+            source: 'definition', attempt: null, started_at: null, ended_at: null,
+            reason_code: 'stage_omitted_by_mode', planned_resources: null, dependency: 'skipped' },
+        ],
+      },
+    }) as TaskStatus;
+    expect(status.stages?.items[1]).toEqual(expect.objectContaining({ status: 'SKIPPED', dependency: 'skipped' }));
   });
 
   it('mints an in-memory bearer token for the archive mutation', async () => {

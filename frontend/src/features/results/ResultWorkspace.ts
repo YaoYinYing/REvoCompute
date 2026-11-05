@@ -62,6 +62,7 @@ const isQuietOutcome = (manifest: ResultManifest): boolean => manifest.status ==
 const STAGE_STATUS_CLASS: Record<string, string> = {
   NOT_STARTED: 'status-pending', QUEUED: 'status-pending', RUNNING: 'status-running',
   COMPLETED: 'status-finished', FAILED: 'status-failed', CANCELLED: 'status-cancelled', INTERRUPTED: 'status-failed',
+  SKIPPED: 'status-pending',
 };
 function labeled(key: string, value: string): string { const label = t(key); return label === key ? value : label; }
 const stageStatusLabel = (status: string): string => labeled(`results.stage.status.${status}`, status);

@@ -225,8 +225,14 @@ def test_history_navigation_names_and_focuses_the_page_it_lands_on(page: Page) -
     # announcements do not accumulate as regions in the document.
     page.go_forward()
     expect(page.get_by_role("heading", name="Runner catalog", exact=True)).to_be_visible()
+    # A route paints while its mount builds, so the heading can be visible before
+    # the render commits and announces. Traverse only once that announcement is
+    # recorded; otherwise the next history move supersedes the forward render and
+    # the traversal it represented is never announced.
+    page.wait_for_function("() => window.__announcements.length === 2")
     page.go_back()
     expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
+    page.wait_for_function("() => window.__announcements.length === 3")
     announcements = _announcements(page)
     assert len(announcements) == 3, announcements
     assert announcements[-1].endswith("Tasks. | REvoCompute"), announcements

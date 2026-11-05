@@ -2547,6 +2547,11 @@
           "inputs": {"type": "array", "items": {"$ref": "#/components/schemas/TaskInputRole"}},
           "citations": {"type": "array", "items": {"$ref": "#/components/schemas/TaskCitation"}},
           "workflow": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowStage"}},
+          "execution_modes": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/ExecutionMode"},
+            "description": "Manifest-declared stage subsets a submission may run; empty when the whole workflow is the only intent."
+          },
           "access": {"$ref": "#/components/schemas/RunnerAccess"},
           "submission": {"oneOf": [{"$ref": "#/components/schemas/TaskSubmissionState"}, {"type": "null"}]},
           "detail_url": {"type": "string"},
@@ -2567,6 +2572,36 @@
           "ir_version": {"type": "integer", "minimum": 1},
           "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Canonical sha256 of document."},
           "document": {"type": "object", "additionalProperties": true, "description": "Canonical execution graph document: nodes, graph inputs, and execution order."}
+        },
+        "additionalProperties": false
+      },
+      "ExecutionMode": {
+        "type": "object",
+        "required": ["id", "label", "stages"],
+        "properties": {
+          "id": {"type": "string"},
+          "label": {"type": "string"},
+          "stages": {"type": "array", "items": {"type": "string"}},
+          "output_contract": {"type": "string", "enum": ["full", "stages", "none"], "description": "Which output contract this mode must satisfy."},
+          "reuse": {
+            "type": "array",
+            "description": "Typed artifacts this mode consumes from an earlier authorized Task; each entry names the consumer port and its required role/type.",
+            "items": {
+              "type": "object",
+              "required": ["port", "role", "type", "inputs"],
+              "properties": {
+                "port": {"type": "string", "description": "Fully qualified consumer port, for example model.features."},
+                "role": {"type": "string"},
+                "type": {"type": "string"},
+                "inputs": {
+                  "type": "array",
+                  "items": {"type": "string"},
+                  "description": "Consumer input roles the reused artifact was prepared from; the submission must reproduce them."
+                }
+              },
+              "additionalProperties": false
+            }
+          }
         },
         "additionalProperties": false
       },
@@ -2707,7 +2742,7 @@
           "index": {"type": "integer", "minimum": 0},
           "name": {"type": "string", "description": "Manifest stage name (or the Task type itself for a single-stage Task)."},
           "display_name": {"type": "string"},
-          "status": {"type": "string", "enum": ["NOT_STARTED", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"], "description": "NOT_STARTED is reported for a declared stage with no attempt record; stored attempts open in QUEUED."},
+          "status": {"type": "string", "enum": ["NOT_STARTED", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED", "SKIPPED"], "description": "NOT_STARTED is reported for a declared stage with no attempt record; stored attempts open in QUEUED. SKIPPED is a declared stage the submission's execution mode omits and has no record."},
           "source": {"type": "string", "enum": ["record", "legacy", "definition"], "description": "record: durable StageRun evidence; legacy: the pre-StageRun workflow_state mirror; definition: the declared stage has no evidence yet."},
           "attempt": {"type": ["integer", "null"], "minimum": 1},
           "started_at": {"type": ["string", "null"], "format": "date-time"},
@@ -2721,8 +2756,8 @@
           },
           "dependency": {
             "type": "string",
-            "enum": ["completed", "blocked", "ready", "waiting"],
-            "description": "Graph dependency state, independent of scheduler status: completed (latest attempt completed and reuse-verified), blocked (this stage or an ancestor failed), ready (every producer completed), waiting otherwise."
+            "enum": ["completed", "blocked", "ready", "waiting", "skipped"],
+            "description": "Graph dependency state, independent of scheduler status: completed (latest attempt completed and reuse-verified), blocked (this stage or an ancestor failed), ready (every producer completed), skipped (omitted by the submission's execution mode), waiting otherwise."
           }
         },
         "additionalProperties": false
@@ -2734,6 +2769,7 @@
           "source": {"type": "string", "enum": ["record", "legacy"], "description": "record: durable StageRun evidence. legacy: the pre-StageRun workflow_state mirror, reported only for historical Tasks."},
           "total": {"type": "integer", "minimum": 0},
           "completed": {"type": "integer", "minimum": 0},
+          "skipped": {"type": "integer", "minimum": 0},
           "current": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/TaskStageItem"}], "description": "The running attempt, else the queued attempt, else null."},
           "items": {"type": "array", "items": {"$ref": "#/components/schemas/TaskStageItem"}}
         },
@@ -2840,6 +2876,8 @@
           "input_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding positionally to each multipart files part."},
           "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional relative paths corresponding to files, used by multi-file task types."},
           "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types; omitted when it is supplied by the request path."},
+          "execution_mode": {"type": "string", "description": "Manifest-declared execution mode from the Task Type projection; defaults to full."},
+          "reuse": {"type": "string", "description": "Optional JSON-encoded object mapping each declared reuse role to {source_task, stage, port, digest}."},
           "workspace": {"type": "string", "description": "Optional JSON-encoded version-2 workspace document."}
         },
         "additionalProperties": {"type": "string", "description": "Runner parameter field named params[parameter_name]."}
@@ -3062,6 +3100,7 @@
         "required": ["state", "checks", "problems"],
         "properties": {
           "state": {"type": "string", "enum": ["passed", "failed", "not_configured", "not_assessed"]},
+          "reason": {"type": "string", "description": "Why the full result contract was not assessed; a mode that declares no completeness claim reports mode_<execution_mode>."},
           "checks": {
             "type": "array",
             "items": {
