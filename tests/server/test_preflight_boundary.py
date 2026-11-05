@@ -234,6 +234,72 @@ def test_successful_preflight_never_invokes_runner_owned_workspace_code(monkeypa
     assert module.task_store.list_tasks() == []
 
 
+@pytest.mark.parametrize(
+    ("residues", "expected_status"),
+    [
+        ([{"auth_chain": "A", "auth_seq_id": 7, "residue_name": "ALA", "hetero": False}] * 2, 400),
+        ([{"auth_chain": "A", "auth_seq_id": 7, "residue_name": "ALA", "hetero": False}], 302),
+    ],
+)
+def test_submission_validates_authored_selection_shapes_at_workspace_boundary(
+    monkeypatch, tmp_path, residues, expected_status
+):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "workspace_runner"},
+    )
+    auth_header = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+    calls: list[object] = []
+
+    def runner_normalizer(value):
+        calls.append(value)
+        return {"params": {}, "state": value, "summary": "normalized"}
+
+    submission_view = module.app.view_functions["upload_file"]
+    while "workspace_backend" not in submission_view.__globals__:
+        submission_view = submission_view.__wrapped__
+    route_globals = submission_view.__globals__
+    real_workspace_backend = route_globals["workspace_backend"]
+    monkeypatch.setitem(
+        route_globals,
+        "workspace_backend",
+        lambda identifier: (
+            (runner_normalizer, None)
+            if identifier == "workspace_task-regions" or identifier.endswith(":workspace_task-regions")
+            else real_workspace_backend(identifier)
+        ),
+    )
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_args, **_kwargs: SimpleNamespace(id="queued"))
+    workspace = json.loads(_rfdiffusion_workspace())
+    workspace["capabilities"]["design_regions"]["selected_residues"] = residues
+    pdb = Path(__file__).resolve().parents[2] / "tests" / "data" / "3fap_hf3_A_short.pdb"
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=auth_header,
+        data={
+            "task_type": "workspace_task",
+            "workspace": json.dumps(workspace),
+            "files": (io.BytesIO(pdb.read_bytes()), "complex.pdb"),
+            "input_roles": "structure",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == expected_status, response.get_data(as_text=True)
+    if expected_status == 400:
+        assert "ambiguous duplicate residue" in response.get_json()["error"]
+        assert calls == []
+        assert module.task_store.list_tasks() == []
+    else:
+        assert response.status_code == 302
+        assert len(calls) == 1
+        assert calls[0]["selected_residues"] == residues
+
+
 def test_submission_runs_runner_workspace_code_as_task_preparation(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,

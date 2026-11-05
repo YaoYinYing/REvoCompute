@@ -31,8 +31,7 @@ def test_workspace_selection_rejects_malformed_or_ambiguous_identity(value):
         validate_selected_residues(value)
 
 
-def test_normalization_boundary_validates_selection_before_runner_code():
+def test_normalization_boundary_does_not_double_report_selection_identity():
     called = []
-    with pytest.raises(WorkspaceValidationError):
-        normalize_capability(lambda value: called.append(value) or {}, {"selected_residues": []})
-    assert called == []
+    assert normalize_capability(lambda value: called.append(value) or {"params": {}}, {"selected_residues": []}) == {"params": {}}
+    assert called

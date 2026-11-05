@@ -42,7 +42,6 @@ def validate_selected_residues(value: Any) -> None:
 
 def normalize_capability(normalizer: Callable[[Any], dict[str, Any]], value: Any) -> dict[str, Any]:
     """Invoke a trusted runner-owned normalizer."""
-    validate_selected_residues(value)
     try:
         result = normalizer(value)
     except WorkspaceValidationError:
