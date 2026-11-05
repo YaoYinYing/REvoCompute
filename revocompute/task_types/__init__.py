@@ -1440,7 +1440,13 @@ def _load_execution_modes(
             raise ValueError(f"Task type {task_name!r} has an invalid execution mode id")
         if not isinstance(entry, dict) or set(entry) - {"label", "stages", "output_contract", "reuse"}:
             raise ValueError(f"Task type {task_name!r} execution mode {mode_id!r} has invalid fields")
-        output_contract = entry.get("output_contract", "full" if mode_id == "full" else "none")
+        output_contract = entry.get("output_contract", "full" if mode_id == "full" else None)
+        if output_contract is None:
+            # A non-full mode must state its own completeness claim. Defaulting
+            # it would let a copied mode silently drop selected-stage checks.
+            raise ValueError(
+                f"Task type {task_name!r} execution mode {mode_id!r} must declare an output_contract"
+            )
         if output_contract not in {"full", "stages", "none"}:
             raise ValueError(
                 f"Task type {task_name!r} execution mode {mode_id!r} has an invalid output_contract"

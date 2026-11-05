@@ -232,7 +232,8 @@ def test_a_mode_cannot_drop_a_required_producer():
 def test_execution_modes_require_full_covering_every_stage():
     stages = (WorkflowStage("task.a", "a", False), WorkflowStage("task.b", "b", False))
     loaded = _load_execution_modes(
-        {"full": {"stages": ["a", "b"]}, "prepare_only": {"label": "Prep", "stages": ["a"]}},
+        {"full": {"stages": ["a", "b"]},
+         "prepare_only": {"label": "Prep", "stages": ["a"], "output_contract": "stages"}},
         "task",
         stages,
         (),
@@ -242,16 +243,19 @@ def test_execution_modes_require_full_covering_every_stage():
         ("prepare_only", ("task.a",)),
     ]
     with pytest.raises(ValueError, match="must declare 'full'"):
-        _load_execution_modes({"prepare_only": {"stages": ["a"]}}, "task", stages, ())
+        _load_execution_modes(
+            {"prepare_only": {"stages": ["a"], "output_contract": "stages"}}, "task", stages, ()
+        )
     with pytest.raises(ValueError, match="must select every stage"):
         _load_execution_modes({"full": {"stages": ["a"]}}, "task", stages, ())
     with pytest.raises(ValueError, match="unknown stage"):
         _load_execution_modes({"full": {"stages": ["a", "b", "c"]}}, "task", stages, ())
-    # A non-full mode never inherits the full contract implicitly.
-    implicit = _load_execution_modes(
-        {"full": {"stages": ["a", "b"]}, "prepare_only": {"stages": ["a"]}}, "task", stages, ()
-    )
-    assert next(mode for mode in implicit if mode.id == "prepare_only").output_contract == "none"
+    # A non-full mode must state its completeness claim: a copied mode that
+    # omits it must not silently disable selected-stage validation.
+    with pytest.raises(ValueError, match="must declare an output_contract"):
+        _load_execution_modes(
+            {"full": {"stages": ["a", "b"]}, "prepare_only": {"stages": ["a"]}}, "task", stages, ()
+        )
     with pytest.raises(ValueError, match="invalid output_contract"):
         _load_execution_modes(
             {"full": {"stages": ["a", "b"]}, "x": {"stages": ["a"], "output_contract": "bogus"}},

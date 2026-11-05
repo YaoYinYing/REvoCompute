@@ -157,6 +157,7 @@ execution_modes:
   prepare_only:
     label: Preparation only
     stages: [features]
+    output_contract: stages
 ~~~
 
 `full` is mandatory and must select every declared stage. A submission names one mode; compilation
