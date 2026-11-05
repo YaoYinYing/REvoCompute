@@ -305,6 +305,9 @@ Viewer capability never changes Runner semantics. A new selection capability may
 drive only parameters the owning Task already declares; it may not add,
 reinterpret or bypass Runner scientific meaning.
 
+The residue-level picker is implemented. CAVER live scientific acceptance remains
+a Runner gate; browser and server checks do not substitute for it.
+
 ## Implemented browser boundary
 
 The Vite application owns both workspace hosts. Create Task composes files,
