@@ -28,17 +28,26 @@ retained without conversion.
 or create/download model assets. The read-only mount must contain all of:
 
 - `ccd.pkl` — upstream Boltz-1 CCD dictionary consumed by Boltz-2 YAML parsing.
-- `mols.tar` and extracted `mols/` — Boltz-2 molecular component library.
+- `mols.tar` and extracted `mols/` — Boltz-2 molecular component library. The
+  extracted `mols/` tree is what `load_canonicals` actually reads at inference,
+  so it is bound by a deterministic SHA-256 tree digest recorded in
+  `model-assets.sha256` under the name `mols` (per-file SHA-256 over each regular
+  file, keyed by its relative path, symlinks refused). `mols.tar` is also
+  byte-verified; the operator extracts it once — the family never extracts or
+  downloads at runtime.
 - `boltz2_conf.ckpt` — structure/confidence model checkpoint.
 - `boltz2_aff.ckpt` — affinity model checkpoint.
 
 The upstream v2.2.1 downloader identifies these names, but does not publish
 immutable SHA-256 values or a complete size inventory. Consequently the committed
-`model-assets.sha256` is deliberately unpopulated and the adapter fails closed.
-Before execution, provision the exact files through the reviewed operator asset
-process, extract `mols.tar` to `mols/`, verify licensing and provenance, and
-commit the four verified SHA-256 lines into `model-assets.sha256`. The image and
-runtime must never download them. No receipt or ready state exists.
+`model-assets.sha256` is deliberately unpopulated (comments only) and the adapter
+fails closed with `ASSET_BLOCKED`. Tampering with any extracted molecule file —
+even while `mols.tar` and both checkpoints are byte-identical — changes the tree
+digest and is refused, not silently accepted. Before execution, provision the exact
+files through the reviewed operator asset process, extract `mols.tar` to `mols/`,
+verify licensing and provenance, and commit the five verified SHA-256 lines (four
+files plus the `mols` tree) into `model-assets.sha256`. The image and runtime must
+never download them. No receipt or ready state exists.
 
 Expected host and container mount: `/mnt/db/weights/boltz2` (read-only).
 Writable cache, scratch, and output remain task-local.

@@ -15,6 +15,29 @@ import sys
 import yaml
 
 ASSETS = ("ccd.pkl", "mols.tar", "boltz2_conf.ckpt", "boltz2_aff.ckpt")
+# The extracted Boltz-2 CCD library is what upstream actually reads (load_canonicals);
+# mols.tar is only its transport. A deterministic digest over the extracted tree binds
+# those bytes; it is recorded in model-assets.sha256 under the name "mols". The operator
+# extracts mols.tar once; the family never extracts or downloads at runtime.
+MOLS_DIR = "mols"
+
+
+def _tree_digest(root: Path) -> str:
+    """Hash every regular file under ``root`` with its relative path, refusing symlinks."""
+    if not root.is_dir():
+        raise ValueError(f"missing Boltz-2 extracted directory: {root}")
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"symlink inside extracted Boltz-2 assets: {relative}")
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise ValueError(f"unsupported entry in extracted Boltz-2 assets: {relative}")
+        digest.update(relative.encode("utf-8") + b"\0")
+        digest.update(hashlib.file_digest(path.open("rb"), "sha256").hexdigest().encode("ascii") + b"\n")
+    return digest.hexdigest()
 
 
 def verify_assets(root: Path, manifest: Path) -> None:
@@ -30,17 +53,18 @@ def verify_assets(root: Path, manifest: Path) -> None:
         expected[parts[1].lstrip("*")] = parts[0].lower()
     if not expected:
         raise ValueError("Boltz-2 asset digest manifest has no reviewed digests (ASSET_BLOCKED)")
-    if set(expected) != set(ASSETS):
-        raise ValueError("Boltz-2 digest manifest must cover exactly the required asset files")
+    if set(expected) != {*ASSETS, MOLS_DIR}:
+        raise ValueError("Boltz-2 digest manifest must cover the four asset files and the extracted mols/ tree")
     for name, digest in expected.items():
-        path = root / name
-        if not path.is_file():
-            raise ValueError(f"missing Boltz-2 asset: {path}")
-        actual = hashlib.file_digest(path.open("rb"), "sha256").hexdigest()
+        if name == MOLS_DIR:
+            actual = _tree_digest(root / MOLS_DIR)
+        else:
+            path = root / name
+            if not path.is_file():
+                raise ValueError(f"missing Boltz-2 asset: {path}")
+            actual = hashlib.file_digest(path.open("rb"), "sha256").hexdigest()
         if actual != digest:
             raise ValueError(f"Boltz-2 asset digest mismatch: {name}")
-    if not (root / "mols").is_dir():
-        raise ValueError(f"missing extracted Boltz-2 CCD directory: {root / 'mols'}")
 
 
 def _relative(entity: dict[str, object]) -> Path:

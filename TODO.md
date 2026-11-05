@@ -15,8 +15,8 @@ Upstream documents Boltz-2 `boltz predict` with optional `properties: [{affinity
 
 The family implementation exists under `docker/runners/boltz2/`. The host path
 `/mnt/db/weights/boltz2` is absent. Required files are `ccd.pkl`, `mols.tar`,
-`boltz2_conf.ckpt`, and `boltz2_aff.ckpt`, plus extracted `mols/`; the four
-files need reviewed SHA-256 entries in the family asset manifest. The pinned
+`boltz2_conf.ckpt`, and `boltz2_aff.ckpt`, plus the extracted `mols/` tree bound by
+its own deterministic SHA-256 digest; the manifest needs all five reviewed lines. The pinned
 upstream does not publish those immutable hashes. Do not download or create the
 assets, invent digests, receipts, or readiness. See the family README for
 provisioning and next acceptance steps.

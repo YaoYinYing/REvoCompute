@@ -22,14 +22,18 @@ SPEC.loader.exec_module(adapter)
 def _assets(tmp_path: Path) -> tuple[Path, Path]:
     root = tmp_path / "assets"
     root.mkdir()
-    entries = []
+    lines = []
     for name in adapter.ASSETS:
-        data = name.encode()
-        (root / name).write_bytes(data)
-        entries.append(f"{hashlib.sha256(data).hexdigest()}  {name}")
-    (root / "mols").mkdir()
+        (root / name).write_bytes(name.encode())
+        lines.append(f"{hashlib.sha256(name.encode()).hexdigest()}  {name}")
+    # A representative extracted library so the tree digest binds real bytes.
+    for relative in ("mols/ligand.pkl", "mols/cofactor.pkl"):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(relative.encode())
+    lines.append(f"{adapter._tree_digest(root / adapter.MOLS_DIR)}  {adapter.MOLS_DIR}")
     manifest = tmp_path / "assets.sha256"
-    manifest.write_text("\n".join(entries) + "\n")
+    manifest.write_text("\n".join(lines) + "\n")
     return root, manifest
 
 
@@ -88,6 +92,45 @@ def test_asset_digests_are_required_and_checked(tmp_path: Path) -> None:
     adapter.verify_assets(root, manifest)
     (root / "ccd.pkl").write_bytes(b"tampered")
     with pytest.raises(ValueError, match="digest mismatch"):
+        adapter.verify_assets(root, manifest)
+
+
+def test_mutated_extracted_molecule_is_refused_despite_unchanged_tar(tmp_path: Path) -> None:
+    """Changing one file under mols/ must fail even though mols.tar and checkpoints are byte-identical.
+
+    Upstream reads the extracted library, not the tar, so existence-only acceptance let a
+    tampered molecule pass. The tree digest binds the exact bytes it consumes.
+    """
+    root, manifest = _assets(tmp_path)
+    adapter.verify_assets(root, manifest)
+    before = {name: (root / name).read_bytes() for name in adapter.ASSETS}
+    (root / "mols" / "ligand.pkl").write_bytes(b"mutated-molecule")
+    with pytest.raises(ValueError, match="digest mismatch: mols"):
+        adapter.verify_assets(root, manifest)
+    assert {name: (root / name).read_bytes() for name in adapter.ASSETS} == before
+
+
+def test_symlink_inside_extracted_assets_is_refused(tmp_path: Path) -> None:
+    root, manifest = _assets(tmp_path)
+    (root / "mols" / "escape").symlink_to("/etc/passwd")
+    with pytest.raises(ValueError, match="symlink"):
+        adapter.verify_assets(root, manifest)
+
+
+def test_missing_mols_digest_is_rejected(tmp_path: Path) -> None:
+    root, manifest = _assets(tmp_path)
+    # The transport tar is present but its extracted tree digest is not committed.
+    lines = [line for line in manifest.read_text().splitlines() if not line.endswith("  mols")]
+    manifest.write_text("\n".join(lines) + "\n")
+    with pytest.raises(ValueError, match="must cover the four asset files and the extracted mols"):
+        adapter.verify_assets(root, manifest)
+
+
+def test_empty_manifest_still_blocks_execution(tmp_path: Path) -> None:
+    root, manifest = _assets(tmp_path)
+    # The committed family manifest ships comment-only until assets are provisioned.
+    manifest.write_text("# ASSET_BLOCKED: no reviewed digests yet\n")
+    with pytest.raises(ValueError, match="ASSET_BLOCKED"):
         adapter.verify_assets(root, manifest)
 
 
