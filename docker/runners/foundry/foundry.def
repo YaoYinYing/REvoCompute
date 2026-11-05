@@ -70,4 +70,3 @@ From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 %labels
     org.revocompute.foundry.commit d078b24d6d0e6f8607e9a0311128f4a897f83953
-    org.revocompute.foundry.distribution rc-foundry==1.0.0

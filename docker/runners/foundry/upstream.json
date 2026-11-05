@@ -4,8 +4,10 @@
   "previous_commit": "b02eed6a6bdf8f44d14a80cc36e3da13c9f2291c",
   "upstream_commit": "d078b24d6d0e6f8607e9a0311128f4a897f83953",
   "upstream_commit_date": "2026-10-16",
-  "upstream_distribution": "rc-foundry",
-  "upstream_version": "1.0.0",
+  "upstream_default_head_commit": "0d0b0ba44fab7ca76aa4b625c014ce5964c7d284",
+  "installed_from": "git source at upstream_commit",
+  "retained_pin": true,
+  "retained_pin_reason": "The upstream default-branch delta through 0d0b0ba4 deletes one documentation file (models/rfd3/docs/design_areas/enzyme_design_tips.md) and changes no executable code, so the audited commit is retained without a rebuild. This is a retained pin, not an exact-HEAD parity claim.",
   "upstream_publishes_checkpoint_digests": false,
   "upstream_publishes_checkpoint_license": true
 }
