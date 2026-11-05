@@ -1,3 +1,8 @@
-# ASSET_BLOCKED: epoch-0125.ckpt (21,494,143 bytes); SHA256 unavailable.
-# Required path: /mnt/db/weights/proton-pottsmpnn/checkpoints/potts_v6_afdb_edge_his0.3_acid0.06/epoch-0125.ckpt
-# Do not treat this placeholder as a verification manifest.
+# Provenance: christian-creator/ProtonPottsMPNN
+# Repository path: checkpoints/potts_v6_afdb_edge_his0.3_acid0.06/epoch-0125.ckpt
+# Pinned Git revision: 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
+# Git blob SHA: 13bf9a44d9b1843980edc11cd486a7ecc1d57df5
+# NOTE: a Git blob SHA is not a SHA-256. The SHA-256 below was computed from the
+# exact pinned blob, then the temporary copy was deleted. Size: 21494143 bytes.
+# Licence: MIT for authored code; the bundled foundry tree is BSD-3-Clause.
+a39872250c0b8eb4c0b4cb6472a6edad0d6f6134a50c28b611386e83c592fe7b  checkpoints/potts_v6_afdb_edge_his0.3_acid0.06/epoch-0125.ckpt
