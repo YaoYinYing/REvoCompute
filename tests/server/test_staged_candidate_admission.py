@@ -960,3 +960,54 @@ def test_source_identity_documentation_observation_keeps_accepted_build_ready(mo
     assert after.status is before.status
     assert after.ready is True
     assert after.build_provenance_current is True
+
+
+def test_merged_build_input_with_the_old_sif_is_refused(monkeypatch, tmp_path):
+    """A source merge does not activate an installed SIF built from the old recipe."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "RUNNER_USERNAME": "revodesign",
+            "RUNNER_GROUP": "revodesign",
+            "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
+        },
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    module.app.config["infrastructure_readiness"] = _AvailableInfrastructure()
+    queued: list[bool] = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_args, **_kwargs: queued.append(True))
+
+    state, family = _deployment(module)
+    active = Path(family.slurm_image)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_bytes(b"installed-image-from-old-recipe")
+    _record_artifact(state, family, active)
+    assert resolve_runner_readiness(state, family).ready is True
+
+    # The merged source changes a declared build input while the installed SIF
+    # remains the artifact the old recipe produced.
+    run_script = family.root / "run.sh"
+    run_script.write_text(run_script.read_text(encoding="utf-8") + "\n# merged change\n", encoding="utf-8")
+
+    verdict = resolve_runner_readiness(state, family)
+    assert verdict.ready is False
+    assert verdict.status.value == "BUILD_STALE"
+    assert verdict.reason_code == "BUILD_PROVENANCE_STALE"
+    assert verdict.build_provenance_current is False
+    assert sif_stale(state, family) is True
+
+    _publish(module, verdict)
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=_test_client_auth(module),
+        data=_payload(),
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 503, response.get_data(as_text=True)
+    body = response.get_json()
+    assert body["runner"] == "cpu_runner"
+    assert body["status"] == "BUILD_STALE"
+    assert queued == []

@@ -219,21 +219,49 @@ if ! find "$output_dir" -type f -size +0c \
     exit 1
 fi
 
-# v1.2.0 changed the upstream precision defaults (bf16, TF32 off) and began
-# interpreting the constraint field. Record the effective settings with the
-# result so a prediction is interpretable without the original task manifest.
+# v1.2.0 changed its own precision defaults and began interpreting constraints.
+# The Runner passes precision/TFG flags explicitly, even with
+# --use_default_params (which upstream applies only to cycle and step), and
+# passes the input JSON unchanged. Preserve requested and effective values with
+# their sources so the result reports what the upstream command received.
 python3 - "$output_dir/inference_settings.json" "$DTYPE" "$ENABLE_TF32" \
-    "$USE_TFG_GUIDANCE" "$CONSTRAINT_PRESENT" <<'PY'
+    "$USE_TFG_GUIDANCE" "$CONSTRAINT_PRESENT" "$USE_DEFAULT_PARAMS" <<'PY'
 import json
 import sys
 
-path, dtype, enable_tf32, use_tfg_guidance, constraint_present = sys.argv[1:6]
+path, dtype, enable_tf32, use_tfg_guidance, constraint_present, use_default_params = sys.argv[1:7]
+enable_tf32 = enable_tf32 == "true"
+use_tfg_guidance = use_tfg_guidance == "true"
+constraint_present = constraint_present == "true"
+use_default_params = use_default_params == "true"
 settings = {
     "upstream_version": "1.2.0",
-    "dtype": dtype,
-    "enable_tf32": enable_tf32 == "true",
-    "use_tfg_guidance": use_tfg_guidance == "true",
-    "constraint_present": constraint_present == "true",
+    "requested": {
+        "dtype": dtype,
+        "enable_tf32": enable_tf32,
+        "use_tfg_guidance": use_tfg_guidance,
+        "constraint_present": constraint_present,
+        "use_default_params": use_default_params,
+    },
+    "effective": {
+        "dtype": dtype,
+        "enable_tf32": enable_tf32,
+        "use_tfg_guidance": use_tfg_guidance,
+        "constraint": {
+            "present": constraint_present,
+            "input_handling": "passed_unchanged_to_upstream",
+            "guidance": "tfg_enabled" if constraint_present and use_tfg_guidance else (
+                "tfg_disabled" if constraint_present else "not_applicable"
+            ),
+        },
+    },
+    "effective_sources": {
+        "dtype": "explicit_cli_argument",
+        "enable_tf32": "explicit_cli_argument",
+        "use_tfg_guidance": "explicit_cli_argument",
+        "constraint": "input_json_passthrough",
+    },
+    "upstream_default_params_overrides": ["cycle", "step"] if use_default_params else [],
     "trimul_kernel": "torch",
     "triatt_kernel": "torch",
     "enable_fusion": False,

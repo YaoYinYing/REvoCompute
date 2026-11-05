@@ -15,9 +15,10 @@ acceptance are.
   SHAs and all three Task semantics unchanged.
 - OpenDDE: source `9d0d9c975178074c1ce722d2d6eefac8b7057062` (v1.2.0) installed over
   a generated hash-locked closure; `pred` retained; unguided `contact`/`epitope`
-  constraints refused; effective precision/TFG/constraint settings published as
-  `inference_settings.json`; explicit fp32/TF32 Task defaults retained while the
-  upstream BF16/TF32-off change is recorded.
+  constraints refused; `inference_settings.json` records requested and effective
+  dtype/TF32/TFG/constraint behavior and the source of each effective value,
+  including the fact that `use_default_params` overrides only cycle/step;
+  explicit fp32/TF32 Task defaults retained while upstream defaults are recorded.
 - FreeBindCraft: source `8a10b93a9b42487e7218ad1435a6a25d0e91afc8` (v1.0.7);
   upstream `installation/linux-cuda12-requirements.txt` is the environment manifest;
   CUDA 12.9 base, Python 3.12, OpenMM CUDA; PyRosetta-free relaxation policy
@@ -42,17 +43,23 @@ acceptance are.
 - `revocompute doctor --config-root docker/runners --runner <family> --strict`:
   bioemu2, opendde, freebindcraft, esmfold2, alphafold3, foundry all OK.
 - `make runner-fast`: 662 passed (`-p docker.runner_testkit.pytest_plugin --import-mode=importlib`).
+- OpenDDE fast tests: 7 passed, covering explicit precision and
+  `use_default_params=true` effective-setting provenance; fleet storyboard contract:
+  10 passed.
 - Focused server result-contract tests: 120 passed, 1 skipped.
 - `tests/fleet -m "not browser" -q -p no:cacheprovider`: 160 passed, 1 skipped,
   189 deselected. The OpenDDE synthetic result tree now includes the
   unconditionally published `inference_settings.json`.
 - Focused readiness/registry tests `test_staged_candidate_admission.py`
-  and `test_runner_fleet_evidence.py`: 18 passed. The mutation-sensitive test uses
+  and `test_runner_fleet_evidence.py`: 19 passed. The Foundry mutation test uses
   a synthetic family under the Foundry name contract, starts from a recorded/accepted
   build, adds a non-build documentation observation, and confirms unchanged build
-  digest, `sif_stale == false`, and READY readiness. The actual Foundry SIF/evidence
-  is not present in this workspace, so no deployment image status is claimed; the
-  restored Foundry definition and declared build-input bytes match the branch base.
+  digest, `sif_stale == false`, and READY readiness. The new
+  `test_merged_build_input_with_the_old_sif_is_refused` proves that a merged
+  declared build input with the old installed SIF yields `BUILD_STALE` and a 503
+  admission refusal. The actual Foundry SIF/evidence is not present in this
+  workspace, so no deployment image status is claimed; the restored Foundry
+  definition and declared build-input bytes match the branch base.
 - Test-boundary check: clean. `mkdocs build --strict` (system binary): exit 0.
 - `bash -n` on `opendde/run.sh`; shellcheck reports only pre-existing informational
   warnings (dynamic source, unused exported runscript path).
@@ -77,7 +84,11 @@ acceptance are.
 
 ## Current phase
 
-Source-level implementation and local validation complete. Next concrete action:
-request an authorized candidate-SIF build and representative inference window for
-each family, starting with BioEmu2, then record exact receipts. Every family is
-**NOT READY / NO PROMOTION** until that evidence exists.
+Source-level implementation and local validation complete. The activation
+boundary between merging this source and activating the five rebuilt families is
+documented in `docs/operator-guide/source-merge-activation.md`; merging without
+candidate builds leaves those families `BUILD_STALE` and admission-refused by
+design, proven by `test_merged_build_input_with_the_old_sif_is_refused`. Next
+concrete action: request an authorized candidate-SIF build and representative
+inference window for each family, starting with BioEmu2, then record exact
+receipts. Every family is **NOT READY / NO PROMOTION** until that evidence exists.
