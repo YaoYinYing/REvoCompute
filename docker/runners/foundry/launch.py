@@ -124,9 +124,13 @@ def load_upstream_identity(path: Path) -> dict[str, str]:
     except (OSError, json.JSONDecodeError) as exc:
         die(f"Invalid Foundry upstream identity: {exc}")
     commit = document.get("upstream_commit")
+    distribution = document.get("upstream_distribution")
+    version = document.get("upstream_version")
     if not isinstance(commit, str) or not SHA1_RE.fullmatch(commit):
         die("Foundry upstream identity has no immutable commit")
-    return {"commit": commit}
+    if not all(isinstance(value, str) and value for value in (distribution, version)):
+        die("Foundry upstream identity has no distribution version")
+    return {"commit": commit, "distribution": distribution, "version": version}
 
 
 def normalize_paths(value: Any, files: dict[str, Path]) -> Any:

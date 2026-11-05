@@ -1,9 +1,19 @@
 # Foundry model assets
 
 Foundry source and the model weights referenced for download are BSD-3-Clause at
-commit `d078b24d6d0e6f8607e9a0311128f4a897f83953`. That commit is a retained executable
-pin installed as git source; no published Foundry package version is claimed. The
-official checkpoint registry
+commit `d078b24d6d0e6f8607e9a0311128f4a897f83953`. The installed source is git
+checkout at that commit. The existing image label `rc-foundry==1.0.0` is not a
+published PyPI distribution identity; it must not be read as one. Correcting that
+baked label requires a separately authorized image rebuild, which this PR does
+not perform.
+
+The upstream `production` HEAD is
+`0d0b0ba44fab7ca76aa4b625c014ce5964c7d284`; compared with the installed pin, it
+deletes one documentation file and changes no executable code. The installed
+pin is deliberately retained. This observation is documentation-only and does
+not change the existing image build identity.
+
+The official checkpoint registry
 URLs and the SHA-256/size identities observed from the three operator-provisioned
 downloads on 2026-10-19 are recorded in `checkpoint-registry.json`.
 

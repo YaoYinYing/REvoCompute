@@ -29,9 +29,13 @@ acceptance are.
 - AlphaFold3: source `37e3c57fe123fc51f6d96236320b8b657afb11ac` (v3.0.5+); three
   pinned HMMER patches applied; `uv sync --frozen`; native dependency revisions
   recorded; `build_data` MessagePack CCD data loaded in `%test`.
-- Foundry: retained executable commit `d078b24d6d0e6f8607e9a0311128f4a897f83953`
-  named as git source; unpublished `rc-foundry==1.0.0` distribution claim removed
-  from provenance, labels, tests and docs; upstream delta confirmed docs-only.
+- Foundry: executable pin `d078b24d6d0e6f8607e9a0311128f4a897f83953` retained.
+  All SIF build-input files (`foundry.def`, `upstream.json`, `launch.py`,
+  `requirements.in`) are byte-identical to the branch base. The docs-only
+  `production` HEAD `0d0b0ba44fab7ca76aa4b625c014ce5964c7d284` and the caveat about
+  the existing `rc-foundry==1.0.0` baked label are recorded in non-build
+  documentation; correcting that label needs a separately authorized rebuild.
+
 
 ## Verification performed
 
@@ -42,6 +46,13 @@ acceptance are.
 - `tests/fleet -m "not browser" -q -p no:cacheprovider`: 160 passed, 1 skipped,
   189 deselected. The OpenDDE synthetic result tree now includes the
   unconditionally published `inference_settings.json`.
+- Focused readiness/registry tests `test_staged_candidate_admission.py`
+  and `test_runner_fleet_evidence.py`: 18 passed. The mutation-sensitive test uses
+  a synthetic family under the Foundry name contract, starts from a recorded/accepted
+  build, adds a non-build documentation observation, and confirms unchanged build
+  digest, `sif_stale == false`, and READY readiness. The actual Foundry SIF/evidence
+  is not present in this workspace, so no deployment image status is claimed; the
+  restored Foundry definition and declared build-input bytes match the branch base.
 - Test-boundary check: clean. `mkdocs build --strict` (system binary): exit 0.
 - `bash -n` on `opendde/run.sh`; shellcheck reports only pre-existing informational
   warnings (dynamic source, unused exported runscript path).

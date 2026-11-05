@@ -216,6 +216,8 @@ def test_rfd3_wrapper_maps_every_declared_parameter_once(tmp_path: Path) -> None
     assert run_record["parameters"] == params
     assert run_record["upstream"] == {
         "commit": "d078b24d6d0e6f8607e9a0311128f4a897f83953",
+        "distribution": "rc-foundry",
+        "version": "1.0.0",
     }
     assert run_record["upstream_overrides"]["inference_sampler.step_scale"] == "2.5"
     assert run_record["upstream_overrides"]["n_batches"] == "1"
