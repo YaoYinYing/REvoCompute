@@ -66,6 +66,8 @@ acceptance are.
   command is still executing each iteration) because the allocation-start
   observation can land after the command-start marker under xdist load; the same
   flake appeared once on PR #137.
+- Full focused server suite `pytest tests/server -m "not browser"`: 1168 passed,
+  1 skipped, 3 deselected, 6 warnings in 444 s.
 - Test-boundary check: clean. `mkdocs build --strict` (system binary): exit 0.
 - `bash -n` on `opendde/run.sh`; shellcheck reports only pre-existing informational
   warnings (dynamic source, unused exported runscript path).
