@@ -5,6 +5,7 @@ import { parametersFromSchema, seedConstant } from '../src/features/create-task/
 import { InputWorkspace, selectableExecutionModes } from '../src/features/create-task/input-workspace/InputWorkspace';
 import { HarnessNode, installHarness } from './dom-harness';
 import { buildSubmissionFormData } from '../src/features/create-task/submission';
+import { structureFormat } from '../src/features/create-task/input-workspace/builtins';
 import type { ParameterDefinition, TaskFormDefinition } from '../src/features/create-task/types';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -170,3 +171,12 @@ describe('Create Task server contracts', () => {
   });
 });
 
+
+describe('structure viewer format', () => {
+  it('keeps .ent as PDB and treats CIF as mmCIF', () => {
+    expect(structureFormat('model.pdb')).toBe('pdb');
+    expect(structureFormat('MODEL.ENT')).toBe('pdb');
+    expect(structureFormat('model.cif')).toBe('mmcif');
+    expect(structureFormat('model.mmcif')).toBe('mmcif');
+  });
+});

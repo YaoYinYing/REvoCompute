@@ -6,8 +6,52 @@ import { t } from '../../../app/i18n';
 import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance } from './plugin-contract';
 import { element, filePath, formatBytes, matchesExtension, parseSequence } from './utils';
 
+/** The viewer format for an accepted structure filename; `.ent` is legacy PDB. */
+export function structureFormat(name: string): 'pdb' | 'mmcif' {
+  const lower = name.toLowerCase();
+  return lower.endsWith('.pdb') || lower.endsWith('.ent') ? 'pdb' : 'mmcif';
+}
+
 export function inputByParameter(name: string): HTMLInputElement | HTMLSelectElement | null {
   return document.querySelector(`[data-ct-parameter="${CSS.escape(name)}"]`);
+}
+
+export function caverParameterSelection(parameters: Record<string, string>) {
+  const mode = parameters.start_point_mode;
+  if (mode === 'point') {
+    const point = [parameters.start_x, parameters.start_y, parameters.start_z].map(Number);
+    return { residues: [] as import('../../structure/MolecularViewer').MolecularSelection[], point: point.every(Number.isFinite) ? { x: point[0]!, y: point[1]!, z: point[2]! } : null };
+  }
+  const chain = parameters.start_chain || undefined;
+  if (mode === 'group') {
+    const residues = (parameters.start_group || '').split(',').filter(Boolean).map(term => {
+      const match = /^(.*):(\d+)$/.exec(term);
+      return match ? { chain: match[1] === '_' ? '' : match[1], residue: Number(match[2]), numbering: 'auth_seq_id' as const } : null;
+    }).filter((item): item is NonNullable<typeof item> => item !== null);
+    return { residues, point: null };
+  }
+  if ((mode === 'residue' || mode === 'ligand') && /^-?\d+$/.test(parameters.start_residue_number || '')) {
+    return { residues: [{ chain, residue: Number(parameters.start_residue_number), numbering: 'auth_seq_id' as const }], point: null };
+  }
+  return { residues: [] as import('../../structure/MolecularViewer').MolecularSelection[], point: null };
+}
+
+export function caverSelectionParameters(residues: import('../../structure/MolecularViewer').SelectedResidue[]) {
+  if (!residues.length) return { error: 'Select one residue, multiple residues, or one ligand.' };
+  if (residues.some(item => !item.auth_chain || item.insertion_code)) return { error: 'CAVER cannot address chainless or insertion-coded selections.' };
+  if (new Set(residues.map(item => item.auth_chain)).size !== 1) return { error: 'Select residues from one authored chain.' };
+  if (residues.length === 1 && !residues[0]!.hetero) {
+    const item = residues[0]!;
+    return { params: { start_point_mode: 'residue', start_chain: item.auth_chain, start_residue_number: String(item.auth_seq_id), start_residue_name: item.residue_name, start_group: '', start_x: '', start_y: '', start_z: '' } };
+  }
+  if (residues.length === 1 && residues[0]!.hetero) {
+    const item = residues[0]!;
+    return { params: { start_point_mode: 'ligand', start_chain: item.auth_chain, start_residue_number: String(item.auth_seq_id), start_residue_name: item.residue_name, start_group: '', start_x: '', start_y: '', start_z: '' } };
+  }
+  if (residues.length > 1 && residues.every(item => !item.hetero)) {
+    return { params: { start_point_mode: 'group', start_chain: residues[0]!.auth_chain, start_residue_number: '', start_residue_name: '', start_group: residues.map(item => `${item.auth_chain}:${item.auth_seq_id}`).join(','), start_x: '', start_y: '', start_z: '' } };
+  }
+  return { error: 'Select multiple non-hetero residues for a group, or one hetero residue for a ligand.' };
 }
 
 function renderParameter(parameter: ParameterDefinition, context: WorkspaceContext): HTMLElement {
@@ -251,11 +295,11 @@ const structurePlugin: WorkspacePlugin = {
     const status = element('p', 'ct-help', prompt);
     const host = element('div', 'ct-structure-viewer'); host.hidden = true; target.append(status, host);
     let generation = 0; let viewer: Awaited<ReturnType<(typeof import('../../structure/MolecularViewer'))['MolecularViewer']['mount']>> | null = null; let removeListener: (() => void) | null = null;
-    let selectedFile: File | null = null; let queue = Promise.resolve();
+    let selectedFile: File | null = null; let queue = Promise.resolve(); let selectionError: string | null = null; let appliedSelection: string | null = null;
     const render = async (current: number, file: File | null) => {
       if (generation !== current) return;
       context.setStructureSelections([]);
-      if (!file || !matchesExtension(file, ['.pdb', '.cif', '.mmcif'])) { host.hidden = true; status.textContent = prompt; await viewer?.clear(); return; }
+      if (!file || !matchesExtension(file, ['.pdb', '.ent', '.cif', '.mmcif'])) { host.hidden = true; status.textContent = prompt; await viewer?.clear(); return; }
       status.textContent = t('ct.structure.reading', { name: filePath(file) });
       try {
         const data = await file.text(); if (generation !== current) return;
@@ -265,20 +309,60 @@ const structurePlugin: WorkspacePlugin = {
           const mounted = await MolecularViewer.mount(host, { selectionEnabled: selectable, showControls: selectable });
           if (generation !== current) { mounted.dispose(); return; }
           viewer = mounted;
-          if (selectable) removeListener = mounted.onSelectionChanged(residues => { context.setStructureSelections(residues); context.changed(); });
+          if (selectable) removeListener = mounted.onSelectionChanged(residues => {
+            context.setStructureSelections(residues);
+            if (context.form.params.some(parameter => parameter.name === 'start_point_mode')) {
+              if (!residues.length && context.parameters().start_point_mode === 'point') {
+                // Manual XYZ is authoritative in point mode, so an empty viewer
+                // selection is not an input error there.
+                selectionError = null; status.textContent = prompt;
+              } else {
+                const mapped = caverSelectionParameters(residues);
+                if (!('params' in mapped) || !mapped.params) { selectionError = 'error' in mapped ? mapped.error || 'Unsupported selection.' : 'Unsupported selection.'; status.textContent = selectionError; context.changed(); return; }
+                selectionError = null; status.textContent = prompt;
+                Object.entries(mapped.params).forEach(([name, value]) => context.setParameter(name, value));
+              }
+            }
+            context.changed();
+          });
         }
-        await viewer.loadStructure({ data, format: file.name.toLowerCase().endsWith('.pdb') ? 'pdb' : 'mmcif', label: filePath(file) });
+        // ``.ent`` is the legacy PDB extension and must keep the viewer a Task
+        // accepts it for; it is parsed as PDB, not as mmCIF.
+        await viewer.loadStructure({ data, format: structureFormat(file.name), label: filePath(file) });
         if (generation !== current) return; host.hidden = false; status.textContent = selectable ? t('ct.structure.selectResidues', { name: filePath(file) }) : t('ct.structure.inspection', { name: filePath(file) });
       } catch { if (generation === current) { host.hidden = true; status.textContent = t('ct.structure.failed'); } }
     };
     const refresh = (): Promise<void> => {
       const role = typeof definition.options.role === 'string' ? definition.options.role : undefined; const file = context.structureFile(role);
-      if (file === selectedFile) return queue;
-      selectedFile = file; const current = ++generation;
+      if (file === selectedFile) {
+        const selection = caverParameterSelection(context.parameters());
+        const applied = JSON.stringify(selection);
+        // Only a concrete residue or manual point re-places the marker. An empty
+        // state is not applied, so a refused pick's highlight and its error are
+        // not erased by the next refresh.
+        if (viewer && applied !== appliedSelection && (selection.residues.length || selection.point)) {
+          appliedSelection = applied;
+          if (selection.residues.length) viewer.select(selection.residues.length > 1 ? { residues: selection.residues } : selection.residues[0]!);
+          else viewer.select({ residues: [] });
+          viewer.annotate(selection.point ? { point: selection.point, label: 'Manual start point' } : null);
+          if (selection.residues.length) viewer.focus(selection.residues.length > 1 ? { residues: selection.residues } : selection.residues[0]!);
+        }
+        return queue;
+      }
+      selectedFile = file; appliedSelection = null; const current = ++generation;
       queue = queue.catch(() => undefined).then(() => render(current, file));
       return queue;
     };
-    return { refresh, readValue: () => ({ selected_residues: context.structureSelections() }), summarize: () => context.structureSelections().length ? { label: t('ct.summary.selection'), value: t('ct.sequence.residues', { count: context.structureSelections().length }) } : null, destroy: () => { generation++; selectedFile = null; removeListener?.(); removeListener = null; viewer?.dispose(); viewer = null; } };
+    // The submitted value carries the authored identity only: label numbering
+    // is viewer-local and must not become Runner meaning.
+    const authored = (item: import('../../structure/MolecularViewer').SelectedResidue) => ({
+      auth_chain: item.auth_chain,
+      auth_seq_id: item.auth_seq_id,
+      ...(item.insertion_code ? { insertion_code: item.insertion_code } : {}),
+      residue_name: item.residue_name,
+      hetero: item.hetero,
+    });
+    return { refresh, validate: () => selectionError, readValue: () => ({ selected_residues: context.structureSelections().map(authored) }), summarize: () => context.structureSelections().length ? { label: t('ct.summary.selection'), value: t('ct.sequence.residues', { count: context.structureSelections().length }) } : null, destroy: () => { generation++; selectedFile = null; appliedSelection = null; removeListener?.(); removeListener = null; viewer?.dispose(); viewer = null; } };
   },
 };
 
