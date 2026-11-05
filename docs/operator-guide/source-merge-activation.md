@@ -62,9 +62,14 @@ promotion alone completes activation:
    and build candidates from that exact head. A later fast-forward into `main`
    must leave every declared build input byte-identical; verify with the
    preflight after the merge.
-2. **Build candidates before merging.** Run `prepare --build-sif` for the five
-   families. This stages `<artifact>.next`; the active SIF is untouched and
-   readiness remains `BUILD_STALE`.
+2. **Build candidates before merging.** Stage the five SIFs; the active SIFs are
+   untouched and readiness remains `BUILD_STALE`.
+
+   ```bash
+   REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh prepare \
+     --enabled-runners=bioemu2,opendde,freebindcraft,esmfold2,alphafold3 --build-sif
+   ```
+
 3. **Accept each candidate on the target host.** Run `%test`, imports, and a
    representative native inference on the candidate image, then `live-test` so
    the receipt binds the exact candidate SHA-256, build-provenance digest,

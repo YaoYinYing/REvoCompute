@@ -69,6 +69,17 @@ acceptance are.
 - Full focused server suite `pytest tests/server -m "not browser"`: 1168 passed,
   1 skipped, 3 deselected, 6 warnings in 444 s.
 - Test-boundary check: clean. `mkdocs build --strict` (system binary): exit 0.
+- Activation preflight: `tests/test_runner_readiness.py` 49 passed (including
+  ordered/disabled-family selection, `BUILD_STALE -> build-sif`,
+  unchanged-family `READY -> none`, unknown-family refusal); `test_restart_ctl.py`
+  89 passed (including command-specific `--runners`/`--json` parsing).
+- Branch merged with `origin/main` (`d2f281fd`) at `cbc002cc`; focused
+  readiness/registry/Doctor/restart tests: 196 passed. Doctor over
+  `docker/runners`: ok, 0 diagnostics. `tests/fleet -m "not browser"`: 161
+  passed, 1 skipped, 191 deselected in 57 s. `mkdocs build --strict` (system
+  binary): exit 0. The **non-browser** fleet suite is the recorded gate here; the
+  Playwright browser subset requires Xvfb and a headed Chromium with a GL
+  context and was not used as evidence.
 - `bash -n` on `opendde/run.sh`; shellcheck reports only pre-existing informational
   warnings (dynamic source, unused exported runscript path).
 - FreeBindCraft environment dry-run against `x86_64-manylinux_2_34` (required by the
@@ -96,7 +107,17 @@ Source-level implementation and local validation complete. The activation
 boundary between merging this source and activating the five rebuilt families is
 documented in `docs/operator-guide/source-merge-activation.md`; merging without
 candidate builds leaves those families `BUILD_STALE` and admission-refused by
-design, proven by `test_merged_build_input_with_the_old_sif_is_refused`. Next
-concrete action: request an authorized candidate-SIF build and representative
-inference window for each family, starting with BioEmu2, then record exact
-receipts. Every family is **NOT READY / NO PROMOTION** until that evidence exists.
+design, proven by `test_merged_build_input_with_the_old_sif_is_refused`.
+
+The operational path is now explicit: `activation-preflight` reads the existing
+readiness resolver without building or mutating, and the documented pre-merge
+sequence builds, `%test`s, natively infers, and live-tests the five candidates
+from the exact merge tree, then promotes them in one prepared restart. Foundry
+is the unchanged control and must report `READY`/`none` throughout. The
+pre-merge build/acceptance and merge+promote window still require an authorized
+target-host window; they were not executed here.
+
+Next concrete action: request that window for the five families, starting with
+BioEmu2, record exact receipts, then merge and promote in the same prepared
+restart. Every family is **NOT READY / NO PROMOTION** until that evidence
+exists.
