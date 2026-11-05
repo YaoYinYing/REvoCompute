@@ -1,3 +1,4 @@
+id: rfd4_proteina
 display_name: RFD4 Proteina conditioned design
 category: structure_generation
 summary: Generate candidate protein backbones and sequences conditioned on a bounded motif/scaffold specification.
