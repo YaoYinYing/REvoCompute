@@ -1,0 +1,14 @@
+result:
+  files:
+    condition_metrics:
+      path: condition_metrics.json
+      cardinality: one
+      required: true
+      type: json
+      role: evidence
+    resolved_condition:
+      path: condition.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance

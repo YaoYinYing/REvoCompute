@@ -51,7 +51,7 @@ result_workspace:
     title: Condition satisfaction
     description: Computational condition satisfaction for generated candidates; not evidence of biochemical activity.
     sources:
-      data:
+      items:
       - path: condition_metrics.json
         required: true
     mapping: {}
