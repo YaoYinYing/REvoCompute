@@ -15,3 +15,8 @@ result:
       cardinality: many
       required: false
       type: json
+    inference_settings:
+      pattern: 'inference_settings.json'
+      cardinality: one
+      required: true
+      type: json

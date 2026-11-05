@@ -11,7 +11,7 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
     # image ships neither. Only sequences past cuEquivariance's 100-residue
     # fallback threshold reach a Triton kernel and therefore this build path.
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates python3 python3-venv gcc libc6-dev python3-dev
+        ca-certificates git python3 python3-venv gcc libc6-dev python3-dev
     rm -rf /var/lib/apt/lists/*
     python3 -m venv /opt/venv
     /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
@@ -23,6 +23,15 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
         --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match \
         /opt/bioemu2-requirements.lock
     rm -f /opt/bioemu2-requirements.lock
+    # The installed package is the exact upstream source commit, not the older
+    # v0.1.0rc0 wheel; its dependency closure comes from requirements.lock.
+    git init /opt/bioemu2-src
+    git -C /opt/bioemu2-src remote add origin https://github.com/microsoft/bioemu2.git
+    git -C /opt/bioemu2-src fetch --depth 1 origin 6d1ca744fa8ed285edafae7b98da65205bf00fd3
+    git -C /opt/bioemu2-src checkout --detach FETCH_HEAD
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps /opt/bioemu2-src
+    printf '%s\n' 6d1ca744fa8ed285edafae7b98da65205bf00fd3 > /opt/bioemu2-source-commit
+    rm -rf /opt/bioemu2-src/.git
     # Reserved Runtime Bundle mount point. This image is the *environment*;
     # REvoCompute's entrypoint and adapter arrive at execution time as a
     # read-only bundle mounted here.
@@ -54,5 +63,11 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
     python -c 'import torch, bioemu2; assert torch.__version__ == "2.13.0+cu126", torch.__version__; assert torch.version.cuda == "12.6"'
     # The Triton build path that long sequences take needs both at execution time.
     python -c 'import os, shutil, sysconfig; assert shutil.which("cc") and os.path.exists(os.path.join(sysconfig.get_paths()["include"], "Python.h"))'
+    # The image must prove it installed the source commit, not the release wheel.
+    grep -qx 6d1ca744fa8ed285edafae7b98da65205bf00fd3 /opt/bioemu2-source-commit
     test -d /opt/revocompute/runtime
     test ! -e /app/revocompute
+
+%labels
+    org.revocompute.bioemu2.commit 6d1ca744fa8ed285edafae7b98da65205bf00fd3
+    org.revocompute.bioemu2.version 0.1.0rc0

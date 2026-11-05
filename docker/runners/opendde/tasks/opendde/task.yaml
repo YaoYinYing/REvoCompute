@@ -21,8 +21,15 @@ input_summary: One OpenDDE JSON job specification describing the molecular syste
 output_summary: Predicted all-atom structures and model confidence outputs produced
   by OpenDDE.
 considerations:
-- The JSON schema and optional MSA/template settings must match the pinned OpenDDE
-  runner.
+- The JSON schema must match OpenDDE v1.2.0. Optional `constraint` guidance accepts
+  `contact`, `movable_chains`, and `epitope`; other keys, malformed contacts, and
+  unknown chains are refused. A non-empty `constraint.contact` requires
+  `use_tfg_guidance` (as does `epitope`); the Runner refuses the request rather
+  than running an unguided prediction labelled as constrained.
+- OpenDDE v1.2.0 changed its own defaults to BF16 with TF32 off. This Task still
+  sends explicit FP32/TF32 settings; select `bf16` or disable `enable_tf32` to adopt
+  the upstream defaults. The effective settings are published in
+  `inference_settings.json`.
 # MSA and template search run inside `opendde pred` and reach public search
 # services, so the capability is declared unconditionally.
 requires_network: true
@@ -152,7 +159,9 @@ parameters:
       default: ''
     dtype:
       type: string
-      description: Floating-point precision used for model inference.
+      description: Floating-point precision used for model inference. The Runner
+        sends this value explicitly; OpenDDE v1.2.0's own default is BF16, so `bf16`
+        adopts the newer upstream precision.
       default: fp32
       enum:
       - fp32
@@ -168,7 +177,8 @@ parameters:
     enable_tf32:
       type: boolean
       description: Allows TensorFloat-32 accelerator kernels for supported matrix
-        operations.
+        operations. The Runner sends this value explicitly; OpenDDE v1.2.0's own
+        default is off, so `false` adopts the newer upstream setting.
       default: true
     deterministic:
       type: boolean

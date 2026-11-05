@@ -1,2 +1,28 @@
+# Runtime dependency closure for microsoft/bioemu2 at the source commit installed
+# by bioemu2.def. The package itself is installed from that commit, not from the
+# v0.1.0rc0 wheel, so it is not listed here.
 torch==2.13.0+cu126
-bioemu2[cuda12]==0.1.0rc0
+cuequivariance==0.11.1
+cuequivariance-torch==0.11.1
+cuequivariance-ops-torch-cu12==0.11.1
+cuequivariance-ops-cu12==0.11.1
+triton==3.7.1
+biopython>=1.88
+biotite>=1.5
+click
+einops
+huggingface_hub
+hydra-core
+mdtraj
+numba
+numpy<2.5
+omegaconf
+openmm
+pdbecif
+pydantic
+pyyaml
+rdkit
+requests
+scipy
+tenacity
+tqdm
