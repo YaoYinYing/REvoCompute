@@ -708,6 +708,25 @@ def test_prepare_without_runner_override_keeps_the_configured_family_set(monkeyp
     assert configured | {"common"} <= {path.name for path in materialized.iterdir() if path.is_dir()}
 
 
+def test_activation_preflight_does_not_write_bytecode_into_the_runner_tree(monkeypatch, tmp_path):
+    """Workspace-normalizer discovery must not leave __pycache__ in the source tree."""
+    _task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
+    runner_source = tmp_path / "runner-source" / "runners"
+    for cache in runner_source.rglob("__pycache__"):
+        shutil.rmtree(cache)
+    before = sorted(str(path.relative_to(runner_source)) for path in runner_source.rglob("*"))
+
+    result = _run_cli(
+        monkeypatch, tmp_path, env_file, _write_shims(tmp_path),
+        "activation-preflight", "--runners", "workspace_runner", "--json",
+    )
+
+    assert result.returncode == 0, result.stderr
+    after = sorted(str(path.relative_to(runner_source)) for path in runner_source.rglob("*"))
+    assert after == before
+    assert not any("__pycache__" in path for path in after)
+
+
 def test_activation_preflight_is_read_only_and_json_is_pure(monkeypatch, tmp_path):
     """The merge-window preflight must not create env secrets or decorate JSON."""
     _task_dir, _auth_dir, env_file = _deploy_env(tmp_path)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
@@ -770,11 +771,18 @@ def activation_preflight_snapshot(state, *, runners: tuple[str, ...] | list[str]
     promoted, or mutated.  Disabled families are included because enabling them
     is part of the activation the operator is preparing.
     """
-    families = {family.name: family for family in load_instance_families(state)}
-    unknown = [name for name in runners if name not in families]
-    if unknown:
-        raise RegistryError(f"Unknown Runner Family: {', '.join(unknown)}")
-    return [resolve_runner_readiness(state, families[name]) for name in runners]
+    # Discovery imports workspace normalizers from the runner source tree, which
+    # would otherwise write __pycache__ into it. This is a read-only preflight.
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        families = {family.name: family for family in load_instance_families(state)}
+        unknown = [name for name in runners if name not in families]
+        if unknown:
+            raise RegistryError(f"Unknown Runner Family: {', '.join(unknown)}")
+        return [resolve_runner_readiness(state, families[name]) for name in runners]
+    finally:
+        sys.dont_write_bytecode = previous
 
 
 def format_activation_preflight(readiness: list[RunnerReadiness]) -> str:

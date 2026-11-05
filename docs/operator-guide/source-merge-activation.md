@@ -48,11 +48,14 @@ Disabled families are listed because enabling them is part of the activation.
 ## What a source merge leaves behind
 
 For each changed family, the installed SIF was built from the previous build
-identity. After the source merge, readiness re-derives the current identity from
-the merged definition and build inputs and reports `BUILD_STALE`. Submission
-admission refuses that family, and the refusal names the affected family, the
-stale build identity (`BUILD_PROVENANCE_STALE`), and the recovery action
-(`build-sif`).
+identity. The merged tree derives a new identity from the changed definition and
+build inputs, but admission reads the published attestation, and only a prepared
+restart republishes it. The merge alone therefore activates nothing: the changed
+families keep serving their existing identities until that restart. At the
+prepared restart the new identity is published against the old SIF, readiness
+reports `BUILD_STALE`, and admission refuses the family. The refusal names the
+affected family, the stale build identity (`BUILD_PROVENANCE_STALE`), and the
+recovery action (`build-sif`).
 
 This is intentional fail-closed safety, not silent activation. A merge, a green
 CI run, or a passed Doctor check never makes a family READY. Only a SIF built
@@ -69,8 +72,9 @@ promotion alone completes activation:
    and build candidates from that exact head. A later fast-forward into `main`
    must leave every declared build input byte-identical; verify with the
    preflight after the merge.
-2. **Build candidates before merging.** Stage the five SIFs; the active SIFs are
-   untouched and readiness remains `BUILD_STALE`.
+2. **Build candidates before merging.** Stage the five SIFs; the active SIFs and
+   the published admission identity are untouched, so the existing families keep
+   serving while the preflight reports `BUILD_STALE` for the new tree.
 
    ```bash
    REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh prepare --build-sif
@@ -91,8 +95,10 @@ promotion alone completes activation:
 4. **Confirm the preflight.** Run it again with the list above and record the
    observed rows: all five candidates must report their staged promotion action,
    and Foundry must report `READY` with next action `none`.
-5. **Merge the source.** Admission refuses the five changed families. This is
-   the only planned refusal window.
+5. **Merge the source.** The merge activates nothing by itself: the published
+   attestation still describes the old identities, so submissions continue on
+   the existing SIFs. The `BUILD_STALE` refusal appears only when the prepared
+   restart below republishes the attestation.
 6. **Promote in one prepared restart.** The prepared restart verifies each
    candidate's receipt and promotes all staged candidates in the same walk:
 
@@ -107,8 +113,8 @@ promotion alone completes activation:
 If a candidate cannot be built or accepted before the merge, activation cannot
 complete in the promotion restart. The only acceptable alternative is a
 Maintainer-authorized planned downtime window covering the build, live test,
-and promotion steps below; do not merge source early and leave the families
-refused indefinitely.
+and promotion steps below; do not merge source early and leave the new
+identities unpromoted indefinitely.
 
 ## Fallback: operator order after a merge
 

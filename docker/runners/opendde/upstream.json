@@ -13,8 +13,8 @@
   "runtime_network": true,
   "cuda_minor": "12.6",
   "gpu_compute_capability": "8.0 on the production A100-PCIE-40GB host; upstream publishes no minimum",
-  "gpu_memory": "Not published by upstream. The deployed 1.1.1 image peaked at 5539 MiB in its production smoke case; no candidate-image measurement has been performed.",
-  "runtime_resources": "Single-GPU inference; that smoke case used 8 CPUs and 3.6 GB maximum RSS. MSA and template search reach public services unless disabled. The image omits a C toolchain and runs the PyTorch triangle kernels.",
+  "gpu_memory": "Not published by upstream. The prior image at deploy 57c8114 peaked at 5699 MiB in production task 2f16c036ae748053fe93825e17e464d4 (job 310985); no candidate-image measurement has been performed.",
+  "runtime_resources": "Single-GPU inference; that prior-image run used 8 CPUs and 3.6 GB maximum RSS. MSA and template search reach public services unless disabled. The image omits a C toolchain and runs the PyTorch triangle kernels.",
   "notes": "gpu extra pins triton 3.3.1 and cuequivariance 0.10.0; the production image intentionally omits a C toolchain, so run.sh keeps the PyTorch triangle kernels (--trimul_kernel torch --triatt_kernel torch --enable_fusion false). v1.2.0 keeps the v1.1.1 output layout. prep/inputprep and pred already coexist before v1.2.0; inputprep is additive and always searches MSA, template, and RNA together, so the Task keeps pred and its independent MSA/template toggles. v1.2.0 changed its own precision defaults to bf16 and TF32 off, while this Runner keeps sending the explicit Task values (fp32 and TF32 on by default). v1.2.0 also interprets and validates the input JSON constraint field (contact, movable_chains, epitope); the Runner refuses contact or epitope without TFG guidance and publishes the effective settings.",
   "behavior_changes": {
     "dtype": "upstream default bf16 (v1.1.1 default fp32); the Runner sends the Task value, whose default remains fp32",
