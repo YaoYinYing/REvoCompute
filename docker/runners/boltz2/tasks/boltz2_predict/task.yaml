@@ -1,0 +1,100 @@
+id: boltz2_predict
+display_name: Boltz-2 structure prediction
+category: structure
+summary: Predict biomolecular structures with the pinned Boltz-2 model.
+use_when: Use for structure prediction from a confined YAML molecular specification.
+input_summary: One YAML specification and any explicitly referenced A3M or CSV alignments.
+output_summary: Native mmCIF structures and upstream confidence JSON summaries.
+gpus: true
+inputs:
+  specification:
+    title: Molecular specification
+    type: boltz_specification
+    cardinality: {min: 1, max: 1}
+    formats: [yaml, yml]
+  assets:
+    title: Supplied alignments
+    type: supporting_data
+    cardinality: {min: 0, max: 32}
+    formats: [a3m, csv]
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the molecular system
+    description: Upload a YAML specification and alignments referenced by protein chains.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Molecular files
+  - id: review
+    title: Review and run
+    description: Verify the specification and its supplied alignment files.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Input review
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: structures
+    role: primary
+    title: Predicted structures
+    description: Confidence-ranked native Boltz-2 mmCIF structures.
+    sources:
+      candidates:
+      - glob: boltz_results_*/predictions/*/*_model_*.cif
+        required: true
+    mapping:
+      confidence_encoding: plddt_bfactor
+  - plugin: scalar-summary
+    id: confidence
+    role: evidence
+    title: Confidence summaries
+    description: Model confidence estimates, not experimental validation.
+    sources:
+      data:
+      - glob: boltz_results_*/predictions/*/confidence_*_model_*.json
+        required: true
+    mapping:
+      fields:
+      - path: confidence_score
+        label: Confidence score
+        unit: score
+        direction: higher
+stage_markers:
+  boltz2_predict: Boltz-2 structure inference
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    recycling_steps:
+      type: integer
+      description: Number of structure trunk recycling iterations.
+      default: 3
+      minimum: 0
+      maximum: 20
+    sampling_steps:
+      type: integer
+      description: Diffusion denoising steps.
+      default: 200
+      minimum: 1
+      maximum: 1000
+    diffusion_samples:
+      type: integer
+      description: Number of structure samples.
+      default: 1
+      minimum: 1
+      maximum: 25
+    preprocessing_workers:
+      type: integer
+      description: Data loader workers for local preprocessing.
+      default: 2
+      minimum: 0
+      maximum: 16
+    seed:
+      type: integer
+      description: Random seed for prediction.
+      default: 0
+      minimum: 0
+      maximum: 4294967295

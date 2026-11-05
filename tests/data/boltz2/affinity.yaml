@@ -1,0 +1,12 @@
+version: 1
+sequences:
+- protein:
+    id: A
+    sequence: ACDEFGHIKLMNPQRSTVWY
+    msa: empty
+- ligand:
+    id: L
+    smiles: C
+properties:
+- affinity:
+    binder: L

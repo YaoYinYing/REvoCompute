@@ -1,0 +1,108 @@
+id: boltz2_affinity
+display_name: Boltz-2 protein–small-molecule affinity prediction
+category: binding-affinity
+summary: Predict affinity for a protein target with one supported small-molecule ligand.
+use_when: Use only for the upstream-qualified protein–ligand affinity scenario.
+input_summary: One YAML specification declaring one protein target, one ligand, and an affinity property.
+output_summary: Native mmCIF structures, confidence summaries, and upstream affinity JSON.
+considerations:
+- affinity_pred_value is a model prediction of log10(IC50 µM), not measured affinity or binding free energy.
+- affinity_probability_binary is a model score for binder-versus-decoy discrimination.
+- Ligands above 56 heavy atoms exceed the training range; ligands above 128 atoms are unsupported upstream.
+gpus: true
+inputs:
+  specification:
+    title: Protein–ligand specification
+    type: boltz_specification
+    cardinality: {min: 1, max: 1}
+    formats: [yaml, yml]
+  assets:
+    title: Supplied alignments
+    type: supporting_data
+    cardinality: {min: 0, max: 32}
+    formats: [a3m, csv]
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein–ligand system
+    description: Upload a YAML specification and any explicitly referenced alignments.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protein–ligand files
+  - id: review
+    title: Review and run
+    description: Check the ligand chain and affinity property before submission.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Input review
+result_workspace:
+  views:
+  - plugin: scalar-summary
+    id: affinity
+    role: primary
+    title: Predicted affinity
+    description: Model-predicted values; not measured affinity or experimental validation.
+    sources:
+      data:
+      - glob: boltz_results_*/predictions/*/affinity_*.json
+        required: true
+    mapping:
+      fields:
+      - path: affinity_pred_value
+        label: log10(IC50)
+        unit: log10(µM)
+        direction: lower
+      - path: affinity_probability_binary
+        label: Binder probability score
+        unit: probability
+        direction: higher
+  - plugin: candidate-collection
+    id: structures
+    role: evidence
+    title: Predicted structures
+    description: Native mmCIF structures from the same Boltz-2 input.
+    sources:
+      candidates:
+      - glob: boltz_results_*/predictions/*/*_model_*.cif
+        required: true
+    mapping:
+      confidence_encoding: plddt_bfactor
+stage_markers:
+  boltz2_predict: Boltz-2 structure and affinity inference
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    recycling_steps:
+      type: integer
+      description: Number of structure trunk recycling iterations.
+      default: 3
+      minimum: 0
+      maximum: 20
+    sampling_steps:
+      type: integer
+      description: Diffusion denoising steps for structure prediction.
+      default: 200
+      minimum: 1
+      maximum: 1000
+    diffusion_samples:
+      type: integer
+      description: Number of structure samples.
+      default: 1
+      minimum: 1
+      maximum: 25
+    preprocessing_workers:
+      type: integer
+      description: Data loader workers for local preprocessing.
+      default: 2
+      minimum: 0
+      maximum: 16
+    seed:
+      type: integer
+      description: Random seed for prediction.
+      default: 0
+      minimum: 0
+      maximum: 4294967295
