@@ -11,6 +11,16 @@ Upstream: `https://github.com/jwohlwend/boltz`. Latest observed default-branch c
 
 Upstream documents Boltz-2 `boltz predict` with optional `properties: [{affinity: {binder: <ligand chain>}}]`, checkpoint overrides `--checkpoint` and `--affinity_checkpoint`, MSA modes (provided A3M/paired CSV, explicit `msa: empty`, optional hosted MMseqs2), optional structure templates and inference-time potentials. Published outputs include native predicted mmCIF, confidence JSON, per-token uncertainty arrays and optional `affinity_*.json`. Upstream affinity heads report **`affinity_pred_value` as `log10(IC50)` when IC50 is expressed in µM** and `affinity_probability_binary` as a probability-like binder-vs-decoy score. They are model predictions, **not observed binding free energy, measured pKd, or experimental validation**. See immutable upstream `docs/prediction.md` and original Boltz-2 scientific report.
 
+## Boltz-2 implementation status — ASSET_BLOCKED
+
+The family implementation exists under `docker/runners/boltz2/`. The host path
+`/mnt/db/weights/boltz2` is absent. Required files are `ccd.pkl`, `mols.tar`,
+`boltz2_conf.ckpt`, and `boltz2_aff.ckpt`, plus extracted `mols/`; the four
+files need reviewed SHA-256 entries in the family asset manifest. The pinned
+upstream does not publish those immutable hashes. Do not download or create the
+assets, invent digests, receipts, or readiness. See the family README for
+provisioning and next acceptance steps.
+
 ## M0 — source and resource closure
 
 - [ ] Commander reads the existing Runner Protocol and Single-PR Campaign Protocol, checks live `main` and exact PR head, appoints one independent Runner Owner and active Independent Campaign Adviser, and leaves all production privileges with maintainer.

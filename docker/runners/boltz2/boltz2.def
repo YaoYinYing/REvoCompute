@@ -1,0 +1,35 @@
+Bootstrap: docker
+From: nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+%files
+    boltz2/run.sh /app/revocompute/run.sh
+    boltz2/adapter.py /app/revocompute/adapter.py
+    boltz2/model-assets.sha256 /app/revocompute/model-assets.sha256
+    boltz2/upstream.json /app/revocompute/upstream.json
+
+%post
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3.11 python3.11-venv git ca-certificates
+    rm -rf /var/lib/apt/lists/*
+    python3.11 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip==25.0.1
+    git init /opt/boltz
+    git -C /opt/boltz remote add origin https://github.com/jwohlwend/boltz.git
+    git -C /opt/boltz fetch --depth 1 origin b1ebfc46ecf57f5414e0d1a6f9027bbb122c53bc
+    git -C /opt/boltz checkout --detach FETCH_HEAD
+    # Upstream's documented CUDA extra; a resolved lock must be committed after the
+    # first verified build before this family can pass the build gate.
+    /opt/venv/bin/pip install --no-cache-dir '/opt/boltz[cuda]'
+    mkdir -p /app/revocompute /mnt/db/weights/boltz2
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONNOUSERSITE=1
+    export PIP_NO_INDEX=1
+    export BOLTZ_CACHE=/mnt/db/weights/boltz2
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+
+%test
+    /opt/venv/bin/boltz predict --help >/dev/null
+    /opt/venv/bin/python -c 'import torch, boltz; assert torch.cuda.is_available() or torch.version.cuda'

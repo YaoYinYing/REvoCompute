@@ -1,0 +1,3 @@
+# Generated only after assets are provisioned and their hashes reviewed.
+# Required files under /mnt/db/weights/boltz2:
+# ccd.pkl, mols.tar, boltz2_conf.ckpt, boltz2_aff.ckpt
