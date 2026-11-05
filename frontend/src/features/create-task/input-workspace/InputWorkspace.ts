@@ -131,7 +131,7 @@ export class InputWorkspace {
     });
     const definitions: WorkspaceCapability[] = form.input_workspace.steps.flatMap(step => step.capabilities.map(capability => ({ ...capability, stepId: step.id })));
     const roleFiles = new Map<string, File[]>(); const primaryIndexes = new Map<string, number>();
-    let sequenceRole: string | null = null; let selections: Array<{ chain: string; residue: number }> = [];
+    let sequenceRole: string | null = null; let selections: import('../../structure/MolecularViewer').SelectedResidue[] = [];
     const context: WorkspaceContext = {
       form,
       roleFiles: role => [...(roleFiles.get(role) || [])],
@@ -150,6 +150,15 @@ export class InputWorkspace {
       },
       setSequenceRole: role => { sequenceRole = role; }, sequenceRole: () => sequenceRole,
       sequence: () => '', sequenceName: () => '',
+      setParameter: (name, value) => {
+        const parameter = form.params.find(item => item.name === name);
+        const control = inputByParameter(name);
+        if (!parameter || !control) return;
+        const current = parameterValue(parameter, control);
+        if (current === value) return;
+        writeParameter(parameter, control, value);
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+      },
       parameters: () => Object.fromEntries(form.params.flatMap(parameter => {
         const input = document.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-ct-parameter="${CSS.escape(parameter.name)}"]`);
         if (!input) return []; const value = input instanceof HTMLInputElement && input.type === 'checkbox' ? String(input.checked) : input.value;
