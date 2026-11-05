@@ -51,11 +51,13 @@ For each changed family, the installed SIF was built from the previous build
 identity. The merged tree derives a new identity from the changed definition and
 build inputs, but admission reads the published attestation, and only a prepared
 restart republishes it. The merge alone therefore activates nothing: the changed
-families keep serving their existing identities until that restart. At the
-prepared restart the new identity is published against the old SIF, readiness
-reports `BUILD_STALE`, and admission refuses the family. The refusal names the
-affected family, the stale build identity (`BUILD_PROVENANCE_STALE`), and the
-recovery action (`build-sif`).
+families keep serving their existing identities until that restart. During the
+prepared restart, attestations are cleared and admission fails closed. Promotion
+runs before republication, so a successful prepared restart publishes `READY`. A
+restart that completes without promoting a changed family republishes
+`BUILD_STALE` (`BUILD_PROVENANCE_STALE`), and admission refuses that family,
+naming the recovery action (`build-sif`), until a candidate is built,
+live-tested, and promoted.
 
 This is intentional fail-closed safety, not silent activation. A merge, a green
 CI run, or a passed Doctor check never makes a family READY. Only a SIF built
@@ -97,8 +99,11 @@ promotion alone completes activation:
    and Foundry must report `READY` with next action `none`.
 5. **Merge the source.** The merge activates nothing by itself: the published
    attestation still describes the old identities, so submissions continue on
-   the existing SIFs. The `BUILD_STALE` refusal appears only when the prepared
-   restart below republishes the attestation.
+   the existing SIFs. The next prepared restart clears attestations and fails
+   closed during the walk, then promotes and republishes `READY` for each family
+   whose candidate was accepted. A changed family that is not promoted is
+   republished as `BUILD_STALE` and refused until its candidate is built,
+   live-tested, and promoted.
 6. **Promote in one prepared restart.** The prepared restart verifies each
    candidate's receipt and promotes all staged candidates in the same walk:
 
