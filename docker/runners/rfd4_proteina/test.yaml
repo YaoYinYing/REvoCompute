@@ -4,5 +4,5 @@ collections:
     cases:
     - id: minimal-conditioned-design
       task: rfd4_proteina
-      input: {roles: {condition: [tests/data/condition.json]}}
+      input: {roles: {condition: [tests/data/rfd4_proteina/condition.json]}}
       parameters: {num_designs: 1, steps: 1, seed: 7}
