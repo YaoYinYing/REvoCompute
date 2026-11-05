@@ -1,22 +1,26 @@
 id: rfd4_proteina
 display_name: RFD4 Proteina conditioned design
-category: structure_generation
+category: design
 summary: Generate conditioned protein backbone and sequence candidates with the pinned RFD4 Hydra interface.
-use_when: Use for motif or scaffold generation from a native RFD4 condition specification or annotated CIF.
-input_summary: One native YAML/JSON condition specification or annotated CIF, with an optional scaffold structure for specifications.
+use_when: Use for motif or scaffold generation from a YAML/JSON condition specification plus a CIF scaffold, or from an annotated CIF.
+input_summary: One YAML/JSON condition specification with its CIF scaffold, or one annotated CIF without a scaffold.
 output_summary: Native annotated CIF designs; no inline metrics are selected in this bounded mode.
 considerations:
 - Condition satisfaction is computational and does not demonstrate biochemical activity, binding, or function.
+- A YAML/JSON condition specification requires the scaffold input; an annotated CIF must be supplied without a scaffold.
+- Accepted YAML/JSON grammar is named designs with optional `contig`, `conditions`, and `input_as_annotated_cif`, plus top-level `global_args` defaults. Condition aliases are C_CRD, C_SEQ, C_HOT, C_RAS, C_HB, C_PISTACK, C_PICATION, C_CATH, C_CENTROID, C_IDX, C_CRDGRP, and C_SEQ_PROB_<TOKEN>; full annotation names and two-body conditions are not accepted.
+- Each named design is replicated num_designs times, so a specification with N named designs produces N x num_designs candidate CIFs.
+- This Task defaults to 200 diffusion steps (upstream default 60) and seed 0 (upstream default random).
 - Motif positions and contig grammar are validated before invoking the upstream program.
 - Model assets are provisioned separately at /mnt/db/weights/rfd4-proteina; the Task fails closed when they are missing.
 inputs:
   condition:
-    title: Native condition specification or annotated CIF
+    title: RFD4 condition specification or annotated CIF
     type: text
     cardinality: {min: 1, max: 1}
     formats: [yaml, yml, json, cif, mmcif]
   scaffold:
-    title: Optional CIF scaffold for a condition specification
+    title: CIF scaffold (required with a condition specification)
     type: protein_structure
     cardinality: {min: 0, max: 1}
     formats: [cif, mmcif]
@@ -24,7 +28,7 @@ input_workspace:
   steps:
   - id: material
     title: Provide conditions
-    description: Supply a native condition specification with its scaffold, or an annotated CIF.
+    description: Supply a condition specification with its required scaffold, or an annotated CIF without one.
     capabilities:
     - plugin: files
       id: source_files
@@ -67,19 +71,19 @@ parameters:
   properties:
     num_designs:
       type: integer
-      description: Number of candidate designs to generate.
+      description: Number of candidate designs per named design (or per annotated CIF).
       default: 1
       minimum: 1
       maximum: 8
     steps:
       type: integer
-      description: Number of diffusion steps.
+      description: Number of diffusion steps (upstream default is 60).
       default: 200
       minimum: 1
       maximum: 500
     seed:
       type: integer
-      description: Reproducibility seed.
+      description: Reproducibility seed (upstream default is a random seed).
       default: 0
       minimum: 0
       maximum: 2147483647

@@ -1,2 +1,6 @@
-# ASSET_BLOCKED: required files and SHA256 values are unavailable.
-# Provision verified upstream bundle under /mnt/db/weights/rfd4-proteina/ before use.
+# RFD4-Proteina model bundle nvidia/RFD4-Proteina@a06e2509c7033b010fc43614e9fd840303588502.
+# The Task loads the bundle with hf_ckpt_path=this directory; Proteina.from_pretrained
+# requires exactly config.json and model.safetensors. Digests are published by the
+# release (model.safetensors SHA256 is the weights_sha256 recorded in config.json).
+154ea927ab8005b7eac2d047a792147fb4606ab4878e496aa8414b6b40dad368  config.json
+5b549dd61adb2f6c6b5cb95bda13f40f5e31556b4e6c755edc0ca6f011c68fb0  model.safetensors
