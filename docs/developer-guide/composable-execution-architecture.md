@@ -165,6 +165,49 @@ cannot drop a producer another selected stage requires. Admission, GPU entitleme
 the selected stages, and an omitted stage opens no StageRun, reservation or allocation. A Task that
 declares no modes keeps its previous graph document and accepts only `full`.
 
+### Provenance-bound artifact reuse (delivered contract)
+
+A mode that omits a producer may bind the consumer port to a verified artifact of an earlier Task:
+
+~~~yaml
+execution_modes:
+  model_only:
+    label: Model from prepared features
+    stages: [model]
+    output_contract: full
+    reuse:
+      model.features: {role: prepared_features, type: alphafold_features}
+~~~
+
+Rules the code enforces:
+
+- The reuse mapping is manifest-owned: every entry names a selected consumer port, that port must be
+  required, and the declared type must equal the port type. A mode without an entry keeps the refusal
+  for a dropped required producer.
+- Submission carries one typed reference per declared role — source Task, stage, port and the digest of
+  the port's verified artifact set — never a path or filename. Before any upload or allocation side
+  effect the Server requires the caller to own the source Task, the source to be finished, the named
+  stage's latest attempt to be COMPLETED with a recorded output identity, the port to exist with the
+  declared type and task type, and the recorded artifact set to hash to the submitted digest. Every
+  refusal names its reason (`reuse_source_not_owned`, `reuse_source_not_completed`,
+  `reuse_stage_not_completed`, `reuse_port_unknown`, `reuse_type_mismatch`, `reuse_digest_mismatch`,
+  `reuse_reference_missing`).
+- The verified source identity is recorded in the submission-frozen graph document and its digest, and
+  participates in the derived Task ID, so two model-only runs from different sources never
+  deduplicate.
+- Before the consumer stage owns an attempt, dispatch re-reads the source Task and re-verifies
+  ownership, status, stage identity and every file's size and sha256, then copies the verified bytes
+  into the existing `stage_inputs` directory and writes the same server-owned document, naming the
+  source Task, stage and attempt as producer provenance. A missing, changed or superseded source
+  refuses the stage as `stage_input_unavailable`/`stage_input_invalid` with no attempt and no
+  allocation. The producing Task and its `ResultManifest` are never mutated, and reuse opens no
+  producer StageRun in the consumer Task.
+- `model_only` uses the `full` output contract: a model-only run that lacks the Task's required
+  scientific outputs fails its output check.
+- The Create-Task upload surface for a model-only submission (choosing among the caller's validated
+  reusable artifacts) is a separate frontend milestone; the server projects each mode's reuse roles,
+  types and ports through `GET /compute/api/types/<name>`.
+
 ### Cross-family stage references (delivered contract)
 
 A workflow stage may name the Runner Family that executes it:

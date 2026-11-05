@@ -2581,7 +2581,22 @@
         "properties": {
           "id": {"type": "string"},
           "label": {"type": "string"},
-          "stages": {"type": "array", "items": {"type": "string"}}
+          "stages": {"type": "array", "items": {"type": "string"}},
+          "output_contract": {"type": "string", "enum": ["full", "stages", "none"], "description": "Which output contract this mode must satisfy."},
+          "reuse": {
+            "type": "array",
+            "description": "Typed artifacts this mode consumes from an earlier authorized Task; each entry names the consumer port and its required role/type.",
+            "items": {
+              "type": "object",
+              "required": ["port", "role", "type"],
+              "properties": {
+                "port": {"type": "string", "description": "Fully qualified consumer port, for example model.features."},
+                "role": {"type": "string"},
+                "type": {"type": "string"}
+              },
+              "additionalProperties": false
+            }
+          }
         },
         "additionalProperties": false
       },
@@ -2857,6 +2872,7 @@
           "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional relative paths corresponding to files, used by multi-file task types."},
           "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types; omitted when it is supplied by the request path."},
           "execution_mode": {"type": "string", "description": "Manifest-declared execution mode from the Task Type projection; defaults to full."},
+          "reuse": {"type": "string", "description": "Optional JSON-encoded object mapping each declared reuse role to {source_task, stage, port, digest}."},
           "workspace": {"type": "string", "description": "Optional JSON-encoded version-2 workspace document."}
         },
         "additionalProperties": {"type": "string", "description": "Runner parameter field named params[parameter_name]."}

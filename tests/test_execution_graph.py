@@ -35,6 +35,28 @@ def modes(*entries):
     return tuple(ExecutionMode(*entry) for entry in entries)
 
 
+def test_model_only_reuse_is_frozen_into_graph_identity():
+    producer = WorkflowStage("features", "features", False, outputs=(StagePortSpec("out", "x"),))
+    consumer = WorkflowStage(
+        "model", "model", False,
+        inputs=(StagePortSpec("input", "x", source="features:out"),),
+    )
+    mode = ExecutionMode("model_only", "Model", ("model",), "full", {"model.input": {"role": "prepared", "type": "x"}})
+    task = graph(producer, consumer, modes=(mode,))
+    source = {"source_task": "task-a", "stage": "features", "port": "out", "artifact_digest": "a" * 64}
+    compiled = compile_graph(task, "model_only", {"prepared": {**source, "type": "x"}})
+    assert [node.id for node in compiled.nodes] == ["model"]
+    assert compiled.document["reuse_inputs"]["prepared"]["source"] == {**source, "type": "x"}
+    changed = compile_graph(task, "model_only", {"prepared": {**source, "source_task": "task-b", "type": "x"}})
+    assert compiled.digest != changed.digest
+    with pytest.raises(GraphValidationError, match="reuse references"):
+        compile_graph(task, "model_only")
+    with pytest.raises(GraphValidationError, match="reuse references"):
+        compile_graph(task, "model_only", {"extra": {**source, "type": "x"}})
+    with pytest.raises(GraphValidationError, match="type mismatch"):
+        compile_graph(task, "model_only", {"prepared": {**source, "type": "y"}})
+
+
 def test_each_node_records_its_resolved_family():
     stages = (
         stage("a"),
@@ -189,14 +211,14 @@ def test_a_mode_cannot_drop_a_required_producer():
 
 
 def test_execution_modes_require_full_covering_every_stage():
-    stages = ("task.a", "task.b")
+    stages = (WorkflowStage("task.a", "a", False), WorkflowStage("task.b", "b", False))
     loaded = _load_execution_modes(
         {"full": {"stages": ["a", "b"]}, "prepare_only": {"label": "Prep", "stages": ["a"]}},
         "task",
         stages,
     )
     assert [(mode.id, mode.stages) for mode in loaded] == [
-        ("full", stages),
+        ("full", ("task.a", "task.b")),
         ("prepare_only", ("task.a",)),
     ]
     with pytest.raises(ValueError, match="must declare 'full'"):
@@ -215,6 +237,46 @@ def test_execution_modes_require_full_covering_every_stage():
             {"full": {"stages": ["a", "b"]}, "x": {"stages": ["a"], "output_contract": "bogus"}},
             "task", stages,
         )
+
+
+def test_reuse_declarations_are_validated_against_the_manifest():
+    workflow = (
+        WorkflowStage("task.a", "a", False, outputs=(StagePortSpec("out", "x", path="a.dat"),)),
+        WorkflowStage(
+            "task.b", "b", False,
+            inputs=(
+                StagePortSpec("input", "x", source="task.a:out"),
+                StagePortSpec("extra", "x", required=False),
+            ),
+        ),
+    )
+
+    def modes(reuse, stage_ids=("b",)):
+        return {
+            "full": {"stages": ["a", "b"]},
+            "model_only": {"stages": list(stage_ids), "output_contract": "full", "reuse": reuse},
+        }
+
+    loaded = _load_execution_modes(modes({"b.input": {"role": "prepared", "type": "x"}}), "task", workflow)
+    assert loaded[1].reuse == {"task.b.input": {"role": "prepared", "type": "x"}}
+    # A reuse reference must name a real, required port of a stage the mode selects,
+    # with the port's own type, under a unique identifier role.
+    for bad in (
+        {"b.missing": {"role": "prepared", "type": "x"}},
+        {"b.extra": {"role": "prepared", "type": "x"}},
+        {"b.input": {"role": "prepared", "type": "y"}},
+        {"b.input": {"role": "not an id", "type": "x"}},
+        {
+            "b.input": {"role": "prepared", "type": "x"},
+            "b.extra": {"role": "prepared", "type": "x"},
+        },
+    ):
+        with pytest.raises(ValueError, match="reuse"):
+            _load_execution_modes(modes(bad), "task", workflow)
+    # An optional port may keep its producer selected without consuming it: a
+    # reuse entry naming a stage the mode omits is a dead declaration.
+    with pytest.raises(ValueError, match="names a stage the mode omits"):
+        _load_execution_modes(modes({"a.out": {"role": "prepared", "type": "x"}}), "task", workflow)
 
 
 def test_a_port_name_cannot_escape_the_stage_input_directory():

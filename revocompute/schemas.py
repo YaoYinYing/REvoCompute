@@ -403,6 +403,7 @@ class TaskSubmissionRequest(BaseModel):
     #: ``full`` is the meaning of an absent field and is validated against the
     #: owning Task, never against a server-side mode registry.
     execution_mode: str = "full"
+    reuse: dict[str, dict[str, str]] = Field(default_factory=dict)
 
     @field_validator("task_type", mode="before")
     @classmethod

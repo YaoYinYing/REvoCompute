@@ -354,7 +354,15 @@ def load_validation_identity(
                 "input_workspace": [capability(step) for step in task_type.input_workspace],
                 "workflow": [stage_contract(stage) for stage in task_type.workflow],
                 "execution_modes": [
-                    {"id": mode.id, "stages": tuple(mode.stages)} for mode in task_type.execution_modes
+                    {
+                        "id": mode.id,
+                        "stages": tuple(mode.stages),
+                        "output_contract": mode.output_contract,
+                        "reuse": sorted(
+                            (port_ref, spec["role"], spec["type"]) for port_ref, spec in mode.reuse.items()
+                        ),
+                    }
+                    for mode in task_type.execution_modes
                 ],
                 "results": [result_contract(view) for view in task_type.result_workspace],
             }

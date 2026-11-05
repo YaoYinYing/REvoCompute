@@ -715,7 +715,7 @@ def _attach_stage_dependencies(
         node_id: {
             binding.rsplit(":", 1)[0]
             for binding in node.inputs.values()
-            if not binding.startswith("graph:")
+            if not binding.startswith("graph:") and not binding.startswith("reuse:")
         }
         for node_id, node in nodes.items()
     }
@@ -732,6 +732,10 @@ def _attach_stage_dependencies(
         return seen
 
     blocked.update(name for name in nodes if ancestors(name) & blocked)
+    # A stage omitted by the selected mode is satisfied by construction: a
+    # model-only consumer reads the frozen reused artifact, not a producer run
+    # in this Task.
+    skipped = {item["name"] for item in items if item["status"] == stage_state.SKIPPED}
     for item in items:
         name = item["name"]
         if name in completed:
@@ -740,7 +744,7 @@ def _attach_stage_dependencies(
             item["dependency"] = "blocked"
         elif name not in nodes:
             item["dependency"] = "waiting"
-        elif all(parent in completed for parent in parents[name]):
+        elif all(parent in completed or parent in skipped for parent in parents[name]):
             item["dependency"] = "ready"
         else:
             item["dependency"] = "waiting"
@@ -1700,8 +1704,14 @@ def _run_compute_workflow(
         _record_workflow_refusal(task_id, tt.name, "execution_graph_unverified")
         return JobState.FAILED
     frozen_mode = frozen["document"].get("mode")
+    frozen_reuse = frozen["document"].get("reuse_inputs") or {}
+    reuse_refs = {
+        role: entry.get("source")
+        for role, entry in frozen_reuse.items()
+        if isinstance(entry, dict) and isinstance(entry.get("source"), dict)
+    }
     try:
-        graph = compile_graph(tt, frozen_mode)
+        graph = compile_graph(tt, frozen_mode, reuse_refs or None)
     except GraphValidationError:
         # A manifest that removed or renamed the declared mode between
         # submission and execution has changed the contract this Task froze.
@@ -1724,7 +1734,7 @@ def _run_compute_workflow(
         node.id: {
             binding.rsplit(":", 1)[0]
             for binding in node.inputs.values()
-            if not binding.startswith("graph:")
+            if not binding.startswith("graph:") and not binding.startswith("reuse:")
         }
         for node in graph.nodes
     }
@@ -1869,7 +1879,7 @@ def _execute_workflow_node(
     if not task_store.update_task(task_id, run_stage=first_marker):
         return JobState.CANCELLED
     stage_inputs_dir = None
-    if _produced_bindings(node):
+    if _produced_bindings(node) or _reuse_bindings(node):
         # Bind the upstream artifacts before any attempt exists: a stage whose
         # declared input cannot be staged has nothing to execute, so it must not
         # own an attempt or an allocation either.
@@ -1879,8 +1889,24 @@ def _execute_workflow_node(
             )
         except RuntimeError:
             stage_inputs_dir = None
+        frozen_reuse = (_frozen_execution_graph(task) or {}).get("document", {}).get("reuse_inputs") or {}
+        reuse_sources = {
+            role: entry.get("source")
+            for role, entry in frozen_reuse.items()
+            if isinstance(entry, dict) and isinstance(entry.get("source"), dict)
+        }
+        consumer_owner = task.get("submitted_by_user_id")
         refusal = (
-            _materialize_stage_inputs(stage_inputs_dir, output_dir, node, nodes_by_id, latest_runs)
+            _materialize_stage_inputs(
+                stage_inputs_dir,
+                output_dir,
+                node,
+                nodes_by_id,
+                latest_runs,
+                reuse=reuse_sources,
+                consumer_owner_id=None if consumer_owner is None else int(consumer_owner),
+                consumer_task_type=tt.name,
+            )
             if stage_inputs_dir is not None
             else "stage_input_unavailable"
         )
@@ -2084,11 +2110,154 @@ def _produced_bindings(node) -> dict[str, tuple[str, str]]:
     """
     produced = {}
     for role, binding in node.inputs.items():
-        if binding.startswith("graph:"):
+        if binding.startswith("graph:") or binding.startswith("reuse:"):
             continue
         producer, port = binding.rsplit(":", 1)
         produced[role] = (producer, port)
     return produced
+
+
+def _reuse_bindings(node) -> dict[str, str]:
+    """``input role -> declared reuse role`` for artifacts from another Task."""
+    return {
+        role: binding[6:]
+        for role, binding in node.inputs.items()
+        if binding.startswith("reuse:")
+    }
+
+
+class ReuseReferenceError(ValueError):
+    """A cross-Task artifact reference is not admissible, with a named reason."""
+
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+_REUSE_REFERENCE_FIELDS = frozenset({"source_task", "stage", "port", "digest"})
+_REUSE_FROZEN_FIELDS = frozenset({"source_task", "stage", "port", "artifact_digest", "type"})
+
+
+def _reuse_artifact_digest(files: list[dict[str, Any]]) -> str:
+    """The digest of one port's verified artifact set: path, size and sha256."""
+    ordered = [
+        {"path": str(item["path"]), "size": int(item["size"]), "sha256": str(item["sha256"])}
+        for item in sorted(files, key=lambda item: str(item["path"]))
+    ]
+    return hashlib.sha256(json.dumps(ordered, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _reuse_port_files(identity: dict[str, Any], port) -> list[dict[str, Any]]:
+    """The recorded files this output port publishes, under its static prefix."""
+    prefix = _static_prefix(port.path or "")
+    files = []
+    for item in identity.get("files", []):
+        path = str(item.get("path") or "")
+        parts = tuple(path.split("/"))
+        if parts[: len(prefix)] != prefix:
+            continue
+        files.append({"path": path, "size": int(item["size"]), "sha256": str(item["sha256"])})
+    return files
+
+
+def resolve_reuse_source(
+    source_ref: dict[str, Any],
+    *,
+    user_id: int,
+    expected_type: str,
+    frozen: bool = False,
+    expected_task_type: str | None = None,
+) -> dict[str, Any]:
+    """Verify one cross-Task artifact reference and return its frozen identity.
+
+    The source Task must be owned by the caller, finished, and have a latest
+    COMPLETED StageRun for the named stage whose recorded identity still
+    describes the named port.  The supplied digest is the digest of the port's
+    verified artifact set, so a superseded or different artifact is refused
+    even when the file paths are unchanged.
+
+    ``frozen`` reads the normalized reference stored in the submission-frozen
+    graph; otherwise it reads the caller's ``{source_task, stage, port,
+    digest}`` reference.
+    """
+    if not isinstance(source_ref, dict):
+        raise ReuseReferenceError("reuse_reference_invalid", "A reuse reference must be an object")
+    fields = _REUSE_FROZEN_FIELDS if frozen else _REUSE_REFERENCE_FIELDS
+    if set(source_ref) != fields:
+        raise ReuseReferenceError("reuse_reference_invalid", "A reuse reference has invalid fields")
+    source_task_id = str(source_ref.get("source_task") or "").strip().lower()
+    stage_name = str(source_ref.get("stage") or "").strip()
+    port_name = str(source_ref.get("port") or "").strip()
+    digest = str(source_ref.get("artifact_digest" if frozen else "digest") or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{32}", source_task_id) or not stage_name or not port_name:
+        raise ReuseReferenceError("reuse_reference_invalid", "A reuse reference is malformed")
+    if not re.fullmatch(r"[a-f0-9]{64}", digest):
+        raise ReuseReferenceError("reuse_digest_mismatch", "A reuse digest must be a sha256")
+
+    source = task_store.get_task(source_task_id)
+    if source is None:
+        raise ReuseReferenceError("reuse_source_not_found", "The source Task does not exist")
+    owner_id = source.get("submitted_by_user_id")
+    if owner_id is None or int(owner_id) != int(user_id):
+        raise ReuseReferenceError("reuse_source_not_owned", "The source Task belongs to another caller")
+    if source.get("status") != "finished":
+        raise ReuseReferenceError("reuse_source_not_completed", "The source Task has not completed")
+    if expected_task_type is not None and source.get("task_type") != expected_task_type:
+        raise ReuseReferenceError(
+            "reuse_source_incompatible", "The source Task has a different scientific contract"
+        )
+    try:
+        source_tt, _ = _get_task_type(source.get("task_type") or "")
+    except KeyError:
+        raise ReuseReferenceError("reuse_source_not_found", "The source Task type is not registered") from None
+    stage = next((item for item in source_tt.workflow if item.name == stage_name), None)
+    port = next((item for item in (stage.outputs if stage else ()) if item.name == port_name), None)
+    if stage is None or port is None:
+        raise ReuseReferenceError("reuse_port_unknown", "The source stage does not declare that port")
+    if port.type != expected_type or (frozen and source_ref.get("type") != expected_type):
+        raise ReuseReferenceError("reuse_type_mismatch", "The source port type does not match the consumer")
+    runs = [
+        run for run in task_store.list_stage_runs(source_task_id)
+        if str(run.get("stage_name")) == stage_name
+    ]
+    latest = max(runs, key=lambda run: int(run["attempt"])) if runs else None
+    if latest is None or latest.get("status") != stage_state.COMPLETED or not latest.get("output_identity"):
+        raise ReuseReferenceError("reuse_stage_not_completed", "The source stage has no completed attempt")
+    try:
+        identity = json.loads(latest["output_identity"])
+        if identity.get("output_identity_format") != _OUTPUT_IDENTITY_FORMAT:
+            raise ValueError
+        files = _reuse_port_files(identity, port)
+    except (TypeError, ValueError, KeyError, AttributeError):
+        raise ReuseReferenceError("reuse_artifact_unavailable", "The source identity is unreadable") from None
+    if not files:
+        raise ReuseReferenceError("reuse_artifact_unavailable", "The source port published no artifact")
+    if _reuse_artifact_digest(files) != digest:
+        raise ReuseReferenceError("reuse_digest_mismatch", "The source artifact no longer matches its identity")
+    return {
+        "source_task": source_task_id,
+        "stage": stage_name,
+        "port": port_name,
+        "artifact_digest": digest,
+        "type": expected_type,
+        "attempt": int(latest["attempt"]),
+        "files": files,
+        "port_path": port.path,
+        "task": source,
+    }
+
+
+def _reuse_dispatch_refusal(reason: str) -> str:
+    """Map a rejected reuse reference onto the existing stage-input reasons.
+
+    A source whose evidence is simply absent (unknown Task, stage never
+    completed, nothing published) is ``stage_input_unavailable``; a source that
+    disagrees with the frozen identity (ownership, type, digest, structure) is
+    ``stage_input_invalid``, matching what an in-graph producer refusal means.
+    """
+    if reason in {"reuse_source_not_found", "reuse_stage_not_completed", "reuse_artifact_unavailable"}:
+        return "stage_input_unavailable"
+    return "stage_input_invalid"
 
 
 def _copy_verified_input(verified, directory: str, parts: tuple[str, ...]) -> None:
@@ -2120,6 +2289,10 @@ def _materialize_stage_inputs(
     node,
     nodes_by_id: dict[str, Any],
     latest_runs: dict[str, dict[str, Any]],
+    *,
+    reuse: dict[str, dict[str, Any]] | None = None,
+    consumer_owner_id: int | None = None,
+    consumer_task_type: str | None = None,
 ) -> str | None:
     """Stage every produced input this stage consumes; a refusal reason, else ``None``.
 
@@ -2209,6 +2382,63 @@ def _materialize_stage_inputs(
                     "producer": producer_id,
                     "producer_attempt": int(recorded["attempt"]),
                 }
+        # Cross-Task reuse: the frozen source identity is re-verified against the
+        # source Task and its latest COMPLETED attempt before any byte is copied.
+        for role, reuse_role in sorted(_reuse_bindings(node).items()):
+            frozen = (reuse or {}).get(reuse_role)
+            if not isinstance(frozen, dict) or consumer_owner_id is None:
+                return "stage_input_unavailable"
+            try:
+                resolved = resolve_reuse_source(
+                    frozen,
+                    user_id=consumer_owner_id,
+                    expected_type=str(frozen.get("type") or ""),
+                    frozen=True,
+                    expected_task_type=consumer_task_type,
+                )
+            except ReuseReferenceError as exc:
+                return _reuse_dispatch_refusal(exc.reason)
+            try:
+                source_root = _storage().get_output_root(resolved["task"])
+            except (TypeError, ValueError):
+                return "stage_input_unavailable"
+            prefix = _static_prefix(resolved["port_path"] or "")
+            role_dir = os.path.join(stage_inputs_dir, role)
+            staged = []
+            with _ResultTreeWalker(source_root) as source_walker:
+                for item in resolved["files"]:
+                    parts = tuple(item["path"].split("/"))
+                    expected = (int(item["size"]), str(item["sha256"]))
+                    if expected[0] == 0:
+                        return "stage_input_invalid"
+                    total_files += 1
+                    if total_files > _published_artifact_limit() or total_bytes + expected[0] > _published_byte_limit():
+                        return "stage_input_invalid"
+                    relative = parts[len(prefix):] if parts[: len(prefix)] == prefix else parts
+                    verified = source_walker.open_published_file(
+                        parts, max_bytes=_published_byte_limit() - total_bytes, expected=expected
+                    )
+                    try:
+                        _copy_verified_input(verified, role_dir, relative or parts[-1:])
+                    finally:
+                        verified.handle.close()
+                    total_bytes += verified.size
+                    staged.append({
+                        "path": "/".join((STAGE_INPUTS_CONTAINER_DIR, role, *(relative or parts[-1:]))),
+                        "source_path": "/".join(parts),
+                        "sha256": verified.digest,
+                        "size": verified.size,
+                    })
+            entries[role] = {
+                "path": staged[0]["path"] if len(staged) == 1 else "/".join((STAGE_INPUTS_CONTAINER_DIR, role)),
+                "files": staged,
+                "producer": resolved["stage"],
+                "producer_attempt": resolved["attempt"],
+                "source_task": resolved["source_task"],
+                "source_stage": resolved["stage"],
+                "source_port": resolved["port"],
+                "source_artifact_digest": resolved["artifact_digest"],
+            }
         descriptor = os.open(
             os.path.join(stage_inputs_dir, STAGE_INPUTS_DOCUMENT_NAME),
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,

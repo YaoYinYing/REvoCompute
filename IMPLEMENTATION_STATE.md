@@ -1,6 +1,7 @@
 # Implementation State — Stage Selection and Artifact Reuse
 
-Status: M1 delivered for PREPARE_ONLY; M2/M3 and UI remain. Base `6d726f54` + local commits.
+Status: M1 delivered for PREPARE_ONLY; M2 server-side reuse (MODEL_ONLY) delivered and tested; M3
+UI/API presentation and target-host receipt remain. Base `6d726f54` + local commits.
 
 ## Completed
 
@@ -32,10 +33,41 @@ Status: M1 delivered for PREPARE_ONLY; M2/M3 and UI remain. Base `6d726f54` + lo
 - `execution_mode` is in the submission schema; mode stage names are fully qualified; ids must be
   lowercase; the owner family is seeded only when a selected stage uses it.
 
+## M2 — MODEL_ONLY with provenance-bound cross-Task reuse
+
+- An execution mode declares `reuse`: consumer port reference -> `{role, type}`. The loader validates
+  the port exists on a selected stage, is required, matches the declared type, and that roles are
+  unique identifiers. AF2 and AF3 declare `model_only` (`stages: [model]`, `output_contract: full`,
+  reuse role `prepared_features`).
+- `compile_graph(task_type, mode, reuse)` rewrites a selected consumer's omitted-required-producer
+  binding to `reuse:<role>`, records `reuse_inputs` (role/type/port/verified source) in the frozen
+  document, and covers all of it with the digest. A declared role without a supplied reference, an
+  extra reference, or a source type mismatch is refused.
+- Submission accepts a `reuse` JSON object (role -> `{source_task, stage, port, digest}`). Before any
+  upload or allocation side effect it validates: caller owns the source Task (403
+  `reuse_source_not_owned`), source finished (`reuse_source_not_completed`), latest stage attempt
+  COMPLETED with recorded output identity (`reuse_stage_not_completed`), port exists and type matches
+  the consumer port (`reuse_port_unknown`/`reuse_type_mismatch`), source task type agrees
+  (`reuse_source_incompatible`), and the port's artifact set re-hashes to the supplied digest
+  (`reuse_digest_mismatch`). The identity participates in `_derive_task_id` and the frozen graph.
+- Dispatch re-verifies the frozen source before the consumer owns an attempt and copies the verified
+  bytes into the existing `stage_inputs` layout with the same `stage_inputs.json` document, naming the
+  source Task/stage/attempt as provenance. A changed, deleted or superseded source refuses the stage
+  as `stage_input_unavailable`/`stage_input_invalid` before an attempt/allocation exists. No producer
+  StageRun is opened in the consumer Task; `stage_runs` stays the sole authority.
+- The Task Type API projects each mode's `output_contract` and `reuse` list; the live-test
+  configuration digest now includes both. Docs: the reuse contract is recorded in
+  `docs/developer-guide/composable-execution-architecture.md`.
+- Tests: compile digest/rejection cases, named submission refusals (each mutation fails its test),
+  reuse-identity task separation, successful submission freeze, successful dispatch materialization
+  with no producer StageRun, and changed/deleted/foreign-owner/removed source refusals. 208 focused
+  tests pass across the five brief suites; `mkdocs build --strict` passes.
+
 ## Next action
 
-- Result/detail presentation of the selected mode and omission reasons, then MODEL_ONLY with
-  provenance-bound cross-Task artifact reuse (M2).
+- Create-Task: offer the caller's validated reusable artifacts for MODEL_ONLY (PR #138 surface; the
+  server projection is ready). Result view: show reused source provenance.
+- AF2/AF3 FULL byte-parity and target-host receipt remain release gates.
 
 ## Blockers
 

@@ -52,7 +52,11 @@ class CompiledGraph:
     ir_version: int = GRAPH_IR_VERSION
 
 
-def compile_graph(task_type: Any, mode: str | None = None) -> CompiledGraph:
+def compile_graph(
+    task_type: Any,
+    mode: str | None = None,
+    reuse: dict[str, dict[str, Any]] | None = None,
+) -> CompiledGraph:
     """Compile the manifest workflow, optionally restricted to one declared mode.
 
     A mode is a manifest-owned subset of the same graph, never a second graph
@@ -76,6 +80,11 @@ def compile_graph(task_type: Any, mode: str | None = None) -> CompiledGraph:
         stages = tuple(task_type.workflow)
     if len(stages) > 32:
         raise GraphValidationError("graph exceeds node bound of 32")
+    reuse_specs = modes[selected_mode].reuse if modes else {}
+    reuse = reuse or {}
+    if set(reuse) != {spec["role"] for spec in reuse_specs.values()}:
+        raise GraphValidationError("reuse references do not match the selected mode")
+    reuse_inputs = {}
     by_id = {}
     for stage in stages:
         if stage.name in by_id:
@@ -107,7 +116,17 @@ def compile_graph(task_type: Any, mode: str | None = None) -> CompiledGraph:
                 raise GraphValidationError(f"invalid binding: {binding}")
             producer, output_name = binding.rsplit(":", 1)
             if producer not in by_id:
-                raise GraphValidationError(f"edge to unknown node: {producer}")
+                reuse_spec = reuse_specs.get(f"{name}.{port.name}")
+                if reuse_spec is None or reuse_spec["role"] not in reuse:
+                    raise GraphValidationError(f"edge to unknown node: {producer}")
+                source = reuse[reuse_spec["role"]]
+                if source.get("type", port.type) != port.type:
+                    raise GraphValidationError(f"artifact type mismatch for reuse role {reuse_spec['role']!r}")
+                bindings[port.name] = f"reuse:{reuse_spec['role']}"
+                reuse_inputs[reuse_spec["role"]] = {
+                    **reuse_spec, "port": f"{name}.{port.name}", "source": source,
+                }
+                continue
             output = next((item for item in by_id[producer].outputs if item.name == output_name), None)
             if output is None:
                 raise GraphValidationError(f"unknown port: {binding}")
@@ -160,20 +179,26 @@ def compile_graph(task_type: Any, mode: str | None = None) -> CompiledGraph:
                 "graph_inputs": [asdict(port) for port in inputs], "execution_order": order}
     if modes:
         document["mode"] = selected_mode
+    if reuse_inputs:
+        document["reuse_inputs"] = reuse_inputs
     digest = canonical_digest(document)
     return CompiledGraph(ordered_nodes, inputs, tuple(order), digest, document)
 
 
-def execution_graph_payload(task_type: Any, mode: str | None = None) -> dict[str, Any] | None:
+def execution_graph_payload(
+    task_type: Any, mode: str | None = None, reuse: dict[str, dict[str, Any]] | None = None
+) -> dict[str, Any] | None:
     """The graph identity a workflow Task freezes at submission.
 
     ``mode`` is recorded beside the digest only when the owning manifest
     declares execution modes; a Task that declares none keeps the exact graph
-    document it had before modes existed.
+    document it had before modes existed.  ``reuse`` carries the verified
+    external artifact identity per declared reuse role, so two model-only
+    submissions from different sources never share a frozen graph digest.
     """
     if not task_type.workflow:
         return None
-    graph = compile_graph(task_type, mode)
+    graph = compile_graph(task_type, mode, reuse)
     payload = {"ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document}
     return payload
 

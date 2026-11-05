@@ -153,6 +153,12 @@ execution_modes:
     label: Preparation only
     stages: [features]
     output_contract: stages
+  model_only:
+    label: Model from prepared features
+    stages: [model]
+    output_contract: full
+    reuse:
+      model.features: {role: prepared_features, type: alphafold_features}
 id: alphafold
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema

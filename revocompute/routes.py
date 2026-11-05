@@ -203,6 +203,8 @@ from revocompute.task_runtime import (
     _safe_join,
     _sanitize_task_error,
     _task_zip_path,
+    ReuseReferenceError,
+    resolve_reuse_source,
     stage_projection,
     build_results_archive,
     cancel_compute_resources,
@@ -1385,6 +1387,10 @@ def task_type_form(name: str):
                 "id": mode.id,
                 "label": mode.label,
                 "stages": list(mode.stages),
+                "output_contract": mode.output_contract,
+                "reuse": [
+                    {"port": port_ref, **spec} for port_ref, spec in mode.reuse.items()
+                ],
             }
             for mode in tt.execution_modes
         ],
@@ -1749,6 +1755,7 @@ def _derive_task_id(
     params: dict[str, Any],
     user_storage_key: str,
     execution_mode: str = "full",
+    reuse: dict[str, Any] | None = None,
 ) -> str:
     """Derive the prospective Task ID after security and contract normalization.
 
@@ -1765,17 +1772,19 @@ def _derive_task_id(
                 "validation_receipt": item.get("validation_receipt"),
             }
         )
-    identity = json.dumps(
-        {
-            "task_type": task_type,
-            "execution_mode": execution_mode,
-            "params": params,
-            "inputs": identity_inputs,
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    content_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    identity = {
+        "task_type": task_type,
+        "execution_mode": execution_mode,
+        "params": params,
+        "inputs": identity_inputs,
+    }
+    # Only a reference-carrying submission adds the key, so the full/prepare
+    # identities of this branch keep the exact value they had before reuse.
+    if reuse:
+        identity["reuse"] = reuse
+    content_id = hashlib.sha256(
+        json.dumps(identity, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
     return _task_id_for_upload(content_id, user_storage_key)
 
 
@@ -2208,7 +2217,13 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         if key.startswith("params[") and key.endswith("]"):
             nested_params[key[len("params[") : -1]] = value
         else:
-            form_data[key] = value
+            if key == "reuse":
+                decoded_reuse, reuse_error = parse_bounded_json(value)
+                if reuse_error is not None or not isinstance(decoded_reuse, dict):
+                    return jsonify({"error": "Reuse must be a JSON object"}), 400
+                form_data[key] = decoded_reuse
+            else:
+                form_data[key] = value
     if nested_params:
         form_data["params"] = nested_params
     if task_type_override is not None:
@@ -2250,6 +2265,43 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         tt, runner = _get_task_type(task_type)
     except KeyError:
         return jsonify({"error": f"Unknown task type: {task_type}"}), 400
+    # A model-only submission names typed artifacts from a prior authorized
+    # Task.  Verify ownership, completion, port identity and artifact digest
+    # here, before any upload or allocation side effect, and freeze the result
+    # into the graph this Task will execute.
+    mode = next((item for item in tt.execution_modes if item.id == submission.execution_mode), None)
+    declared_reuse = mode.reuse if mode is not None else {}
+    provided_reuse = {str(role): ref for role, ref in submission.reuse.items()}
+    expected_roles = {spec["role"]: spec for spec in declared_reuse.values()}
+    if set(provided_reuse) != set(expected_roles):
+        missing = set(expected_roles) - set(provided_reuse)
+        reason = "reuse_reference_missing" if missing else "reuse_reference_unexpected"
+        message = "This execution mode requires exactly the declared reuse references"
+        return jsonify({"error": message, "reason_code": reason,
+                        "details": [{"code": reason, "message": message}]}), 400
+    reuse_identity: dict[str, dict[str, Any]] = {}
+    for role, spec in expected_roles.items():
+        try:
+            resolved = resolve_reuse_source(
+                provided_reuse[role],
+                user_id=int(g.current_user["id"]),
+                expected_type=spec["type"],
+                expected_task_type=tt.name,
+            )
+        except ReuseReferenceError as exc:
+            status = 403 if exc.reason == "reuse_source_not_owned" else 400
+            return jsonify({
+                "error": str(exc),
+                "reason_code": exc.reason,
+                "details": [{"code": exc.reason, "message": str(exc)}],
+            }), status
+        reuse_identity[role] = {
+            "source_task": resolved["source_task"],
+            "stage": resolved["stage"],
+            "port": resolved["port"],
+            "artifact_digest": resolved["artifact_digest"],
+            "type": resolved["type"],
+        }
     capability_values = workspace_payload.get("capabilities", {})
     if not isinstance(capability_values, dict):
         return jsonify({"error": "Workspace capabilities must be an object"}), 400
@@ -2300,7 +2352,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # stages, so a preparation-only run neither needs GPU entitlement nor
     # requires a family that only an omitted stage would execute.
     try:
-        execution_graph = execution_graph_payload(tt, submission.execution_mode)
+        execution_graph = execution_graph_payload(tt, submission.execution_mode, reuse_identity)
     except GraphValidationError as exc:
         return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
     selected_stage_ids = (
@@ -2646,7 +2698,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                         {role: tuple(paths) for role, paths in input_paths.items()},
                     )
         md5sum = _derive_task_id(
-            saved_inputs, task_type, coerced_params, workspace_key, submission.execution_mode
+            saved_inputs, task_type, coerced_params, workspace_key, submission.execution_mode, reuse_identity
         )
         if managedb is not None and managedb.slurm_enabled():
             readiness_service = current_app.config["infrastructure_readiness"]

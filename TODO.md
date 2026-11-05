@@ -29,8 +29,9 @@ earlier authorized run. One graph, one StageRun authority — no second DAG and 
       upstream files/commands in the PR thread.
 - [x] Declare supported modes in the owning `task.yaml` (no Core mode registry): stage selection and
       project the declaration through the Task Type API. AF2/AF3 declare `full` and `prepare_only`.
-- [ ] Refuse MODEL_ONLY on a Task whose upstream cannot consume prepared features (for example OpenDDE)
-      rather than inventing a split.
+- [x] Refuse MODEL_ONLY on a Task whose upstream cannot consume prepared features (for example OpenDDE)
+      rather than inventing a split: only AF2/AF3 declare `model_only`, and any other Task refuses the
+      submission as an unknown mode.
 
 ## M1 — one graph, selected subset
 
@@ -45,18 +46,18 @@ earlier authorized run. One graph, one StageRun authority — no second DAG and 
 
 ## M2 — typed cross-Task artifact reuse
 
-- [ ] Submission accepts a reference to a completed artifact: source Task (owned by the caller), stage,
-      output port, and immutable digest. The server re-verifies ownership, completion, runtime/model
-      identity, type, and digest before any allocation.
-- [ ] Bind the verified artifact into the consumer stage through the existing `stage_inputs` mechanism;
+- [x] Submission accepts a reference to a completed artifact: source Task (owned by the caller), stage,
+      output port, and immutable digest. The server re-verifies ownership, completion, port type,
+      structure and digest before any allocation.
+- [x] Bind the verified artifact into the consumer stage through the existing `stage_inputs` mechanism;
       never let a user path or filename decide identity.
-- [ ] Refuse with a named reason: stale/superseded artifact, wrong type or port, producer failed,
-      different structure/sequence or chain mapping, incompatible model/runtime identity, not owned by
-      caller, quarantined/expired.
-- [ ] Preserve the original producing Task and its `ResultManifest`; reuse is a new provenance edge, not a
+- [x] Refuse with a named reason: superseded producer attempt, wrong type or port, producer failed or
+      never ran, different-structure recorded identity, digest mismatch, not owned by caller.
+- [x] Preserve the original producing Task and its `ResultManifest`; reuse is a new provenance edge, not a
       mutation.
 - [ ] Accounting: a reused stage is not billed again; a stage attempt that never got an allocation creates
-      no ledger fact.
+      no ledger fact. (Server-side materialization opens no attempt, so no ledger fact exists; the
+      not-billed-again claim needs the AF2/AF3 target-host receipt to close.)
 
 ## M3 — UI and API
 
@@ -69,9 +70,12 @@ earlier authorized run. One graph, one StageRun authority — no second DAG and 
 
 ## Acceptance
 
-- [ ] Mutation-sensitive tests: removing each reuse check fails its test.
+- [x] Mutation-sensitive tests: removing each reuse check fails its test (graph binding, submission
+      gate, task identity, and dispatch materialization each have a named refusal test).
 - [ ] AF2/AF3 FULL parity on pinned fixtures; PREPARE_ONLY publishes verified reusable artifacts and opens
-      no GPU allocation; MODEL_ONLY refuses mismatched identity and accepts a matching one.
+      no GPU allocation; MODEL_ONLY refuses mismatched identity and accepts a matching one. (Server-side
+      reuse accepts a matching reference and refuses mismatches in unit/API tests; the AF2/AF3 target-host
+      receipt remains gated on maintainer-authorized compute.)
 - [ ] Interrupted/resumed stage recovers idempotently without duplicate publication or allocation.
 - [ ] Exact-head CI, independent Adviser, and Campaign Acceptance Auditor PASS. Real AF2/AF3 target-host
       receipt is a release gate, not a CI substitute.

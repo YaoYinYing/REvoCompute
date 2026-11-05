@@ -437,6 +437,216 @@ def test_workflow_type_detail_projects_the_graph_submission_freezes(monkeypatch,
     assert "execution_graph" not in client.get("/compute/api/types/cpu_runner").get_json()
 
 
+def test_task_identity_includes_a_cross_task_reuse_source(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"}
+    )
+    derive = conftest._routes_globals(module)["_derive_task_id"]
+    first = derive([], "multistage_runner", {}, "owner-key", "model_only", {
+        "prepared_features": {"source_task": "a" * 32, "stage": "features", "port": "features", "digest": "1" * 64},
+    })
+    second = derive([], "multistage_runner", {}, "owner-key", "model_only", {
+        "prepared_features": {"source_task": "b" * 32, "stage": "features", "port": "features", "digest": "1" * 64},
+    })
+    # The same bytes from a different prior Task are a different scientific
+    # request and must never deduplicate onto one Task.
+    assert first != second
+
+
+def _staged_reuse_app(monkeypatch, tmp_path):
+    """An isolated app whose Task Type declares a real port binding and a model_only reuse mode."""
+    from dataclasses import replace
+
+    from revocompute.task_types import ExecutionMode, StagePortSpec
+
+    module = _load_pssm_module(
+        monkeypatch, tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "multistage_runner"},
+    )
+    task_type, runner = module.task_runtime._get_task_type("multistage_runner")
+    features = replace(
+        next(stage for stage in task_type.workflow if stage.name == "multistage_runner.features"),
+        outputs=(StagePortSpec("features", "features", path="features.dat"),),
+    )
+    model = replace(
+        next(stage for stage in task_type.workflow if stage.name == "multistage_runner.model"),
+        inputs=(StagePortSpec("features", "features", source="multistage_runner.features:features"),),
+    )
+    task_type = replace(
+        task_type,
+        workflow=(model, features),
+        execution_modes=(
+            ExecutionMode("full", "Full run", ("multistage_runner.features", "multistage_runner.model")),
+            ExecutionMode("prepare_only", "Preparation only", ("multistage_runner.features",), "stages"),
+            ExecutionMode("model_only", "Model from prepared features", ("multistage_runner.model",), "full",
+                          {"multistage_runner.model.features": {"role": "prepared_features", "type": "features"}}),
+        ),
+    )
+    routes_globals = conftest._routes_globals(module)
+    monkeypatch.setattr(module.task_runtime, "_get_task_type", lambda name: (task_type, runner))
+    monkeypatch.setitem(routes_globals, "_get_task_type", lambda name: (task_type, runner))
+    return module, task_type
+
+
+def _completed_features_source(module, task_type, *, owner="tester", status="finished"):
+    """A finished Task whose features stage COMPLETED with a recorded artifact identity."""
+    md5sum = uuid.uuid4().hex
+    result_dir = Path(module.task_runtime.CONFIG.results_folder) / f"src_{md5sum}"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    (result_dir / "features.dat").write_text("prepared features", encoding="utf-8")
+    _upsert_task_for_user(
+        module, md5sum, filename="input.fasta", file_path=result_dir / "input.fasta",
+        result_dir=result_dir, username=owner, status="running", task_type=task_type.name,
+    )
+    attempt = module.task_store.begin_stage_attempt(
+        task_id=md5sum, stage_index=1, stage_name="multistage_runner.features",
+    )
+    identity = module.task_runtime._stage_output_identity(
+        str(result_dir.resolve()), task_type.workflow[1].outputs
+    )
+    assert module.task_store.finish_stage_attempt(
+        task_id=md5sum, stage_name="multistage_runner.features", attempt=attempt["attempt"],
+        status=module.task_runtime.stage_state.COMPLETED,
+        reason_code=module.task_runtime.stage_state.Reason.COMPLETED,
+        output_identity=identity, expected_runtime_image=_IMAGE, observed_runtime_image=_IMAGE,
+    )
+    module.task_store.update_task(md5sum, status=status)
+    files = json.loads(identity)["files"]
+    digest = module.task_runtime._reuse_artifact_digest(files)
+    return md5sum, {"source_task": md5sum, "stage": "multistage_runner.features", "port": "features", "digest": digest}
+
+
+def _post_model_only(module, client, auth_header, reuse=None, *, upload=True):
+    fasta_path = Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta"
+    data = {"task_type": "multistage_runner", "execution_mode": "model_only"}
+    if reuse is not None:
+        data["reuse"] = json.dumps(reuse)
+    with fasta_path.open("rb") as handle:
+        if upload:
+            data["file"] = (handle, fasta_path.name)
+            data["input_roles"] = "sequence"
+        return client.post("/compute/api/post", headers=auth_header, data=data,
+                           content_type="multipart/form-data")
+
+
+def test_model_only_submission_validates_reuse_and_freezes_the_source_identity(monkeypatch, tmp_path):
+    module, task_type = _staged_reuse_app(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+
+    class _Queued:
+        id = "queued-model-only"
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: _Queued())
+    source_id, reference = _completed_features_source(module, task_type)
+
+    response = _post_model_only(module, client, auth_header, {"prepared_features": reference})
+
+    assert response.status_code == 302, response.get_data(as_text=True)[:300]
+    task_id = response.headers["Location"].rsplit("/", 1)[-1]
+    frozen = json.loads(module.task_store.get_task(task_id)["input_form"])["execution_graph"]
+    assert frozen["document"]["mode"] == "model_only"
+    assert [node["id"] for node in frozen["document"]["nodes"]] == ["multistage_runner.model"]
+    entry = frozen["document"]["reuse_inputs"]["prepared_features"]
+    assert entry["source"]["source_task"] == source_id
+    assert entry["source"]["artifact_digest"] == reference["digest"]
+    # The producing Task is untouched: reuse is a provenance edge, not a mutation.
+    assert module.task_store.get_task(source_id)["status"] == "finished"
+    # The Task Type projection tells the Create-Task surface which typed
+    # artifacts a model-only submission must reference (PR #138).
+    projection = client.get("/compute/api/types/multistage_runner", headers=auth_header).get_json()
+    mode_projection = next(item for item in projection["execution_modes"] if item["id"] == "model_only")
+    assert mode_projection["output_contract"] == "full"
+    assert mode_projection["reuse"] == [
+        {"port": "multistage_runner.model.features", "role": "prepared_features", "type": "features"}
+    ]
+
+
+@pytest.mark.parametrize(("prepare", "reason", "status"), [
+    ("foreign", "reuse_source_not_owned", 403),
+    ("running", "reuse_source_not_completed", 400),
+    ("missing", "reuse_reference_missing", 400),
+    ("extra", "reuse_reference_unexpected", 400),
+    ("digest", "reuse_digest_mismatch", 400),
+    ("port", "reuse_port_unknown", 400),
+    ("superseded", "reuse_stage_not_completed", 400),
+])
+def test_model_only_submission_refuses_each_invalid_reuse_before_any_side_effect(
+    monkeypatch, tmp_path, prepare, reason, status
+):
+    module, task_type = _staged_reuse_app(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+
+    if prepare == "foreign":
+        source_id, reference = _completed_features_source(module, task_type, owner="other")
+    elif prepare == "running":
+        source_id, reference = _completed_features_source(module, task_type, status="running")
+    elif prepare == "superseded":
+        source_id, reference = _completed_features_source(module, task_type, status="running")
+        attempt = module.task_store.begin_stage_attempt(
+            task_id=source_id, stage_index=1, stage_name="multistage_runner.features",
+        )
+        module.task_store.finish_stage_attempt(
+            task_id=source_id, stage_name="multistage_runner.features", attempt=attempt["attempt"],
+            status=module.task_runtime.stage_state.FAILED, reason_code="allocation_failed",
+        )
+        module.task_store.update_task(source_id, status="finished")
+    else:
+        source_id, reference = _completed_features_source(module, task_type)
+    if prepare == "extra":
+        reference = {"prepared_features": reference, "unknown": reference}
+    elif prepare == "missing":
+        reference = {}
+    elif prepare == "digest":
+        reference = {"prepared_features": {**reference, "digest": "0" * 64}}
+    elif prepare == "port":
+        reference = {"prepared_features": {**reference, "port": "missing_port"}}
+    else:
+        reference = {"prepared_features": reference}
+    # The refusal must create no Task row, reservation, or dispatch: capture
+    # the visible state only after the source Task exists.
+    before = {task["md5sum"] for task in module.task_store.list_tasks()}
+
+    response = _post_model_only(module, client, auth_header, reference, upload=False)
+
+    assert response.status_code == status, response.get_data(as_text=True)[:300]
+    assert response.get_json()["reason_code"] == reason
+    assert {task["md5sum"] for task in module.task_store.list_tasks()} == before
+
+
+def test_prepare_only_submission_still_requires_no_reuse_reference(monkeypatch, tmp_path):
+    module, task_type = _staged_reuse_app(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+
+    class _Queued:
+        id = "queued-prepare-only"
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: _Queued())
+    fasta_path = Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta"
+    with fasta_path.open("rb") as handle:
+        response = client.post(
+            "/compute/api/post",
+            headers=auth_header,
+            data={
+                "task_type": "multistage_runner", "execution_mode": "prepare_only",
+                "file": (handle, fasta_path.name), "input_roles": "sequence",
+            },
+            content_type="multipart/form-data",
+        )
+    assert response.status_code == 302, response.get_data(as_text=True)[:300]
+    task_id = response.headers["Location"].rsplit("/", 1)[-1]
+    frozen = json.loads(module.task_store.get_task(task_id)["input_form"])["execution_graph"]
+    assert frozen["document"]["mode"] == "prepare_only"
+    assert "reuse_inputs" not in frozen["document"]
+    assert [node["id"] for node in frozen["document"]["nodes"]] == ["multistage_runner.features"]
+
+
 def test_submission_refuses_a_task_whose_graph_cannot_run(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch, tmp_path,
@@ -447,7 +657,7 @@ def test_submission_refuses_a_task_whose_graph_cannot_run(monkeypatch, tmp_path)
     user = module.app.config["user_db"].get_user_by_username("tester")
     module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
     before = {task["md5sum"] for task in module.task_store.list_tasks()}
-    def refuse(_task_type, _mode=None):
+    def refuse(_task_type, _mode=None, _reuse=None):
         raise GraphValidationError("graph contains a cycle")
 
     monkeypatch.setattr("revocompute.execution_graph.compile_graph", refuse)
