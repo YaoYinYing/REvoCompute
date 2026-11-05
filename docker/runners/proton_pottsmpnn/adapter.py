@@ -56,49 +56,55 @@ def read_binder_residues(path: Path, binder_chain: object,
     if not isinstance(binder_chain, str) or len(binder_chain) != 1:
         raise ValueError('binder_chain must be one PDB chain identifier')
     residues: dict[int, dict[str, object]] = {}
-    after_ter = False
+    segment = 0
+    previous_chain: str | None = None
     previous_position: int | None = None
     for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
+        if line.startswith('ATOM  '):
+            chain = line[21] if len(line) > 21 else ''
+            if len(line) >= 27 and chain == binder_chain:
+                residue_text = line[22:26].strip()
+                if not residue_text.lstrip('-').isdigit():
+                    raise ValueError(f'binder residue number is not an integer: {residue_text!r}')
+                position = int(residue_text)
+                insertion = line[26]
+                if insertion.strip():
+                    raise ValueError(
+                        f'binder residue {position} uses insertion code {insertion!r}; residue addressing is ambiguous'
+                    )
+                entry = residues.get(position)
+                if entry is None:
+                    if previous_position is not None and position < previous_position:
+                        raise ValueError(
+                            f'binder residues must appear in ascending authored order; '
+                            f'{position} follows {previous_position}'
+                        )
+                    previous_position = position
+                elif position != previous_position:
+                    raise ValueError(f'binder residue numbering repeats or is out of order at {position}')
+                name = AA3.get(line[17:20].strip())
+                if name is not None:
+                    if entry is None:
+                        residues[position] = {'names': {name}, 'altlocs': {line[16]}, 'segment': segment}
+                    elif entry['segment'] != segment:
+                        raise ValueError(f'binder residue {position} has duplicate numbering across a chain break')
+                    else:
+                        names = entry['names']
+                        assert isinstance(names, set)
+                        names.add(name)
+                        if len(names) > 1:
+                            raise ValueError(f'binder residue {position} has duplicate numbering with conflicting residue types')
+                        altlocs = entry['altlocs']
+                        assert isinstance(altlocs, set)
+                        altlocs.add(line[16])
+            previous_chain = chain
+            continue
         if line.startswith('TER'):
-            after_ter = True
+            # A TER ends the segment of the chain preceding it. Only a break inside the
+            # binder chain makes a repeated authored residue number ambiguous.
+            if previous_chain == binder_chain:
+                segment += 1
             continue
-        if not line.startswith('ATOM  ') or len(line) < 27 or line[21] != binder_chain:
-            continue
-        residue_text = line[22:26].strip()
-        if not residue_text.lstrip('-').isdigit():
-            raise ValueError(f'binder residue number is not an integer: {residue_text!r}')
-        position = int(residue_text)
-        insertion = line[26]
-        if insertion.strip():
-            raise ValueError(
-                f'binder residue {position} uses insertion code {insertion!r}; residue addressing is ambiguous'
-            )
-        entry = residues.get(position)
-        if entry is None:
-            if previous_position is not None and position < previous_position:
-                raise ValueError(
-                    f'binder residues must appear in ascending authored order; '
-                    f'{position} follows {previous_position}'
-                )
-            previous_position = position
-        elif position != previous_position:
-            raise ValueError(f'binder residue numbering repeats or is out of order at {position}')
-        name = AA3.get(line[17:20].strip())
-        if name is None:
-            continue
-        if entry is None:
-            residues[position] = {'names': {name}, 'altlocs': {line[16]}, 'after_ter': after_ter}
-            continue
-        if after_ter and not entry['after_ter']:
-            raise ValueError(f'binder residue {position} has duplicate numbering across a chain break')
-        names = entry['names']
-        assert isinstance(names, set)
-        names.add(name)
-        if len(names) > 1:
-            raise ValueError(f'binder residue {position} has duplicate numbering with conflicting residue types')
-        altlocs = entry['altlocs']
-        assert isinstance(altlocs, set)
-        altlocs.add(line[16])
     if not residues:
         raise ValueError('binder chain contains no recognized protein residues')
     for position in centre_positions:
@@ -248,6 +254,7 @@ def run_design(input_path: Path, output: Path, params: dict, *, checkpoint: Path
         checkpoint_path=str(checkpoint), extended_vocab='v6', out_directory=None,
         write_fasta=False, write_structures=False,
     )
+    print('REVODESIGN_STAGE:design', flush=True)
     designs = engine.run_ph_redesign(
         atom_array=load_structure(input_path), binder_chain=params['binder_chain'],
         criteria_list=[criteria], seed=params.get('seed', 0),

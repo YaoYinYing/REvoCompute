@@ -2,7 +2,7 @@ result:
   files:
     candidates:
       pattern: 'candidates/designs.fa'
-      cardinality: many
+      cardinality: one
       required: true
       type: fasta
       role: evidence

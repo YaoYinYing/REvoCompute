@@ -12,5 +12,5 @@ complex=$(task_input complex)
 [[ -f "$complex" ]] || { echo 'complex role input missing' >&2; exit 1; }
 mkdir -p "$output_dir"
 echo 'REVODESIGN_STAGE:model_loading'
-echo 'REVODESIGN_STAGE:design'
 python3 "$runtime_root/proton_pottsmpnn/adapter.py" "$complex" "$output_dir" "$task_file"
+touch "$output_dir/task_finished"

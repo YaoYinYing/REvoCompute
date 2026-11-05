@@ -73,7 +73,7 @@ def test_pinned_v6_vocabulary_is_the_three_letter_token_contract():
         adapter.validate_vocabulary(POTTS_MPNN_V6_TOKEN_ENCODING.token_atoms)
 
 
-def test_api_binding_uses_task_input_parameters_checkpoint_and_output(tmp_path):
+def test_api_binding_uses_task_input_parameters_checkpoint_and_output(tmp_path, capsys):
     pdb = tmp_path / 'complex.pdb'
     pdb.write_text(
         'ATOM      1  CA  HIS A   1      11.000  12.000  13.000  1.00 20.00           C\n'
@@ -99,6 +99,7 @@ def test_api_binding_uses_task_input_parameters_checkpoint_and_output(tmp_path):
                        load_structure=lambda path: atom_array)
 
     engine = FakeEngine.instances[-1]
+    assert 'REVODESIGN_STAGE:design' in capsys.readouterr().out
     assert engine.kwargs == {
         'checkpoint_path': str(checkpoint), 'extended_vocab': 'v6', 'out_directory': None,
         'write_fasta': False, 'write_structures': False,
@@ -221,6 +222,12 @@ def test_ambiguous_binder_addressing_is_refused_before_design(tmp_path):
         ([pdb_line(1, 'CA', 'HIS', 'A', 1), pdb_line(2, 'CA', 'ASP', 'A', 1)], 'duplicate numbering'),
         ([pdb_line(1, 'CA', 'HIS', 'A', 5), pdb_line(2, 'CA', 'ASP', 'A', 1)], 'ascending authored order'),
         ([pdb_line(1, 'CA', 'HIS', 'A', 1, altloc='A')], 'alternate locations'),
+        (
+            [pdb_line(1, 'CA', 'ALA', 'T', 1), 'TER\n',
+             pdb_line(2, 'CA', 'HIS', 'A', 9), pdb_line(3, 'CA', 'ASP', 'A', 10),
+             'TER\n', pdb_line(4, 'CA', 'ASP', 'A', 10)],
+            'chain break',
+        ),
     ]:
         pdb.write_text(''.join(lines), encoding='utf-8')
         try:
