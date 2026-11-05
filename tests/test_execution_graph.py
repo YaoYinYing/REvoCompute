@@ -76,6 +76,28 @@ def test_a_reuse_declaration_for_a_selected_producer_is_refused():
         }})
 
 
+def test_a_reuse_reference_must_name_the_declared_producer():
+    producer_a = WorkflowStage("prep_a", "prep_a", False, outputs=(StagePortSpec("artifact", "x"),))
+    producer_b = WorkflowStage("prep_b", "prep_b", False, outputs=(StagePortSpec("artifact", "x"),))
+    consumer = WorkflowStage(
+        "model", "model", False,
+        inputs=(StagePortSpec("input", "x", source="prep_a:artifact"),),
+    )
+    mode = ExecutionMode(
+        "model_only", "Model", ("model",), "full",
+        {"model.input": {"role": "prepared", "type": "x", "inputs": ["source"]}},
+    )
+    task = graph(producer_a, producer_b, consumer, modes=(mode,))
+    reference = {
+        "source_task": "task-a", "stage": "prep_b", "port": "artifact",
+        "artifact_digest": "a" * 64, "type": "x",
+    }
+    # A same-typed artifact from another stage is not the edge the manifest
+    # declared, so it cannot stand in for it.
+    with pytest.raises(GraphValidationError, match="must name prep_a:artifact"):
+        compile_graph(task, "model_only", {"prepared": reference})
+
+
 def test_each_node_records_its_resolved_family():
     stages = (
         stage("a"),
@@ -320,6 +342,25 @@ def test_reuse_declarations_are_validated_against_the_manifest():
                 stage_ids=("a", "b"),
             ),
             "task", workflow, roles,
+        )
+    # The port must name an output the declared producer really publishes.
+    unknown_output = (
+        workflow[0],
+        WorkflowStage(
+            "task.b", "b", False,
+            inputs=(StagePortSpec("input", "x", source="task.a:missing"),),
+        ),
+    )
+    with pytest.raises(ValueError, match="real producer output"):
+        _load_execution_modes(
+            {
+                "full": {"stages": ["a", "b"]},
+                "model_only": {
+                    "stages": ["b"], "output_contract": "full",
+                    "reuse": {"b.input": {"role": "prepared", "type": "x", "inputs": ["sequence"]}},
+                },
+            },
+            "task", unknown_output, roles,
         )
 
 

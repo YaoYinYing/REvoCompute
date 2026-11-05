@@ -370,6 +370,42 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
     assert manifest["inputs"]["sequence"][0]["relative_path"] == "2KL8.fasta"
 
 
+def test_a_task_without_modes_refuses_an_undeclared_execution_mode(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+
+    class _DummyAsyncResult:
+        id = "celery-test-id"
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *a, **kw: _DummyAsyncResult())
+    fasta_path = Path(__file__).resolve().parents[1] / "tests/data/msa/2KL8.fasta"
+
+    def submit(mode):
+        with fasta_path.open("rb") as handle:
+            data = {
+                "task_type": "cpu_runner", "params[iter]": "100",
+                "file": (handle, "2KL8.fasta"), "input_roles": "sequence",
+            }
+            if mode is not None:
+                data["execution_mode"] = mode
+            return client.post(
+                "/compute/api/post", headers=auth_header, data=data, content_type="multipart/form-data"
+            )
+
+    before = {task["md5sum"] for task in module.task_store.list_tasks()}
+    for mode in ("anything", "prepare_only"):
+        response = submit(mode)
+        assert response.status_code == 400
+        assert response.get_json()["reason_code"] == "execution_mode_unknown"
+    # An ignored mode must not mint a Task identity from identical inputs.
+    assert {task["md5sum"] for task in module.task_store.list_tasks()} == before
+    assert submit("full").status_code == 302
+
+
 def test_multistage_runner_multimer_submission_preserves_selected_preset(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,

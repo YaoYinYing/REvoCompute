@@ -122,6 +122,13 @@ def compile_graph(
                 source = reuse[reuse_spec["role"]]
                 if source.get("type", port.type) != port.type:
                     raise GraphValidationError(f"artifact type mismatch for reuse role {reuse_spec['role']!r}")
+                if source.get("stage") != producer or source.get("port") != output_name:
+                    # The reference replaces one declared edge. Accepting a
+                    # same-typed artifact from another stage or port would bind
+                    # provenance the manifest never declared.
+                    raise GraphValidationError(
+                        f"reuse reference for {name}:{port.name} must name {producer}:{output_name}"
+                    )
                 bindings[port.name] = f"reuse:{reuse_spec['role']}"
                 reuse_inputs[reuse_spec["role"]] = {
                     **reuse_spec, "port": f"{name}.{port.name}", "source": source,

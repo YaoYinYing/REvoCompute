@@ -162,7 +162,9 @@ execution_modes:
 
 `full` is mandatory and must select every declared stage. A submission names one mode; compilation
 selects that subset of the same graph and records the mode in the frozen document and digest. A mode
-cannot drop a producer another selected stage requires. Admission, GPU entitlement and placement follow
+cannot drop a producer another selected stage requires. A submission naming a mode the Task does not
+declare is refused (`execution_mode_unknown`) before reuse resolution or Task-id derivation, and a
+Task that declares no modes accepts only `full`. Admission, GPU entitlement and placement follow
 the selected stages, and an omitted stage opens no StageRun, reservation or allocation. A Task that
 declares no modes keeps its previous graph document and accepts only `full`.
 
@@ -194,7 +196,9 @@ Rules the code enforces:
   the source artifact was prepared from. A mode without a reuse entry keeps the refusal for a dropped
   required producer.
 - Submission carries one typed reference per declared role — source Task, stage, port and the digest of
-  the port's verified artifact set — never a path or filename. Before any upload promotion or allocation side
+  the port's verified artifact set — never a path or filename. The stage and port must be the consumer
+  port's declared `from:` producer, so a same-typed artifact from another stage cannot stand in for it.
+  Before any upload promotion or allocation side
   effect the Server requires the caller to own the source Task, the source to be finished, the named
   stage's latest attempt to be COMPLETED with a recorded output identity, the port to exist with the
   declared type and task type, and the recorded artifact set to hash to the submitted digest. The

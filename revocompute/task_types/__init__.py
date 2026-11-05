@@ -716,6 +716,13 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             )
             task_inputs = _load_task_inputs(raw.get("inputs"), task_id)
             workflow = _load_workflow(raw.get("workflow"), task_id, dict(raw.get("stage_markers", {})))
+            if workflow and raw.get("gpus") and not any(stage.requires_gpu for stage in workflow):
+                # A workflow's accelerator need is per stage; the task-level flag
+                # is not used for placement, so declaring it here would only be
+                # read as an admission requirement the graph cannot satisfy.
+                raise ValueError(
+                    f"Task type {task_id!r} declares gpus but no workflow stage requires one"
+                )
             task = TaskType(
                 name=task_id,
                 display_name=str(raw.get("display_name", task_id)),
@@ -1517,7 +1524,16 @@ def _load_execution_modes(
             source = str(port.source or "")
             producer = source.rsplit(":", 1)[0] if ":" in source and not source.startswith("graph:") else ""
             producer = producer if producer in stages_by_name else f"{task_name}.{producer}"
-            if producer not in stages_by_name or producer in selected:
+            producer_output = source.rsplit(":", 1)[1] if producer and ":" in source else ""
+            declared_output = next(
+                (item for item in stages_by_name[producer].outputs if item.name == producer_output), None
+            ) if producer in stages_by_name else None
+            if declared_output is None or declared_output.type != artifact_type:
+                raise ValueError(
+                    f"Task type {task_name!r} execution mode {mode_id!r} reuse port {port_ref!r} "
+                    "must declare a real producer output of its type"
+                )
+            if producer in selected:
                 raise ValueError(
                     f"Task type {task_name!r} execution mode {mode_id!r} reuse port {port_ref!r} "
                     "must replace a producer the mode omits"

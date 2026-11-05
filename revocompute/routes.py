@@ -2304,6 +2304,18 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         tt, runner = _get_task_type(task_type)
     except KeyError:
         return jsonify({"error": f"Unknown task type: {task_type}"}), 400
+    # A mode selects a declared subset of this Task's own graph; a Task with no
+    # modes accepts only `full`. Refuse anything else before reuse resolution or
+    # task-id derivation, which folds the mode in: an ignored string must not
+    # mint a second identity from the same inputs.
+    allowed_modes = {item.id for item in tt.execution_modes} or {"full"}
+    if submission.execution_mode not in allowed_modes:
+        message = f"Task type {task_type!r} does not declare execution mode {submission.execution_mode!r}"
+        return jsonify({
+            "error": message,
+            "reason_code": "execution_mode_unknown",
+            "details": [{"code": "execution_mode_unknown", "message": message}],
+        }), 400
     # A model-only submission names typed artifacts from a prior authorized
     # Task.  Verify ownership, completion, port identity and artifact digest
     # here, before any upload or allocation side effect, and freeze the result
