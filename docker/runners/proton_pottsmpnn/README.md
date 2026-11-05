@@ -26,7 +26,8 @@ checkpoint and Git history are removed after installation; the EV6 labeller fold
 The plugin declares `runtime.access_policy: proton_pottsmpnn_academic_only` in
 `common/policy/proton_pottsmpnn_academic_only.yaml`. The policy requires operator approval, records that
 HBPLUS is operator-provisioned rather than distributed, and enforces that only entitled users may use the
-family. The family remains disabled until all three activation gates below are satisfied.
+family. The family is usable only after the operator enables it and all three activation gates below are
+satisfied.
 
 ## Model asset provenance
 
@@ -63,7 +64,7 @@ chain identity and a real titratable residue.
 
 ## Activation status (source-only)
 
-The family is discoverable from this tree, but it is not in the deployment's `ENABLED_TASKRUNNERS` list. With the family excluded, readiness resolves to `NOT_CONFIGURED` / `RUNNER_UNKNOWN`; with it enabled but no SIF or receipt, readiness resolves to `NOT_BUILT` / `SIF_MISSING` with `next_action=build-sif`. No readiness attestation exists, so submission admission reports `RUNNER_UNAVAILABLE`. No READY or admission claim is made. `docker/runners/proton_pottsmpnn/tests/fast/test_contract.py` exercises these paths.
+The family is discoverable from this tree, but enrollment is deployment configuration: an empty `ENABLED_TASKRUNNERS` enables every discovered family, so whether this instance omits it is an operator/Maintainer check, not a source guarantee. Excluded, readiness resolves to `NOT_CONFIGURED` / `RUNNER_UNKNOWN`; enabled but without a SIF or receipt, it resolves to `NOT_BUILT` / `SIF_MISSING` with `next_action=build-sif`. No readiness attestation exists, so submission admission reports `RUNNER_UNAVAILABLE` even when discovered. No READY or admission claim is made. `docker/runners/proton_pottsmpnn/tests/fast/test_contract.py` exercises these paths.
 
 ## Activation gates
 
@@ -80,9 +81,14 @@ implies nor satisfies another, and each fails closed on its own.
    unset, relative, missing, or not executable. Provisioning HBPLUS does not satisfy gate 1, and a verified
    checkpoint does not satisfy this gate.
 3. **Live receipt.** Produce a real live-inference receipt on the target Slurm/Apptainer host; only then may
-   the SIF be promoted and the family activated. A green build or `%test` satisfies neither asset gate, and
-   neither asset gate establishes a live receipt.
+   the SIF be promoted and the family activated. The candidate live test must confirm the real engine's
+   `to_metadata()['extended_tokens']` contract (the adapter assumes a space-joined string; a list fails
+   closed). A green build or `%test` satisfies neither asset gate, and neither asset gate establishes a live
+   receipt.
 
 A candidate SIF may be built and `%test`-checked without gates 1 and 2; that is not activation. None of the
-gates is satisfied in this change, so the family is not READY and is not enabled. `%test` verifies the engine
-imports and EV6 fold models and asserts no PATH-resolvable HBPLUS binary or known notice directory.
+gates is satisfied in this change, so the family is not READY and is not admissible. `%test` verifies the
+engine imports and EV6 fold models and asserts no PATH-resolvable HBPLUS binary or known notice directory;
+because it binds upstream-private fold attributes and the `./foundry` install path, it is a fail-closed,
+upstream-version-sensitive build gate rather than a scientific check. HBPLUS verification is
+executability-only by design.
