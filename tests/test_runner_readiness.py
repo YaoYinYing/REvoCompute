@@ -675,6 +675,55 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
     assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.BUILD_STALE
 
 
+def test_a_task_without_modes_keeps_its_receipt_contract_shape(tmp_path, monkeypatch):
+    """Only a Task that declares modes puts them in the validation identity.
+
+    The key's mere presence would move every no-mode family's
+    configuration_digest and stale a receipt whose contract did not change.
+    """
+    from revocompute import runner_live_test
+
+    real_digest = runner_live_test.canonical_digest
+    captured: list[dict] = []
+
+    def capture(document):
+        captured.append(document)
+        return real_digest(document)
+
+    monkeypatch.setattr(runner_live_test, "canonical_digest", capture)
+
+    def prepare(root: Path) -> Path:
+        runners = root / "docker" / "runners"
+        shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "restricted_runner", runners / "restricted_runner")
+        shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "common", runners / "common")
+        fixture = root / "tests" / "data" / "synthetic" / "sequence.fasta"
+        fixture.parent.mkdir(parents=True)
+        shutil.copyfile(ROOT / "tests" / "data" / "synthetic" / "sequence.fasta", fixture)
+        return runners
+
+    def identity_contract(root: Path, runners: Path) -> dict:
+        family = load_plugin_families(runners)[0]
+        captured.clear()
+        load_validation_identity(family, resource_provider=ResourcePolicyValues({}, {}), repo_root=root)
+        return next(item for item in captured if "tasks" in item)["tasks"][0]
+
+    plain = tmp_path / "plain"
+    assert "execution_modes" not in identity_contract(plain, prepare(plain))
+
+    declaring = tmp_path / "declaring"
+    runners = prepare(declaring)
+    task_manifest = runners / "restricted_runner" / "tasks" / "predict" / "task.yaml"
+    document = yaml.safe_load(task_manifest.read_text(encoding="utf-8"))
+    document["execution_modes"] = {
+        "full": {"label": "Full", "stages": ["features", "model"]},
+        "prepare_only": {"label": "Preparation only", "stages": ["features"], "output_contract": "stages"},
+    }
+    task_manifest.write_text(yaml.safe_dump(document), encoding="utf-8")
+    declaring_contract = identity_contract(declaring, runners)
+    assert [item["id"] for item in declaring_contract["execution_modes"]] == ["full", "prepare_only"]
+    assert declaring_contract["execution_modes"][1]["output_contract"] == "stages"
+
+
 def test_validation_identity_binds_effective_workflow_resources_not_sources(tmp_path):
     repo = tmp_path / "repo"
     runners = repo / "docker" / "runners"
