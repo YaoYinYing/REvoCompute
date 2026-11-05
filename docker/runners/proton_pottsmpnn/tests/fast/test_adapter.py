@@ -147,11 +147,49 @@ def test_engine_receives_checkpoint_v6_and_task_bound_inputs(tmp_path):
     assert captured['run']['seed'] == 9
 
 
+def pdb_line(serial, atom, comp, chain, position, *, icode=' ', altloc=' ', x=11.0):
+    return (
+        f'ATOM  {serial:5d} {atom:^4}{altloc}{comp:>3} {chain}{position:>4}{icode}'
+        f'      {x:8.3f}{12.0:8.3f}{13.0:8.3f}  1.00 20.00           {atom[0]:>2}\n'
+    )
+
+
+def test_unambiguous_binder_addressing_is_accepted():
+    mapping = adapter.read_binder_residues(
+        ROOT / 'tests' / 'data' / 'proton_pottsmpnn' / 'complex.pdb', 'A', {1, 2, 3, 4}
+    )
+    assert mapping == {1: 'H', 2: 'D', 3: 'E', 4: 'A'}
+
+
+def test_ambiguous_binder_addressing_is_refused_before_design(tmp_path):
+    task = {'binder_chain': 'A', 'centres': [{'position': 1, 'state': 'HIS-P'}],
+            'states': ['HIS-P', 'HIS-S']}
+    checkpoint = tmp_path / 'epoch-0125.ckpt'
+    checkpoint.write_bytes(b'checkpoint')
+    pdb = tmp_path / 'complex.pdb'
+    FakeEngine.instances.clear()
+    for lines, message in [
+        ([pdb_line(1, 'CA', 'HIS', 'A', 1, icode='A')], 'insertion code'),
+        ([pdb_line(1, 'CA', 'HIS', 'A', 1), pdb_line(2, 'CA', 'ASP', 'A', 1)], 'duplicate numbering'),
+        ([pdb_line(1, 'CA', 'HIS', 'A', 1, altloc='A')], 'alternate locations'),
+    ]:
+        pdb.write_text(''.join(lines), encoding='utf-8')
+        try:
+            adapter.run_design(pdb, tmp_path / 'out', task, checkpoint=checkpoint,
+                               engine_type=FakeEngine, criteria_type=FakeCriteria,
+                               load_structure=lambda path: object())
+        except ValueError as exc:
+            assert message in str(exc), str(exc)
+        else:
+            raise AssertionError(f'ambiguous binder addressing accepted: {message}')
+    assert FakeEngine.instances == []
+
+
 def test_invalid_task_mapping_and_empty_results_fail_closed(tmp_path):
-    chains = {'A': {1: 'H', 2: 'D'}}
+    binder_residues = {1: 'H', 2: 'D'}
     valid = {'binder_chain':'A','centres':[{'position':1,'state':'HIS-P'}],
              'states':['HIS-P','HIS-S']}
-    assert adapter.validate_request(valid, chains) == valid
+    assert adapter.validate_request(valid, binder_residues) == valid
     for bad in [
         {**valid, 'states':['HIS-P','ASP-D']},
         {**valid, 'centres':[{'position':2,'state':'HIS-P'}]},
@@ -159,7 +197,7 @@ def test_invalid_task_mapping_and_empty_results_fail_closed(tmp_path):
         {**valid, 'unexpected':'shell'},
     ]:
         try:
-            adapter.validate_request(bad, chains)
+            adapter.validate_request(bad, binder_residues)
         except ValueError:
             pass
         else:

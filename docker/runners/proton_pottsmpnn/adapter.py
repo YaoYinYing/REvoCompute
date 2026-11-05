@@ -43,30 +43,68 @@ def verify_checkpoint(manifest_path: Path | None = None) -> Path:
     return checkpoint
 
 
-def read_chain_residues(path: Path) -> dict[str, dict[int, str]]:
-    chains: dict[str, dict[int, str]] = {}
+def read_binder_residues(path: Path, binder_chain: object,
+                         centre_positions: set[int]) -> dict[int, str]:
+    """Map the binder chain's authored residue numbering, refusing ambiguous addressing."""
+    if not isinstance(binder_chain, str) or len(binder_chain) != 1:
+        raise ValueError('binder_chain must be one PDB chain identifier')
+    residues: dict[int, dict[str, object]] = {}
+    after_ter = False
     for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
-        if not line.startswith('ATOM  ') or len(line) < 27:
+        if line.startswith('TER'):
+            after_ter = True
             continue
-        chain, residue = line[21], line[22:26].strip()
-        if line[16] not in (' ', 'A') or not residue.lstrip('-').isdigit():
+        if not line.startswith('ATOM  ') or len(line) < 27 or line[21] != binder_chain:
             continue
+        residue_text = line[22:26].strip()
+        if not residue_text.lstrip('-').isdigit():
+            raise ValueError(f'binder residue number is not an integer: {residue_text!r}')
+        position = int(residue_text)
+        insertion = line[26]
+        if insertion.strip():
+            raise ValueError(
+                f'binder residue {position} uses insertion code {insertion!r}; residue addressing is ambiguous'
+            )
         name = AA3.get(line[17:20].strip())
-        if name:
-            chains.setdefault(chain, {})[int(residue)] = name
-    if not chains:
-        raise ValueError('complex contains no recognized protein residues')
-    return chains
+        if name is None:
+            continue
+        entry = residues.get(position)
+        if entry is None:
+            residues[position] = {'names': {name}, 'altlocs': {line[16]}, 'after_ter': after_ter}
+            continue
+        if after_ter and not entry['after_ter']:
+            raise ValueError(f'binder residue {position} has duplicate numbering across a chain break')
+        names = entry['names']
+        assert isinstance(names, set)
+        names.add(name)
+        if len(names) > 1:
+            raise ValueError(f'binder residue {position} has duplicate numbering with conflicting residue types')
+        altlocs = entry['altlocs']
+        assert isinstance(altlocs, set)
+        altlocs.add(line[16])
+    if not residues:
+        raise ValueError('binder chain contains no recognized protein residues')
+    for position in centre_positions:
+        entry = residues.get(position)
+        if entry is None or len(entry['names']) != 1:
+            raise ValueError(f'requested centre {position} does not resolve to one binder residue')
+        altlocs = {value for value in entry['altlocs'] if value.strip()}
+        if altlocs:
+            raise ValueError(
+                f'requested centre {position} has alternate locations {sorted(altlocs)}; '
+                'residue addressing is ambiguous'
+            )
+    return {position: next(iter(entry['names'])) for position, entry in residues.items()}
 
 
-def validate_request(data: object, chains: dict[str, dict[int, str]]) -> dict:
+def validate_request(data: object, binder_residues: dict[int, str]) -> dict:
     allowed = {'binder_chain','centres','states','combined_lambda','block_size','temperature',
                'neighbour_k','max_mutations','samples_per_site','seed'}
     if not isinstance(data, dict) or set(data) - allowed:
         raise ValueError('unsupported task parameter')
     binder = data.get('binder_chain')
-    if not isinstance(binder, str) or binder not in chains:
-        raise ValueError('binder chain is missing from the complex')
+    if not isinstance(binder, str) or len(binder) != 1:
+        raise ValueError('binder_chain must be one PDB chain identifier')
     states = data.get('states')
     if (not isinstance(states, list) or len(states) != 2 or states[0] not in STATE_PAIRS
             or STATE_PAIRS[states[0]] != states[1]):
@@ -80,7 +118,7 @@ def validate_request(data: object, chains: dict[str, dict[int, str]]) -> dict:
                 or type(centre['position']) is not int or centre['state'] != states[0]):
             raise ValueError('each centre must use the protonated token from the selected v6 state pair')
         pos = centre['position']
-        if pos not in chains[binder] or chains[binder][pos] != STATES[centre['state']][0] or pos in seen:
+        if pos not in binder_residues or binder_residues[pos] != STATES[centre['state']][0] or pos in seen:
             raise ValueError('centre position is duplicated, missing, or has the wrong input residue type')
         seen.add(pos)
     if type(data.get('block_size', 2)) is not int or not 1 <= data.get('block_size', 2) <= 8:
@@ -180,8 +218,13 @@ def checkpoint_sha256(path: Path) -> str:
 
 def run_design(input_path: Path, output: Path, params: dict, *, checkpoint: Path,
                engine_type: Any, criteria_type: Any, load_structure: Any) -> None:
-    chains = read_chain_residues(input_path)
-    validate_request(params, chains)
+    centres = params.get('centres')
+    centre_positions = {
+        centre['position'] for centre in centres
+        if isinstance(centre, dict) and type(centre.get('position')) is int
+    } if isinstance(centres, list) else set()
+    binder_residues = read_binder_residues(input_path, params.get('binder_chain'), centre_positions)
+    validate_request(params, binder_residues)
     criteria = criteria_type.from_params(criteria_parameters(params))
     engine = engine_type(
         checkpoint_path=str(checkpoint), extended_vocab='v6', out_directory=None,
@@ -193,7 +236,7 @@ def run_design(input_path: Path, output: Path, params: dict, *, checkpoint: Path
     )
     output.mkdir(parents=True, exist_ok=True)
     write_outputs(output, list(designs), params, checkpoint)
-    validate_outputs(output, chains[params['binder_chain']], params['centres'], params['states'])
+    validate_outputs(output, binder_residues, params['centres'], params['states'])
 
 
 def main() -> int:
