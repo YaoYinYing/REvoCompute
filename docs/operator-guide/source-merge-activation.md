@@ -24,15 +24,18 @@ readiness do not move when the other five are activated. The upstream delta is
 documentation-only and does not justify a rebuild.
 
 Two upgrades also change upstream defaults: OpenDDE v1.2.0 defaults to BF16 with
-TF32 off, and ESMFold2 v3.4.2 defaults its ESMC backbone to fp8. Each Runner
-keeps sending its explicit Task values and records them with the result, so the
-change is visible rather than silent. Each family's `upstream.json` is the
+TF32 off, and ESMFold2 v3.4.2 defaults its ESMC backbone to fp8. OpenDDE keeps
+sending its explicit Task values (`dtype=fp32`, `enable_tf32=true`) and records
+them with the result. ESMFold2's `esmc_precision` is an adapter constant (bf16,
+recorded with every prediction), not a Task value. Either way the effective
+choice is visible rather than silent. Each family's `upstream.json` is the
 durable provenance record.
 
 ## Read-only preflight
 
-Before building or merging, list the affected families and what each still
-needs. Include Foundry so its unchanged row is observed rather than assumed:
+After `prepare` has materialized the merge tree and staged the candidates, list
+the affected families and what each still needs. Include Foundry so its
+unchanged row is observed rather than assumed:
 
 ```bash
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh activation-preflight \
@@ -44,6 +47,12 @@ promotes, and mutates nothing, including the env file. Each row shows the
 family, current status, build identity freshness, and next action (`build-sif`,
 `live-test`, `promote`, or `none`). Add `--json` for the full readiness rows.
 Disabled families are listed because enabling them is part of the activation.
+
+Run the preflight after `prepare`, not before it. A requested family that is
+already in the materialized instance snapshot resolves from that snapshot and
+reports the deployment's current `READY` / `none`, not the candidate's
+`BUILD_STALE`. The candidate row appears only after `prepare`; an
+instance-resolved row always describes the deployment, not a pending candidate.
 
 ## What a source merge leaves behind
 
@@ -73,7 +82,8 @@ promotion alone completes activation:
 1. **Freeze the merge tree.** Integrate `origin/main` into the release branch
    and build candidates from that exact head. A later fast-forward into `main`
    must leave every declared build input byte-identical; verify with the
-   preflight after the merge.
+   preflight after the candidates are staged (step 4), because before `prepare`
+   an instance-resolved row describes the deployment, not the candidate.
 2. **Build candidates before merging.** Stage the five SIFs; the active SIFs and
    the published admission identity are untouched, so the existing families keep
    serving while the preflight reports `BUILD_STALE` for the new tree.
@@ -94,8 +104,9 @@ promotion alone completes activation:
    representative native inference on the candidate image, then `live-test` so
    the receipt binds the exact candidate SHA-256, build-provenance digest,
    Runtime Bundle digest, execution contract, and every required smoke case.
-4. **Confirm the preflight.** Run it again with the list above and record the
-   observed rows: all five candidates must report their staged promotion action,
+4. **Confirm the preflight.** Run it with the list above and record the
+   observed rows. The candidate rows are visible here because step 2 prepared
+   the instance; all five candidates must report their staged promotion action,
    and Foundry must report `READY` with next action `none`.
 5. **Merge the source.** The merge activates nothing by itself: the published
    attestation still describes the old identities, so submissions continue on

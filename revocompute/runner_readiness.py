@@ -786,7 +786,9 @@ def activation_preflight_snapshot(state, *, runners: tuple[str, ...] | list[str]
 
     The rows come from the same resolver as ``runner-status``; nothing is built,
     promoted, or mutated.  Disabled families are included because enabling them
-    is part of the activation the operator is preparing.
+    is part of the activation the operator is preparing.  A family already in the
+    instance snapshot resolves from that snapshot, so run this after ``prepare``
+    to see candidate rows; an instance-resolved row describes the deployment.
     """
     # Discovery imports workspace normalizers from the runner source tree, which
     # would otherwise write __pycache__ into it. This is a read-only preflight.
