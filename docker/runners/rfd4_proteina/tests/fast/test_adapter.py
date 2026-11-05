@@ -82,6 +82,10 @@ def test_generated_cif_requires_two_polymer_backbone_residues():
             raise AssertionError(f'placeholder generated CIF accepted: {name}')
 
 
+def test_authentic_upstream_generated_cif_is_accepted():
+    adapter.validate_generated_cif(FIXTURES / 'upstream_enzyme_design_generated.cif')
+
+
 def test_condition_spec_refuses_unsupported_directives_and_shell_text(tmp_path):
     valid = tmp_path / 'ok.yaml'
     valid.write_text(
