@@ -1505,6 +1505,17 @@ def _load_execution_modes(
                     f"Task type {task_name!r} execution mode {mode_id!r} "
                     f"has incompatible reuse port {port_ref!r}"
                 )
+            # A reuse entry substitutes for a producer the mode omits. When the
+            # producer is still selected the edge binds in-graph, so the frozen
+            # reference would be demanded at submission and then never consumed.
+            source = str(port.source or "")
+            producer = source.rsplit(":", 1)[0] if ":" in source and not source.startswith("graph:") else ""
+            producer = producer if producer in stages_by_name else f"{task_name}.{producer}"
+            if producer not in stages_by_name or producer in selected:
+                raise ValueError(
+                    f"Task type {task_name!r} execution mode {mode_id!r} reuse port {port_ref!r} "
+                    "must replace a producer the mode omits"
+                )
             if not _valid_identifier(role) or role in roles:
                 raise ValueError(
                     f"Task type {task_name!r} execution mode {mode_id!r} has invalid or duplicate reuse role"

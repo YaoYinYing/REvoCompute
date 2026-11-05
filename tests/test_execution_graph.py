@@ -58,6 +58,24 @@ def test_model_only_reuse_is_frozen_into_graph_identity():
         compile_graph(task, "model_only", {"prepared": {**source, "type": "y"}})
 
 
+def test_a_reuse_declaration_for_a_selected_producer_is_refused():
+    producer = WorkflowStage("features", "features", False, outputs=(StagePortSpec("out", "x"),))
+    consumer = WorkflowStage(
+        "model", "model", False,
+        inputs=(StagePortSpec("input", "x", source="features:out"),),
+    )
+    mode = ExecutionMode(
+        "model_only", "Model", ("features", "model"), "full",
+        {"model.input": {"role": "prepared", "type": "x", "inputs": ["source"]}},
+    )
+    task = graph(producer, consumer, modes=(mode,))
+    with pytest.raises(GraphValidationError, match="must replace a producer the mode omits"):
+        compile_graph(task, "model_only", {"prepared": {
+            "source_task": "task-a", "stage": "features", "port": "out",
+            "artifact_digest": "a" * 64, "type": "x",
+        }})
+
+
 def test_each_node_records_its_resolved_family():
     stages = (
         stage("a"),
@@ -289,6 +307,16 @@ def test_reuse_declarations_are_validated_against_the_manifest():
     with pytest.raises(ValueError, match="names a stage the mode omits"):
         _load_execution_modes(modes({"a.out": {"role": "prepared", "type": "x", "inputs": ["sequence"]}}),
                               "task", workflow, roles)
+    # A reuse entry whose producer the mode still runs would bind in-graph and
+    # leave the required reference with no effect.
+    with pytest.raises(ValueError, match="must replace a producer the mode omits"):
+        _load_execution_modes(
+            modes(
+                {"b.input": {"role": "prepared", "type": "x", "inputs": ["sequence"]}},
+                stage_ids=("a", "b"),
+            ),
+            "task", workflow, roles,
+        )
 
 
 def test_a_port_name_cannot_escape_the_stage_input_directory():

@@ -115,8 +115,8 @@ def compile_graph(
             if ":" not in binding:
                 raise GraphValidationError(f"invalid binding: {binding}")
             producer, output_name = binding.rsplit(":", 1)
+            reuse_spec = reuse_specs.get(f"{name}.{port.name}")
             if producer not in by_id:
-                reuse_spec = reuse_specs.get(f"{name}.{port.name}")
                 if reuse_spec is None or reuse_spec["role"] not in reuse:
                     raise GraphValidationError(f"edge to unknown node: {producer}")
                 source = reuse[reuse_spec["role"]]
@@ -127,6 +127,12 @@ def compile_graph(
                     **reuse_spec, "port": f"{name}.{port.name}", "source": source,
                 }
                 continue
+            if reuse_spec is not None:
+                # The producer is in the selected set, so the edge binds
+                # in-graph and the declared reference would have no effect.
+                raise GraphValidationError(
+                    f"reuse port {name}:{port.name} must replace a producer the mode omits"
+                )
             output = next((item for item in by_id[producer].outputs if item.name == output_name), None)
             if output is None:
                 raise GraphValidationError(f"unknown port: {binding}")
