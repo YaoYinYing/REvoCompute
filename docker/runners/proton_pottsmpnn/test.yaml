@@ -1,0 +1,17 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-two-state-design
+      task: proton_pottsmpnn
+      input: {roles: {complex: [tests/data/proton_pottsmpnn/complex.pdb]}}
+      parameters:
+        binder_chain: B
+        centres: [{position: 9, state: ASP-P}]
+        states: [ASP-P, ASP-D]
+        combined_lambda: 0.5
+        block_size: 1
+        neighbour_k: 1
+        max_mutations: 1
+        samples_per_site: 1
+        seed: 7

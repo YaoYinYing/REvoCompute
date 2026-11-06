@@ -1,0 +1,55 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.04-py3
+
+%labels
+    org.opencontainers.image.source https://github.com/christian-creator/ProtonPottsMPNN
+    org.opencontainers.image.revision 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
+    org.opencontainers.image.licenses MIT AND BSD-3-Clause
+
+%files
+    proton_pottsmpnn/requirements-extra.txt /tmp/proton-requirements-extra.txt
+
+%post
+    set -eux
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        git ca-certificates
+    rm -rf /var/lib/apt/lists/*
+
+    git clone https://github.com/christian-creator/ProtonPottsMPNN.git /opt/ProtonPottsMPNN
+    cd /opt/ProtonPottsMPNN
+    git checkout --detach 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
+    python -m pip install --no-cache-dir ./foundry
+    python -m pip install --no-cache-dir -r /tmp/proton-requirements-extra.txt
+    rm -f /tmp/proton-requirements-extra.txt
+
+    # The design checkpoint is mounted read-only at runtime, never baked into
+    # the image. Remove it and Git history after installation; the MIT and
+    # BSD-3-Clause notices remain in /opt/ProtonPottsMPNN.
+    rm -rf /opt/ProtonPottsMPNN/.git /opt/ProtonPottsMPNN/checkpoints
+    mkdir -p /mnt/db/weights/proton-pottsmpnn /opt/revocompute/runtime
+
+%environment
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+
+%test
+    python - <<'PY'
+import shutil
+from pathlib import Path
+
+from mpnn.inference_engines.potts_mpnn_ph import PHDesignCriteria, PottsMPNNPHEngine
+from mpnn.transforms.ev6 import EV6Predictor
+
+assert PottsMPNNPHEngine.__name__ == 'PottsMPNNPHEngine'
+assert PHDesignCriteria.__name__ == 'PHDesignCriteria'
+predictor = EV6Predictor()
+assert len(predictor._his_folds) == 5, 'His EV6 fold models did not unpickle'
+assert len(predictor._acid_folds) == 5, 'acid EV6 fold models did not unpickle'
+assert shutil.which('hbplus') is None, 'HBPLUS must not be bundled in the image'
+assert not Path('/usr/local/share/doc/hbplus').exists(), 'HBPLUS notice must not be bundled'
+print('engine imports + EV6 fold models loaded; no HBPLUS bundled')
+PY
+
+%runscript
+    exec "$@"

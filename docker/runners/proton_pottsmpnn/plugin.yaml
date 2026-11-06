@@ -1,0 +1,22 @@
+api_version: 1
+id: proton_pottsmpnn
+version: '1'
+name: Proton PottsMPNN pH-conditioned design
+runtime:
+  image_artifact: proton_pottsmpnn_v1.sif
+  definition: proton_pottsmpnn.def
+  build_inputs:
+    - proton_pottsmpnn/requirements-extra.txt
+  runtime_overlay:
+    - common/runtime/
+    - proton_pottsmpnn/run.sh
+    - proton_pottsmpnn/adapter.py
+    - proton_pottsmpnn/model-assets.sha256
+  access_policy: proton_pottsmpnn_academic_only
+  entrypoint: [bash, /opt/revocompute/runtime/proton_pottsmpnn/run.sh]
+tasks: [tasks/proton_pottsmpnn/task.yaml]
+access_policies:
+- common/policy/proton_pottsmpnn_academic_only.yaml
+contributions:
+  access_policies:
+  - proton_pottsmpnn_academic_only
