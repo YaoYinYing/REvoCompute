@@ -1,0 +1,17 @@
+id: proton_pottsmpnn_academic_only
+label: Proton-PottsMPNN academic access
+description: Operator approval is required before using Proton-PottsMPNN with operator-provisioned HBPLUS.
+requires:
+- proton_pottsmpnn_academic_only
+match: all
+requestable: true
+notice:
+  title: Academic-only service access and operator-provisioned HBPLUS
+  summary: >-
+    REvoCompute does not distribute HBPLUS. The operator provisions the executable under its own
+    academic-use terms; approval records operator authorization and does not create or expand any
+    rights in HBPLUS. Bundled project code is MIT/BSD-3-Clause; the base image and third-party
+    dependencies carry their own licences.
+license:
+  name: HBPLUS academic-use terms; MIT and BSD-3-Clause project code
+  url: https://www.ebi.ac.uk/thornton-srv/software/HBPLUS/

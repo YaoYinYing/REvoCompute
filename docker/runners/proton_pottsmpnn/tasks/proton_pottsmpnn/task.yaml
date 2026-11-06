@@ -1,0 +1,151 @@
+id: proton_pottsmpnn
+display_name: Proton PottsMPNN pH-conditioned binder design
+category: sequence_design
+summary: Design binder sequences using pinned v6 model energies under one explicit protonated/deprotonated state contrast.
+use_when: Use to compare computational design scores across a requested protonation-state contrast.
+input_summary: One target-binder complex structure, binder chain, and protonation centres.
+output_summary: Candidate sequences with v6 protonation tokens and model-proxy objective terms.
+considerations:
+- Scores are model proxies, never measured pKa, affinity, or pH-selective binding.
+- Protonation tokens use the checkpoint's v6 vocabulary, including HIS-P/HIS-S, ASP-P/ASP-D, and GLU-P/GLU-D.
+- Model assets are provisioned separately at /mnt/db/weights/proton-pottsmpnn; the Task fails closed when they are missing.
+inputs:
+  complex:
+    title: Target and binder complex
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb]
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the complex
+    description: Upload the target and binder complex structure.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Complex structure
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the complex
+      options: {source: source_files, select_chains: true, select_residues: true}
+  - id: settings
+    title: Define the design
+    description: Select the binder chain, protonation contrast, and bounded model optimizer settings.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Design settings
+  - id: review
+    title: Review and run
+    description: Review chain, residue, and state selections.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: candidate_sequences
+    role: primary
+    title: Designed sequences
+    description: Candidate sequences with model-proxy objectives for the requested conditions.
+    sources:
+      candidates:
+      - glob: candidates/designs.fa
+        required: true
+    mapping: {}
+stage_markers:
+  model_loading: Loading PottsMPNN model assets
+  design: Optimizing candidate sequences
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  required: [binder_chain, centres, states]
+  properties:
+    binder_chain:
+      type: string
+      description: One-character chain identifier for the binder.
+      pattern: '^[A-Za-z0-9]$'
+    centres:
+      type: array
+      description: PDB residue numbers for fixed protonation centres in the binder chain.
+      minItems: 1
+      maxItems: 30
+      items:
+        type: object
+        additionalProperties: false
+        required: [position, state]
+        properties:
+          position:
+            type: integer
+            description: PDB residue number in the binder chain (the four-column PDB field).
+            minimum: -999
+            maximum: 9999
+          state:
+            type: string
+            enum: [HIS-P, ASP-P, GLU-P]
+    states:
+      type: array
+      description: One supported v6 protonated/deprotonated contrast pair, protonated token first.
+      minItems: 2
+      maxItems: 2
+      items:
+        type: string
+        enum: [HIS-P, HIS-S, ASP-P, ASP-D, GLU-P, GLU-D]
+      oneOf:
+      - prefixItems:
+        - {const: HIS-P}
+        - {const: HIS-S}
+      - prefixItems:
+        - {const: ASP-P}
+        - {const: ASP-D}
+      - prefixItems:
+        - {const: GLU-P}
+        - {const: GLU-D}
+    combined_lambda:
+      type: number
+      description: Relative weight for the v6 condition-selectivity term in the model objective.
+      default: 0.5
+      minimum: 0
+      maximum: 1
+    block_size:
+      type: integer
+      description: >-
+        Number of sequence positions optimized jointly in each block-descent step. Capped at the
+        production value 2: block descent enumerates all 30**block_size joint assignments per step,
+        so larger blocks are not bounded for a server-requestable Task.
+      default: 2
+      minimum: 1
+      maximum: 2
+    temperature:
+      type: number
+      description: Sampling temperature for block-descent assignments.
+      default: 0.05
+      minimum: 0
+      maximum: 2
+    neighbour_k:
+      type: integer
+      description: Maximum coupled sequence neighbours redesigned around each centre.
+      default: 8
+      minimum: 1
+      maximum: 128
+    max_mutations:
+      type: integer
+      description: Hard cap on total redesigned binder positions.
+      default: 20
+      minimum: 1
+      maximum: 500
+    samples_per_site:
+      type: integer
+      description: Number of candidate designs sampled for each explicit centre set.
+      default: 1
+      minimum: 1
+      maximum: 8
+    seed:
+      type: integer
+      description: Reproducibility seed.
+      default: 0
+      minimum: 0
+      maximum: 2147483647

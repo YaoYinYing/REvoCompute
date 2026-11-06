@@ -1,0 +1,20 @@
+result:
+  files:
+    candidates:
+      pattern: 'candidates/designs.fa'
+      cardinality: one
+      required: true
+      type: fasta
+      role: evidence
+    design_scores:
+      path: design_scores.json
+      cardinality: one
+      required: true
+      type: json
+      role: evidence
+    task_configuration:
+      path: task_config.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
