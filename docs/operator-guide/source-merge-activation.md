@@ -168,30 +168,40 @@ The previous SIF and its evidence remain the rollback reference.
 
 ## Five-family handoff: artifacts, prerequisites, failure, verification
 
-Apply the order above to `alphafold3`, `bioemu2`, `esmfold2`, `freebindcraft`
-and `opendde` one family at a time. Never hand-edit a receipt, build record or
-staged identity; absent evidence means NOT READY.
+For the five families above, build and accept candidates one family at a time,
+but promotion is deployment-wide: the prepared restart's `promote-sifs` step
+activates every staged, receipted candidate in the enabled set. Do not stage a
+candidate you are not prepared to promote. Never hand-edit a receipt, build
+record or staged identity; absent evidence means NOT READY.
 
 | Step | Action | Artifact and evidence left behind |
 | --- | --- | --- |
 | Build | `restart.sh prepare --build-sif` | `images/<family>_v1.sif.next`, `<sif>.next.build.json`, and `images/evidence/<family>/<sif-sha256>.build.json` |
-| Image checks | `apptainer inspect`, the definition's `%test`, Doctor | captured `%test` and Doctor output; a failed check leaves the candidate staged but unpromotable |
+| Image checks | `apptainer inspect`, the definition's `%test`, Doctor | captured `%test` and Doctor output; promotion does not re-run `%test`, so a failed check is an operator stop, not a gate the tooling enforces |
 | Live test | `restart.sh live-test --runner <family> --collection smoke` | `images/live-tests/<family>/*.json` report and `images/evidence/<family>/<sif-sha256>.<identity>.receipt.json`; a PASS activates the candidate Runtime Bundle and republishes readiness |
-| Promote | `restart.sh restart --mode=prepared` | `.next` becomes the active `.sif`; `promote-sifs` runs before `up`, and the deploy stamp records the restart |
+| Promote | `restart.sh restart --mode=prepared` | `.next` becomes the active `.sif` for every staged, receipted candidate in the enabled set; `promote-sifs` runs before `up`, and the deploy stamp records the restart |
 | Verify | admin fleet API or `runner-status --all --json` | the row and submission checks below |
 
 ### Per-family prerequisites
 
-Confirm these before building. Anything the repository does not establish is
-`UNKNOWN, operator to confirm`.
+Do not restate per-family facts in this guide. Each family's `runner.yaml`,
+`upstream.json`, and where present its README or `MODEL_ASSETS.md`, are
+authoritative for host mounts, licences and network needs; they live under the
+[Runner family directory](https://github.com/YaoYinYing/REvoCompute/tree/main/docker/runners).
+A `.def` or `run.sh` mount target is the container path; the host → container
+mapping is in `runner.yaml`.
 
-| Family | Assets / paths | Licence | Network, accelerator, time |
-| --- | --- | --- | --- |
-| alphafold3 | `/mnt/alphafold3/models`, `/mnt/alphafold3/databases`, `/mnt/alphafold3/reduced_bfd/` | Apache-2.0 code; Google model-parameter terms, authorized receipt required | offline; GPU required; memory/walltime `UNKNOWN, operator to confirm` |
-| bioemu2 | `/mnt/db/weights/bioemu2`, verified against `model-assets.sha256` before loading | MIT code and weights | MSA network path required; GPU required; memory/walltime `UNKNOWN, operator to confirm` |
-| esmfold2 | `/mnt/db/weights/revocompute/esmfold2`, verified by `assets.json` sizes and SHA-256 | MIT (head, CCD, ESMC-6B) | offline; GPU required; ESMC-6B memory/walltime `UNKNOWN, operator to confirm` |
-| freebindcraft | `/mnt/db/bindcraft/af_params`; upstream pinned Linux CUDA manifest | MIT code; mounted AF2 2022-12-06 params CC BY 4.0 | offline; upstream validated on RTX 5090 only, production-GPU fit/walltime `UNKNOWN, operator to confirm` |
-| opendde | `/mnt/db/opendde` (checkpoint and search databases); HF manifest revision `eddd563c…` | Apache-2.0 code; checkpoint terms `UNKNOWN, operator to confirm` | MSA/template network path required; GPU required; memory/walltime `UNKNOWN, operator to confirm` |
+Confirm the generic checklist before building; mark any item the repository
+does not establish as `UNKNOWN, operator to confirm`:
+
+- the host asset roots named by `runner.yaml` exist and are readable, and any
+  recorded manifest (`model-assets.sha256`, `assets.json`, checkpoint revision)
+  verifies;
+- the code and weight licences recorded in `upstream.json` are satisfied,
+  including any authorized weight receipt;
+- required MSA/template network paths are reachable from the target host;
+- the production GPU type and walltime envelope have been validated; if the
+  repository does not record them, they are `UNKNOWN, operator to confirm`.
 
 ### Failure and rollback
 
@@ -200,12 +210,18 @@ Confirm these before building. Anything the repository does not establish is
   candidate staged, keep the stack up, and record the failure with its logs. Do
   not edit a receipt or build record.
 - **Abandon a staged candidate.** Before any prepared restart, remove
-  `<sif>.next` and `<sif>.next.build.json`. A bare `prepare` also replaces a
-  stale candidate. The prepared restart validates staged images inside
+  `<sif>.next` and `<sif>.next.build.json`. A bare `prepare` refreshes the
+  materialized Runner snapshot and validates runtime files, but does not build
+  SIFs; only `prepare --build-sif` removes and rebuilds a staged candidate whose
+  provenance is stale. The prepared restart validates staged images inside
   `activate-revision`, after `stop`, so an invalid `.next` left in place aborts
-  the walk with the stack already down; if that happens, run `restart.sh up`,
-  remove the candidate, and retry. Remove a `<sif>.promote-backup` only after
-  confirming the active SIF is the intended one.
+  the walk with the stack already down. `activate-revision` has already cleared
+  the published attestations, and `restart.sh up` does not republish them:
+  admissions stay refused until a successful prepared restart, or until a
+  per-family live-test PASS republishes that family. Recover with `restart.sh
+  up`, remove the candidate, and retry the prepared restart. Remove a
+  `<sif>.promote-backup` only after confirming the active SIF is the intended
+  one.
 - **Genuine regression or stale stamp.** Treat a failure as a candidate
   regression only when the candidate's `sif_sha256`,
   `build_provenance_digest`, `configuration_digest` and
