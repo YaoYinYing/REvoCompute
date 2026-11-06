@@ -9,6 +9,8 @@ import os
 from functools import partial
 from pathlib import Path
 
+import pytest
+
 from runner_protocol import ROOT, run_with_manifest
 
 OPENDDE_RUNNER_SCRIPT = ROOT / "docker/runners/opendde/run.sh"
@@ -248,3 +250,41 @@ def test_opendde_runner_records_effective_settings_with_upstream_defaults(tmp_pa
         "use_tfg_guidance": "explicit_cli_argument",
     }
     assert settings["upstream_default_params_overrides"] == ["cycle", "step"]
+
+
+def test_opendde_runner_rejects_non_object_constraint(tmp_path):
+    fake_args = tmp_path / "opendde.args"
+    completed, _input_file, _auxiliary, output_dir = _run_opendde(
+        tmp_path,
+        specification='{"constraint": "contacts"}\n',
+        FAKE_OPENDDE_ARGS_FILE=str(fake_args),
+    )
+
+    assert completed.returncode != 0
+    assert "OpenDDE refuses a non-object constraint field" in completed.stderr
+    assert not fake_args.exists()
+    assert not (output_dir / "model.cif").exists()
+    assert not (output_dir / "task_finished").exists()
+
+
+@pytest.mark.parametrize(
+    ("constraint", "message"),
+    [
+        ({"contact": ["A:1:B:2"]}, "constraint.contact requires use_tfg_guidance"),
+        ({"epitope": "A"}, "constraint.epitope requires use_tfg_guidance"),
+    ],
+)
+def test_opendde_runner_rejects_guidance_without_tfg(tmp_path, constraint, message):
+    fake_args = tmp_path / "opendde.args"
+    completed, _input_file, _auxiliary, output_dir = _run_opendde(
+        tmp_path,
+        fake_context=_write_fake_context(tmp_path, use_tfg_guidance="false"),
+        specification=json.dumps({"constraint": constraint}) + "\n",
+        FAKE_OPENDDE_ARGS_FILE=str(fake_args),
+    )
+
+    assert completed.returncode != 0
+    assert message in completed.stderr
+    assert not fake_args.exists()
+    assert not (output_dir / "model.cif").exists()
+    assert not (output_dir / "task_finished").exists()
