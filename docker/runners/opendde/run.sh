@@ -147,21 +147,25 @@ import json
 import sys
 
 path, guided = sys.argv[1], sys.argv[2] == "true"
-constraint = json.load(open(path, encoding="utf-8")).get("constraint")
-if constraint is None:
-    print("false")
-    raise SystemExit(0)
-if not isinstance(constraint, dict):
-    raise SystemExit("OpenDDE refuses a non-object constraint field")
-if constraint.get("contact") and not guided:
-    raise SystemExit(
-        "constraint.contact requires use_tfg_guidance; refusing to run an unguided prediction"
-    )
-if constraint.get("epitope") is not None and not guided:
-    raise SystemExit(
-        "constraint.epitope requires use_tfg_guidance; refusing to run an unguided prediction"
-    )
-print("true")
+document = json.load(open(path, encoding="utf-8"))
+jobs = document if isinstance(document, list) else [document]
+constraint_present = False
+for job in jobs:
+    constraint = job.get("constraint")
+    if constraint is None:
+        continue
+    if not isinstance(constraint, dict):
+        raise SystemExit("OpenDDE refuses a non-object constraint field")
+    if constraint.get("contact") and not guided:
+        raise SystemExit(
+            "constraint.contact requires use_tfg_guidance; refusing to run an unguided prediction"
+        )
+    if constraint.get("epitope") is not None and not guided:
+        raise SystemExit(
+            "constraint.epitope requires use_tfg_guidance; refusing to run an unguided prediction"
+        )
+    constraint_present = True
+print("true" if constraint_present else "false")
 PY
 )
 

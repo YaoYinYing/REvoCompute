@@ -288,3 +288,38 @@ def test_opendde_runner_rejects_guidance_without_tfg(tmp_path, constraint, messa
     assert not fake_args.exists()
     assert not (output_dir / "model.cif").exists()
     assert not (output_dir / "task_finished").exists()
+
+
+def test_opendde_runner_rejects_list_root_contact_without_tfg(tmp_path):
+    fake_args = tmp_path / "opendde.args"
+    specification = json.dumps(
+        [{"name": "tiny", "constraint": {"contact": ["A:1:B:2"]}}]
+    ) + "\n"
+    completed, _input_file, _auxiliary, output_dir = _run_opendde(
+        tmp_path,
+        fake_context=_write_fake_context(tmp_path, use_tfg_guidance="false"),
+        specification=specification,
+        FAKE_OPENDDE_ARGS_FILE=str(fake_args),
+    )
+
+    assert completed.returncode != 0
+    assert "constraint.contact requires use_tfg_guidance" in completed.stderr
+    assert not fake_args.exists()
+    assert not (output_dir / "model.cif").exists()
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_opendde_runner_accepts_list_root_without_constraint(tmp_path):
+    fake_args = tmp_path / "opendde.args"
+    completed, _input_file, _auxiliary, output_dir = _run_opendde(
+        tmp_path,
+        specification=json.dumps([{"name": "tiny"}]) + "\n",
+        FAKE_OPENDDE_ARGS_FILE=str(fake_args),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert fake_args.exists()
+    assert (output_dir / "model.cif").is_file()
+    assert (output_dir / "task_finished").is_file()
+    settings = json.loads((output_dir / "inference_settings.json").read_text())
+    assert settings["effective"]["constraint"]["present"] is False
