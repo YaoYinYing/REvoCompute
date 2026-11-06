@@ -33,9 +33,8 @@ durable provenance record.
 
 ## Read-only preflight
 
-After `prepare` has materialized the merge tree and staged the candidates, list
-the affected families and what each still needs. Include Foundry so its
-unchanged row is observed rather than assumed:
+Run the preflight before or after `prepare`; it only reads readiness. Include
+Foundry so its unchanged row is observed rather than assumed:
 
 ```bash
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh activation-preflight \
@@ -48,13 +47,12 @@ family, current status, build identity freshness, and next action (`build-sif`,
 `live-test`, `promote`, or `none`). Add `--json` for the full readiness rows.
 Disabled families are listed because enabling them is part of the activation.
 
-Run the preflight after `prepare`, not before it. A requested family that is
-already in the materialized instance snapshot resolves from that snapshot and
-reports the deployment's current `READY` / `none`, not the candidate's
-`BUILD_STALE`. For a family in the instance snapshot, the candidate row appears
-only after `prepare`; a family absent from the snapshot resolves from the
-checkout and can report before it. An instance-resolved row always describes the
-deployment, not a pending candidate.
+Resolution order determines what each row describes. A family present in the
+materialized instance snapshot resolves from that snapshot; a family absent from
+it resolves from the checkout. Before `prepare` stages `<sif>.next`, an
+instance-snapshot row describes the active deployment artifact; after `.next` is
+staged, that row describes the staged candidate. A family absent from the
+snapshot can report before `prepare`, because its row comes from the checkout.
 
 ## What a source merge leaves behind
 
@@ -167,6 +165,72 @@ the same steps apply after the merge, one family at a time:
 Continue each family independently. A receipt or promotion for one family does
 not authorize another, and no evidence is inherited across build identities.
 The previous SIF and its evidence remain the rollback reference.
+
+## Five-family handoff: artifacts, prerequisites, failure, verification
+
+Apply the order above to `alphafold3`, `bioemu2`, `esmfold2`, `freebindcraft`
+and `opendde` one family at a time. Never hand-edit a receipt, build record or
+staged identity; absent evidence means NOT READY.
+
+| Step | Action | Artifact and evidence left behind |
+| --- | --- | --- |
+| Build | `restart.sh prepare --build-sif` | `images/<family>_v1.sif.next`, `<sif>.next.build.json`, and `images/evidence/<family>/<sif-sha256>.build.json` |
+| Image checks | `apptainer inspect`, the definition's `%test`, Doctor | captured `%test` and Doctor output; a failed check leaves the candidate staged but unpromotable |
+| Live test | `restart.sh live-test --runner <family> --collection smoke` | `images/live-tests/<family>/*.json` report and `images/evidence/<family>/<sif-sha256>.<identity>.receipt.json`; a PASS activates the candidate Runtime Bundle and republishes readiness |
+| Promote | `restart.sh restart --mode=prepared` | `.next` becomes the active `.sif`; `promote-sifs` runs before `up`, and the deploy stamp records the restart |
+| Verify | admin fleet API or `runner-status --all --json` | the row and submission checks below |
+
+### Per-family prerequisites
+
+Confirm these before building. Anything the repository does not establish is
+`UNKNOWN, operator to confirm`.
+
+| Family | Assets / paths | Licence | Network, accelerator, time |
+| --- | --- | --- | --- |
+| alphafold3 | `/mnt/alphafold3/models`, `/mnt/alphafold3/databases`, `/mnt/alphafold3/reduced_bfd/` | Apache-2.0 code; Google model-parameter terms, authorized receipt required | offline; GPU required; memory/walltime `UNKNOWN, operator to confirm` |
+| bioemu2 | `/mnt/db/weights/bioemu2`, verified against `model-assets.sha256` before loading | MIT code and weights | MSA network path required; GPU required; memory/walltime `UNKNOWN, operator to confirm` |
+| esmfold2 | `/mnt/db/weights/revocompute/esmfold2`, verified by `assets.json` sizes and SHA-256 | MIT (head, CCD, ESMC-6B) | offline; GPU required; ESMC-6B memory/walltime `UNKNOWN, operator to confirm` |
+| freebindcraft | `/mnt/db/bindcraft/af_params`; upstream pinned Linux CUDA manifest | MIT code; mounted AF2 2022-12-06 params CC BY 4.0 | offline; upstream validated on RTX 5090 only, production-GPU fit/walltime `UNKNOWN, operator to confirm` |
+| opendde | `/mnt/db/opendde` (checkpoint and search databases); HF manifest revision `eddd563c…` | Apache-2.0 code; checkpoint terms `UNKNOWN, operator to confirm` | MSA/template network path required; GPU required; memory/walltime `UNKNOWN, operator to confirm` |
+
+### Failure and rollback
+
+- **Live test fails partway.** The one-off live-test worker exits non-zero and
+  the running stack is untouched: no receipt or binding is published. Leave the
+  candidate staged, keep the stack up, and record the failure with its logs. Do
+  not edit a receipt or build record.
+- **Abandon a staged candidate.** Before any prepared restart, remove
+  `<sif>.next` and `<sif>.next.build.json`. A bare `prepare` also replaces a
+  stale candidate. The prepared restart validates staged images inside
+  `activate-revision`, after `stop`, so an invalid `.next` left in place aborts
+  the walk with the stack already down; if that happens, run `restart.sh up`,
+  remove the candidate, and retry. Remove a `<sif>.promote-backup` only after
+  confirming the active SIF is the intended one.
+- **Genuine regression or stale stamp.** Treat a failure as a candidate
+  regression only when the candidate's `sif_sha256`,
+  `build_provenance_digest`, `configuration_digest` and
+  `test_definition_digest` all match the values resolved from the current tree.
+  If any differ — including when `CONFIG_DIR/.deploy-stamp` names an older
+  commit — the failure is an identity/stamp mismatch: rebuild from the current
+  tree and re-run the live test before changing code.
+
+### Verification
+
+`GET /compute/api/auth/admin/runners` (or `runner-status --all --json`) must
+show, for each of the five, `readiness.status == "READY"`,
+`readiness.reason_code == "READY"`, `readiness.next_action == "none"`,
+`readiness.active_image.state == "ACTIVE"`, `readiness.evidence.receipt_valid
+== true`, `readiness.evidence.build_provenance_current == true`, and
+`readiness.active_image.sha256` equal to the accepted candidate's digest. A
+submission for a family that is not READY is refused with HTTP 503 carrying
+`runner`, `status`, `reason`, `message` and `next_action`.
+
+For every untouched family, compare `status`, `reason_code`,
+`build_provenance_digest` and `sif_sha256` with a snapshot taken before the
+window; they must be unchanged. `foundry` is the named control. The untouched
+set is deployment-defined by `ENABLED_TASKRUNNERS`, so record that snapshot
+rather than assuming a fixed roster.
+
 See [Deployment Control Reference](deployment-control.md) and
 [Runner Family Protocol](../runner-guide/runner-family-protocol.md) for the
 readiness states and promotion predicate.

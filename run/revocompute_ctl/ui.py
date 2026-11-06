@@ -34,9 +34,6 @@ USAGE = """Usage: bash run/restart.sh [setup|prepare|build|live-test|runner-stat
            activation-preflight --runners <family>[,<family>...] [--json]
                                                List each family's readiness,
                                                build identity, and next action.
-                                               Run after `prepare` to see candidate
-                                               rows; an instance-resolved row describes
-                                               the deployment, not a pending candidate.
 
        Runtime Bundle rollback (identity switch only):
            rollback-bundle --runner <family> --digest <sha256:...>
