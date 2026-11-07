@@ -59,6 +59,18 @@ def test_opendde_publishes_full_confidence_only_as_optional_storyboard_data(monk
                 }
             ),
             "job/seed_101/predictions/job_full_data_sample_0.json": json.dumps({"token_pair_pae": [[1]]}),
+            "inference_settings.json": json.dumps(
+                {
+                    "upstream_version": "1.2.0",
+                    "dtype": "fp32",
+                    "enable_tf32": True,
+                    "use_tfg_guidance": False,
+                    "constraint_present": False,
+                    "trimul_kernel": "torch",
+                    "triatt_kernel": "torch",
+                    "enable_fusion": False,
+                }
+            ),
         },
     )
 

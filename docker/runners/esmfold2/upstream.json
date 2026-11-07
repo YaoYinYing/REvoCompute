@@ -1,0 +1,20 @@
+{
+  "repository": "https://github.com/Biohub/esm",
+  "upstream_version": "3.4.2",
+  "upstream_commit": "8f0834cbc350aeaf507f755475873f7c61fa44a1",
+  "upstream_commit_date": "2026-10-29",
+  "install_method": "source at upstream_commit installed with --no-deps over requirements.lock",
+  "code_license": "MIT",
+  "runtime_network": false,
+  "python_requires": ">=3.12",
+  "cuda_minor": "12.8",
+  "weights": {
+    "asset_root": "/mnt/db/weights/revocompute/esmfold2",
+    "channel": "https://huggingface.co/biohub/ESMFold2",
+    "standard_revision": "8fc3ff471022fdce52c77030685eb775de0c00a3",
+    "fast_revision": "c6c7958d63f5f2f1f0fed0bb9462316f8ccceea6",
+    "esmc_revision": "45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a",
+    "license": "MIT"
+  },
+  "notes": "v3.4.2 replaces the cuEquivariance kernel backend with upstream Triton kernels (reference/fused/fast) and defaults the ESMC backbone to fp8. The adapter selects fused by default and deliberately retains ESMC_PRECISION=bf16; every prediction records both the kernel backend and the bf16 choice. The fast backend enables an approximate bf16 MSA-encoder triangle multiplication and remains opt-in. The provisioned standard/fast/ESMC-6B weights are unchanged and remain hash-verified before loading."
+}

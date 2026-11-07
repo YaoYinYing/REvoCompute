@@ -16,9 +16,11 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 from conftest import _load_pssm_module, _test_client_auth
 from revocompute.artifact_evidence import (
     staged_identity_describes,
@@ -30,7 +32,7 @@ from revocompute.runner_admin_view import fleet_view
 from revocompute.runner_host import ServerHostPaths
 from revocompute.runner_live_test import candidate_receipt_valid, load_validation_identity
 from revocompute.runner_readiness import bundle_digest, load_instance_families, resolve_runner_readiness
-from revocompute.runner_registry import RegistryError, _build_provenance
+from revocompute.runner_registry import RegistryError, _build_provenance, sif_stale
 from revocompute.serialization import sha256_file
 from revocompute_ctl.promotion import promote_sifs
 
@@ -49,7 +51,7 @@ class _AvailableInfrastructure:
         return None
 
 
-def _deployment(module) -> tuple[ServerHostPaths, object]:
+def _deployment(module, family_name: str = "cpu_runner") -> tuple[ServerHostPaths, object]:
     state = ServerHostPaths(
         server=module.CONFIG.server_dir,
         config=str(Path(module.CONFIG.server_dir) / "config"),
@@ -65,7 +67,7 @@ def _deployment(module) -> tuple[ServerHostPaths, object]:
             "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
         },
     )
-    family = next(item for item in load_instance_families(state) if item.name == "cpu_runner")
+    family = next(item for item in load_instance_families(state) if item.name == family_name)
     return state, family
 
 
@@ -893,3 +895,124 @@ def test_a_record_naming_another_provenance_still_agrees_with_the_host(monkeypat
         promoted = False
     assert (staged.next_action == "promote") is promoted
     assert active.read_bytes() == (b"validated-candidate-B" if promoted else b"validated-active-A")
+
+
+def test_source_identity_documentation_observation_keeps_accepted_build_ready(monkeypatch, tmp_path):
+    """A non-build provenance note cannot stale an accepted Foundry image."""
+    runner_root = tmp_path / "runner-source"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "fixtures" / "runners", runner_root)
+    source_identity_root = runner_root / "source_identity"
+    shutil.copytree(runner_root / "cpu_runner", source_identity_root)
+    plugin_path = source_identity_root / "plugin.yaml"
+    plugin = yaml.safe_load(plugin_path.read_text(encoding="utf-8"))
+    plugin["id"] = "source_identity"
+    plugin["runtime"].update(
+        definition="cpu_runner.def",
+        image_artifact="source_identity_v1.sif",
+        build_inputs=["source_identity/cpu_runner.def", "source_identity/run.sh"],
+        runtime_overlay=["source_identity/runtime.py"],
+        entrypoint=["bash", "/app/run.sh"],
+    )
+    plugin_path.write_text(yaml.safe_dump(plugin, sort_keys=False), encoding="utf-8")
+    task_path = source_identity_root / "tasks" / "predict" / "task.yaml"
+    task = yaml.safe_load(task_path.read_text(encoding="utf-8"))
+    task["id"] = "source_identity"
+    task_path.write_text(yaml.safe_dump(task, sort_keys=False), encoding="utf-8")
+    test_path = source_identity_root / "test.yaml"
+    cases = yaml.safe_load(test_path.read_text(encoding="utf-8"))
+    cases["collections"]["smoke"]["cases"][0]["task"] = "source_identity"
+    test_path.write_text(yaml.safe_dump(cases, sort_keys=False), encoding="utf-8")
+    (source_identity_root / "README.md").write_text("Retained Foundry source pin.\n", encoding="utf-8")
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "RUNNER_USERNAME": "revodesign",
+            "RUNNER_GROUP": "revodesign",
+            "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
+        },
+        runner_root=runner_root,
+    )
+    state, family = _deployment(module, "source_identity")
+    active = Path(family.slurm_image)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_bytes(b"accepted-source_identity-image")
+    _record_artifact(state, family, active)
+
+    before = resolve_runner_readiness(state, family)
+    assert before.ready is True, before
+    assert before.build_provenance_current is True
+    assert sif_stale(state, family) is False
+    build_digest = _build_provenance(state, family)["build_provenance_digest"]
+
+    notes = family.root / "README.md"
+    notes.write_text(
+        notes.read_text(encoding="utf-8")
+        + "\nUpstream production HEAD has a documentation-only delta.\n",
+        encoding="utf-8",
+    )
+
+    after = resolve_runner_readiness(state, family)
+    assert _build_provenance(state, family)["build_provenance_digest"] == build_digest
+    assert sif_stale(state, family) is False
+    assert after.status is before.status
+    assert after.ready is True
+    assert after.build_provenance_current is True
+
+
+def test_merged_build_input_with_the_old_sif_is_refused(monkeypatch, tmp_path):
+    """A source merge does not activate an installed SIF built from the old recipe."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "RUNNER_USERNAME": "revodesign",
+            "RUNNER_GROUP": "revodesign",
+            "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
+        },
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    module.app.config["infrastructure_readiness"] = _AvailableInfrastructure()
+    queued: list[bool] = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_args, **_kwargs: queued.append(True))
+
+    state, family = _deployment(module)
+    active = Path(family.slurm_image)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_bytes(b"installed-image-from-old-recipe")
+    _record_artifact(state, family, active)
+    assert resolve_runner_readiness(state, family).ready is True
+
+    # The merged source changes a declared build input while the installed SIF
+    # remains the artifact the old recipe produced.
+    run_script = family.root / "run.sh"
+    run_script.write_text(run_script.read_text(encoding="utf-8") + "\n# merged change\n", encoding="utf-8")
+
+    verdict = resolve_runner_readiness(state, family)
+    assert verdict.ready is False
+    assert verdict.status.value == "BUILD_STALE"
+    assert verdict.reason_code == "BUILD_PROVENANCE_STALE"
+    assert verdict.build_provenance_current is False
+    assert sif_stale(state, family) is True
+
+    _publish(module, verdict)
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=_test_client_auth(module),
+        data=_payload(),
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 503, response.get_data(as_text=True)
+    body = response.get_json()
+    # The refusal is operator-visible: it names the affected family, the stale
+    # build identity, and the recovery, so a bare source merge cannot cause a
+    # silent, unexplained admission outage.
+    assert body["runner"] == "cpu_runner"
+    assert body["status"] == "BUILD_STALE"
+    assert body["reason"] == "BUILD_PROVENANCE_STALE"
+    assert body["next_action"] == "build-sif"
+    assert queued == []

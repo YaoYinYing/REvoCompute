@@ -70,6 +70,10 @@ input_summary: One current upstream AlphaFold 3 JSON input document; the documen
 output_summary: Ranked mmCIF structures, confidence data, ranking scores, and the
   processed data-pipeline input.
 considerations:
+- "AlphaFold 3 v3.0.5+ validates chain IDs, templates, and user CCD input more
+  strictly and uses MessagePack CCD data built into the image. The no-MSA,
+  supplied-MSA, and template paths remain supported; invalid input is refused by
+  the upstream pipeline."
 - "Empty inline `unpairedMsa` and `pairedMsa` fields select single-sequence inference:
   the data pipeline materializes a query-only MSA, and a real production result
   completed with this input. File-referenced `unpairedMsaPath`, `pairedMsaPath`, and

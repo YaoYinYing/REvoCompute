@@ -7,9 +7,6 @@ biotite==1.5.0
 boto3==1.40.55
 brotli==1.1.0
 cloudpathlib==0.22.0
-# The pinned ESM source publishes cueq12 as the CUDA 12-compatible backend.
-cuequivariance-ops-torch-cu12==0.8.1
-cuequivariance-torch==0.8.1
 dna-features-viewer==3.1.5
 einops==0.8.1
 huggingface-hub==0.35.3
@@ -22,4 +19,5 @@ rdkit==2025.9.1
 safetensors==0.6.2
 scikit-learn==1.7.2
 tenacity==9.1.2
+triton==3.6.*
 zstd==1.5.7.2

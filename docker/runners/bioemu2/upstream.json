@@ -2,8 +2,10 @@
   "repository": "https://github.com/microsoft/bioemu2",
   "upstream_version": "0.1.0rc0",
   "upstream_tag": "v0.1.0rc0",
-  "upstream_commit": "0d58383376d717fa0192ac02629256f8aeda095a",
+  "upstream_commit": "6d1ca744fa8ed285edafae7b98da65205bf00fd3",
+  "upstream_commit_date": "2026-11-03",
   "release_date": "2026-10-20",
+  "install_method": "source at upstream_commit installed with --no-deps over requirements.lock",
   "code_license": "MIT",
   "model_weights_license": "MIT (stated by the microsoft/bioemu2 model card)",
   "citation_doi": null,
@@ -15,6 +17,7 @@
   "cuda_minor": "12.6",
   "gpu_compute_capability_minimum": "7.0 for the cuda12 extra this Runner pins; upstream's CUDA 13 extra requires 7.5",
   "gpu_memory_tested_by_upstream": "80 GB A100 is the smallest device upstream tested",
+  "notes": "Upstream has not published a wheel newer than v0.1.0rc0. The source HEAD keeps the 0.1.0rc0 package version, so the image records the executed commit explicitly rather than presenting the release wheel as newer code. HEAD also adds native pdbx_formal_charge CIF metadata and stricter CIF parsing; the Runner publishes upstream files unchanged, so the candidate-image acceptance step must verify the topology/result consumer.",
   "weights": {
     "channel": "https://huggingface.co/microsoft/bioemu2",
     "checkpoint": "checkpoints/bioemu2-preview/checkpoint.ckpt",
@@ -24,9 +27,11 @@
     "config_size": 1672,
     "config_sha256": "90326e3b77e524420f5aad68a777355ecbbbe07bc006ddf88f7ee921b0f772e3"
   },
-  "pypi": {
+  "package": {
     "name": "bioemu2",
     "version": "0.1.0rc0",
-    "wheel_sha256": "4f87583ec03fac0119acb96e1f6302c5800442452d3520f2017f034e62b0990b"
+    "installed_from": "source",
+    "source_commit": "6d1ca744fa8ed285edafae7b98da65205bf00fd3",
+    "dependency_manifest": "bioemu2/requirements.lock"
   }
 }

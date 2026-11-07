@@ -2,11 +2,15 @@ Bootstrap: docker
 From: nvidia/cuda:12.9.1-base-ubuntu24.04
 
 %post
+    # Fail on the first broken step: Apptainer reports only the section's last
+    # command, so a failed native build or install would otherwise leave a green
+    # image.
+    set -e
     apt-get update --quiet
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3.12 python3.12-dev python3-pip python3-venv git wget gcc g++ make zlib1g-dev zstd ca-certificates patch
     git init /app/alphafold
     git -C /app/alphafold remote add origin https://github.com/google-deepmind/alphafold3.git
-    git -C /app/alphafold fetch --depth 1 origin c0f97eda2f1f482fd94d3a38bece18c7069b4a5c
+    git -C /app/alphafold fetch --depth 1 origin 37e3c57fe123fc51f6d96236320b8b657afb11ac
     git -C /app/alphafold checkout --detach FETCH_HEAD
     rm -rf /app/alphafold/.git
     python3 -m pip install --break-system-packages uv==0.9.24
@@ -16,7 +20,11 @@ From: nvidia/cuda:12.9.1-base-ubuntu24.04
     echo 'ca70d94fd0cf271bd7063423aabb116d42de533117343a9b27a65c17ff06fbf3 /hmmer_build/hmmer-3.4.tar.gz' | sha256sum --check
     cd /hmmer_build
     tar zxf hmmer-3.4.tar.gz
+    # Upstream v3.0.5+ applies these three pinned patches for the C++ MSA
+    # featurisation path; the parallel-FASTA patch changes jackhmmer internals.
     patch -p0 < /app/alphafold/docker/jackhmmer_seq_limit.patch
+    patch -p0 < /app/alphafold/docker/easel_fast_fasta_parsing.patch
+    patch -p0 < /app/alphafold/docker/jackhmmer_parallel_fasta.patch
     cd hmmer-3.4
     ./configure --prefix=/hmmer
     make -j
@@ -49,10 +57,19 @@ From: nvidia/cuda:12.9.1-base-ubuntu24.04
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test
+    # Fail on the first broken check: without this, a failed import is masked by
+    # the later `test` commands and %test proves nothing.
+    set -e
     command -v jackhmmer
-    python -c 'import alphafold3'
+    python -c 'import alphafold3; from importlib.metadata import version; assert version("alphafold3").startswith("3.0.5"), version("alphafold3")'
+    # build_data writes MessagePack CCD data into the package; prove it loads.
+    python -c 'from alphafold3.constants import chemical_components; ccd = chemical_components.Ccd(); assert len(ccd) > 0'
     python -c "from importlib.metadata import version; assert version('nvidia-cuda-runtime-cu12').startswith('12.9.')"
     test -d /opt/revocompute/runtime
+
+%labels
+    org.revocompute.alphafold3.commit 37e3c57fe123fc51f6d96236320b8b657afb11ac
+    org.revocompute.alphafold3.version 3.0.5
 
 %runscript
     exec /bin/bash /opt/revocompute/runtime/alphafold3/run.sh "$@"

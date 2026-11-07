@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/cytokineking/FreeBindCraft",
+  "upstream_version": "1.0.7",
+  "upstream_tag": "v1.0.7",
+  "upstream_commit": "8a10b93a9b42487e7218ad1435a6a25d0e91afc8",
+  "upstream_commit_date": "2026-10-29",
+  "previous_commit": "8b8d4c4627da06f084f46b7007450048fe3ca22f",
+  "install_method": "source at upstream_commit with installation/linux-cuda12-requirements.txt",
+  "code_license": "MIT",
+  "model_weights_license": "CC-BY-4.0 for the mounted AlphaFold2 2022-12-06 parameters; the provisioned params LICENSE file is CC BY 4.0",
+  "python_requires": "3.12 for the pinned Linux CUDA profile",
+  "cuda_minor": "12.9",
+  "dependency_manifest": "installation/linux-cuda12-requirements.txt at upstream_commit",
+  "runtime_network": false,
+  "notes": "v1.0.7 adds Apple Silicon support and Linux install/check helpers; it is not docs-only. The runner uses the upstream-tested Linux CUDA 12.9 pip profile (Python 3.12, jax[cuda12] 0.11.2, openmm 8.6.1, colabdesign 8fd167de) and the PyRosetta-free runtime mode: `--no-pyrosetta` selects OpenMM relaxation with PDBFixer preparation and open-source scoring (FASPR side-chain packing, FreeSASA/Biopython SASA, sc-rs shape complementarity) instead of PyRosetta FastRelax. Upstream validated that profile on an RTX 5090; it does not establish fit for other production GPUs."
+}

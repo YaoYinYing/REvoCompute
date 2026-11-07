@@ -6,6 +6,7 @@ runtime:
   definition: freebindcraft.def
   build_inputs:
   - freebindcraft/run.sh
+  - freebindcraft/upstream.json
   # Family adapter code is still baked here; migration to runtime_overlay is deferred (docs/runner-guide/runtime-bundles.md).
   runtime_overlay:
   - common/runtime/task_context.sh

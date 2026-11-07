@@ -58,6 +58,7 @@ nav:
       - Public Access and TLS Termination: operator-guide/public-access.md
       - Deployment Lifecycle: operator-guide/deployment.md
       - Deployment Control Reference: operator-guide/deployment-control.md
+      - Source Merges and Runner Activation: operator-guide/source-merge-activation.md
       - Demo Deployment: operator-guide/demo-deployment.md
       - SLURM + Apptainer Deployment: operator-guide/slurm-deployment.md
       - Runner Configuration and Resource Policy: operator-guide/runner-configuration.md

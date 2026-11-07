@@ -961,9 +961,19 @@ def test_an_unaccounted_run_reports_its_stage_running_when_the_scheduler_says_so
 
     # The observation is the live allocation, so the stage is RUNNING while the
     # scientific command is still executing -- never from the post-exit fallback.
+    # The allocation-start observation callback can land after the command-start
+    # marker under load, so wait for the status within the same deadline while
+    # confirming the command has neither finished nor exited.
     assert started.is_file()
-    run = database.list_stage_runs(task_id)[0]
-    assert run["status"] == stage_state.RUNNING
+    run = None
+    while time.monotonic() < deadline:
+        assert not done.is_file()
+        assert process.poll() is None
+        run = database.list_stage_runs(task_id)[0]
+        if run["status"] == stage_state.RUNNING:
+            break
+        time.sleep(0.02)
+    assert run is not None and run["status"] == stage_state.RUNNING
     assert not done.is_file()
     assert process.poll() is None
     # Unaccounted means uncharged: no allocation fact and no ledger row exist.

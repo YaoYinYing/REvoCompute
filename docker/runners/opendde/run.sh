@@ -57,11 +57,11 @@ mkdir -p "$output_dir"
 
 # Inference runs from a task-private writable copy of the complete input
 # snapshot.  Production input snapshots are deliberately mounted read-only, and
-# OpenDDE 1.1.1 still writes template mmCIF downloads beneath
-# ``$OPENDDE_ROOT_DIR`` and has historically written ``*-update-msa.json`` next
-# to the input JSON.  The copy also holds the writable runtime root below and
-# preserves relative references to auxiliary inputs.
-# Verified against opendde 1.1.1: the MSA client redirects its generated JSON to
+# OpenDDE 1.2.0 still writes template mmCIF downloads beneath
+# ``$OPENDDE_ROOT_DIR`` and may write ``*-update-msa.json`` next to the input
+# JSON.  The copy also holds the writable runtime root below and preserves
+# relative references to auxiliary inputs.
+# Verified against opendde 1.2.0: the MSA client redirects its generated JSON to
 # a per-input directory under the output directory, but the writable runtime
 # root is still required, so the snapshot copy is retained.
 case "$input_file" in
@@ -131,6 +131,43 @@ USE_TEMPLATE="$(_parse_param use_template)"
 SEEDS="$(_parse_param seeds)"
 DTYPE="$(_parse_param dtype)"
 CHECKPOINT="$(_parse_param checkpoint)"
+ENABLE_CACHE="$(_parse_param enable_cache)"
+ENABLE_TF32="$(_parse_param enable_tf32)"
+DETERMINISTIC="$(_parse_param deterministic)"
+NEED_ATOM_CONFIDENCE="$(_parse_param need_atom_confidence)"
+USE_DEFAULT_PARAMS="$(_parse_param use_default_params)"
+USE_TFG_GUIDANCE="$(_parse_param use_tfg_guidance)"
+
+# v1.2.0 validates the input JSON constraint field instead of ignoring it.
+# Contact and epitope guidance affect the prediction only when TFG is enabled;
+# upstream merely warns for contact without it, so refuse here rather than
+# publish an unguided structure as if the constraint had been applied.
+CONSTRAINT_PRESENT=$(python3 - "$writable_input_file" "$USE_TFG_GUIDANCE" <<'PY'
+import json
+import sys
+
+path, guided = sys.argv[1], sys.argv[2] == "true"
+document = json.load(open(path, encoding="utf-8"))
+jobs = document if isinstance(document, list) else [document]
+constraint_present = False
+for job in jobs:
+    constraint = job.get("constraint")
+    if constraint is None:
+        continue
+    if not isinstance(constraint, dict):
+        raise SystemExit("OpenDDE refuses a non-object constraint field")
+    if constraint.get("contact") and not guided:
+        raise SystemExit(
+            "constraint.contact requires use_tfg_guidance; refusing to run an unguided prediction"
+        )
+    if constraint.get("epitope") is not None and not guided:
+        raise SystemExit(
+            "constraint.epitope requires use_tfg_guidance; refusing to run an unguided prediction"
+        )
+    constraint_present = True
+print("true" if constraint_present else "false")
+PY
+)
 
 echo "Processing $input_file ..."
 echo "Output directory: $output_dir"
@@ -138,11 +175,14 @@ echo "Model: $MODEL_NAME  Checkpoint: $CHECKPOINT  Samples: $NUM_SAMPLES  Steps:
 echo "MSA: $USE_MSA  Template: $USE_TEMPLATE"
 
 # OpenDDE inference — MSA + template search happens inside opendde pred
-# if enabled (requires network access and search databases).
+# if enabled (requires network access and search databases). v1.2.0 keeps the
+# unified pred command and its independent --use_msa/--use_template flags; the
+# new inputprep command always searches MSA, template, and RNA together, so it
+# cannot preserve those toggles.
 # Use the supported PyTorch triangle kernels and disable efficient fusion.
 # The auto-selected cuequivariance/Triton path compiles a launcher at runtime
 # and therefore requires a C toolchain, which is intentionally absent from the
-# production inference image.  These flags still exist in opendde 1.1.1.
+# production inference image.  These flags still exist in opendde 1.2.0.
 echo "REVODESIGN_STAGE:opendde"
 
 opendde_args=(pred \
@@ -158,12 +198,12 @@ opendde_args=(pred \
     --trimul_kernel torch \
     --triatt_kernel torch \
     --enable_fusion false \
-    --enable_cache "$(_parse_param enable_cache)" \
-    --enable_tf32 "$(_parse_param enable_tf32)" \
-    --deterministic "$(_parse_param deterministic)" \
-    --need_atom_confidence "$(_parse_param need_atom_confidence)" \
-    --use_default_params "$(_parse_param use_default_params)" \
-    --use_tfg_guidance "$(_parse_param use_tfg_guidance)" \
+    --enable_cache "$ENABLE_CACHE" \
+    --enable_tf32 "$ENABLE_TF32" \
+    --deterministic "$DETERMINISTIC" \
+    --need_atom_confidence "$NEED_ATOM_CONFIDENCE" \
+    --use_default_params "$USE_DEFAULT_PARAMS" \
+    --use_tfg_guidance "$USE_TFG_GUIDANCE" \
     --use_rna_msa false)
 [[ "$CHECKPOINT" == "antibody_antigen" ]] && opendde_args+=(--load_checkpoint_path "$OPENDDE_ROOT_DIR/checkpoint/opendde_abag.pt")
 [[ -n "$SEEDS" ]] && opendde_args+=(--seeds "$SEEDS")
@@ -182,6 +222,58 @@ if ! find "$output_dir" -type f -size +0c \
     echo "OpenDDE exited without producing a structure artifact" >&2
     exit 1
 fi
+
+# v1.2.0 changed its own precision defaults and began interpreting constraints.
+# The Runner passes precision/TFG flags explicitly, even with
+# --use_default_params (which upstream applies only to cycle and step), and
+# passes the input JSON unchanged. Preserve requested and effective values with
+# their sources so the result reports what the upstream command received.
+python3 - "$output_dir/inference_settings.json" "$DTYPE" "$ENABLE_TF32" \
+    "$USE_TFG_GUIDANCE" "$CONSTRAINT_PRESENT" "$USE_DEFAULT_PARAMS" <<'PY'
+import json
+import sys
+
+path, dtype, enable_tf32, use_tfg_guidance, constraint_present, use_default_params = sys.argv[1:7]
+enable_tf32 = enable_tf32 == "true"
+use_tfg_guidance = use_tfg_guidance == "true"
+constraint_present = constraint_present == "true"
+use_default_params = use_default_params == "true"
+settings = {
+    "upstream_version": "1.2.0",
+    "requested": {
+        "dtype": dtype,
+        "enable_tf32": enable_tf32,
+        "use_tfg_guidance": use_tfg_guidance,
+        "constraint_present": constraint_present,
+        "use_default_params": use_default_params,
+    },
+    "effective": {
+        "dtype": dtype,
+        "enable_tf32": enable_tf32,
+        "use_tfg_guidance": use_tfg_guidance,
+        "constraint": {
+            "present": constraint_present,
+            "input_handling": "passed_unchanged_to_upstream",
+            "guidance": "tfg_enabled" if constraint_present and use_tfg_guidance else (
+                "tfg_disabled" if constraint_present else "not_applicable"
+            ),
+        },
+    },
+    "effective_sources": {
+        "dtype": "explicit_cli_argument",
+        "enable_tf32": "explicit_cli_argument",
+        "use_tfg_guidance": "explicit_cli_argument",
+        "constraint": "input_json_passthrough",
+    },
+    "upstream_default_params_overrides": ["cycle", "step"] if use_default_params else [],
+    "trimul_kernel": "torch",
+    "triatt_kernel": "torch",
+    "enable_fusion": False,
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(settings, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
 
 touch "${output_dir}/task_finished"
 echo "OpenDDE inference complete."

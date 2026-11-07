@@ -3,15 +3,27 @@ From: python:3.11-slim
 
 %files
     opendde/run.sh /app/revocompute/run.sh
+    opendde/requirements.lock /opt/opendde-requirements.lock
 
 %post
+    set -e
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends hmmer kalign
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends hmmer kalign git
     rm -rf /var/lib/apt/lists/*
-    python -m pip install --no-cache-dir uv
-    # Pinned upstream release: OpenDDE 1.1.1 (PyPI, 2026-09-02). Provenance is
-    # recorded in opendde/upstream.json.
-    uv pip install --system --no-cache "opendde[gpu]==1.1.1"
+    # 0.12.0 rejects a requirements file passed as a positional argument; the
+    # lock must be selected with -r. Pin the version this definition was
+    # converted and checked against.
+    python -m pip install --no-cache-dir uv==0.12.0
+    uv pip install --system --no-cache --require-hashes -r /opt/opendde-requirements.lock
+    rm -f /opt/opendde-requirements.lock
+    # OpenDDE v1.2.0 source commit; provenance is recorded in opendde/upstream.json.
+    git init /opt/opendde-src
+    git -C /opt/opendde-src remote add origin https://github.com/aurekaresearch/OpenDDE.git
+    git -C /opt/opendde-src fetch --depth 1 origin 9d0d9c975178074c1ce722d2d6eefac8b7057062
+    git -C /opt/opendde-src checkout --detach FETCH_HEAD
+    uv pip install --system --no-cache --no-deps /opt/opendde-src
+    printf '%s\n' 9d0d9c975178074c1ce722d2d6eefac8b7057062 > /opt/opendde-source-commit
+    rm -rf /opt/opendde-src/.git
     chmod +x /app/revocompute/run.sh
     # Reserved Runtime Bundle mount point.  This image is the *environment*;
     # REvoCompute's entrypoint and shared runtime helpers arrive at execution
@@ -24,9 +36,18 @@ From: python:3.11-slim
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test
+    # Apptainer does not fail the section on an intermediate command's exit
+    # status, so the identity checks below would be masked without this.
+    set -e
     command -v opendde
+    python -c 'from opendde.version import __version__; assert __version__ == "1.2.0", __version__'
+    grep -qx 9d0d9c975178074c1ce722d2d6eefac8b7057062 /opt/opendde-source-commit
     test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
+
+%labels
+    org.revocompute.opendde.commit 9d0d9c975178074c1ce722d2d6eefac8b7057062
+    org.revocompute.opendde.version 1.2.0
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

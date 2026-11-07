@@ -73,15 +73,14 @@ sharing unsafe — see the [runtime-family reference](../reference/runtime-famil
 `colabfold_af2` remain separate because the official AlphaFold and pinned
 ColabFold images have different dependency and database contracts.
 
-**OpenCL ICD note:** GPU tasks that use OpenMM relax (e.g. FreeBindCraft) prefer
-the OpenCL platform and require the OpenCL ICD loader plus an NVIDIA ICD vendor
-file. Install `ocl-icd-libopencl1` and create
+**OpenCL ICD note:** GPU tasks that select the OpenMM OpenCL platform require
+the OpenCL ICD loader plus an NVIDIA ICD vendor file. Install `ocl-icd-libopencl1` and create
 `/etc/OpenCL/vendors/nvidia.icd` containing `libnvidia-opencl.so.1`. This
 enables `openmm.Platform.getPlatformNames()` to report `OpenCL` alongside `CPU`
-and (if CUDA wheels are installed) `CUDA`. The environment variable
-`OPENMM_PLATFORM_ORDER=OpenCL,CUDA` sets the preferred order (FreeBindCraft
-sets this). Without the ICD, OpenMM falls back to CPU, which may be significantly
-slower.
+and (if CUDA wheels are installed) `CUDA`. A family that sets
+`OPENMM_PLATFORM_ORDER=OpenCL,CUDA` prefers that order; without the ICD, OpenMM
+falls back to CPU, which may be significantly slower. FreeBindCraft instead
+selects the CUDA platform directly from its pinned CUDA wheel profile.
 
 For CPU-only tasks, omit `--nv` (Apptainer/SLURM) and do not register the ICD.
 

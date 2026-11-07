@@ -145,7 +145,7 @@ upstream AlphaFold 3 JSON contract and runs a CPU-only data pipeline followed
 by GPU inference. The immutable handoff is the job-derived `*_data.json` under
 the task result tree; prediction outputs remain in a separate modeling tree.
 The production image pins upstream revision
-`c0f97eda2f1f482fd94d3a38bece18c7069b4a5c`. The site's historical
+`37e3c57fe123fc51f6d96236320b8b657afb11ac`. The site's historical
 `/repo/alphafold3` `native-run` branch is only an operator reference for the
 local database layout and is not image source code.
 

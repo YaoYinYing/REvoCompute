@@ -182,7 +182,7 @@ database pipeline without a GPU and records the generated `<job>_data.json`. Sta
 changed, runs inference on a GPU without repeating the database pipeline, and publishes upstream mmCIF, confidence,
 ranking, provenance, and terms files through the generic Result Workspace.
 
-The image is built from google-deepmind/alphafold3 revision `c0f97eda2f1f482fd94d3a38bece18c7069b4a5c`. The local
+The image is built from google-deepmind/alphafold3 revision `37e3c57fe123fc51f6d96236320b8b657afb11ac`. The local
 historical `/repo/alphafold3` `native-run` checkout informed only the deployment's database mount layout.
 `docker/runners/alphafold3/runner.yaml` narrowly mounts the AF3 database root, reduced BFD, and
 `/mnt/db/weights/alphafold3` read-only into scheduled containers. These paths and assets are absent from public catalog

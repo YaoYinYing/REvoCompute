@@ -633,6 +633,7 @@ class RestartFlags:
     all_runners: bool = False
     as_json: bool = False
     digest: str = ""
+    runners: tuple[str, ...] = ()
 
 
 class StepRegistry:

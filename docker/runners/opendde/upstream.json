@@ -1,13 +1,24 @@
 {
   "repository": "https://github.com/aurekaresearch/OpenDDE",
-  "upstream_version": "1.1.1",
-  "release_date": "2026-09-02",
-  "package_channel": "PyPI opendde[gpu]==1.1.1 (wheel and sdist published 2026-09-02T08:10:21Z)",
-  "previous_version": "1.0.3",
-  "previous_release_date": "2026-08-05",
+  "upstream_version": "1.2.0",
+  "upstream_tag": "v1.2.0",
+  "upstream_commit": "9d0d9c975178074c1ce722d2d6eefac8b7057062",
+  "release_date": "2026-10-09",
+  "install_method": "source at upstream_commit installed with --no-deps over requirements.lock",
+  "previous_version": "1.1.1",
+  "previous_release_date": "2026-09-02",
   "python_requires": ">=3.11,<3.14",
   "code_license": "Apache-2.0",
   "model_assets": "https://huggingface.co/aurekaresearch/OpenDDE (checkpoint manifest revision eddd563ce96571f784012edd8f045181c8f8627d)",
   "runtime_network": true,
-  "notes": "gpu extra pins triton 3.3.1 and cuequivariance 0.10.0; the production image intentionally omits a C toolchain, so run.sh keeps the PyTorch triangle kernels (--trimul_kernel torch --triatt_kernel torch --enable_fusion false). 1.1.1 writes MSA preprocessing output under <out_dir>/.opendde_preprocessed/<digest>/ but still fetches missing template mmCIF files beneath $OPENDDE_ROOT_DIR/search_database/mmcif."
+  "cuda_minor": "12.6",
+  "gpu_compute_capability": "8.0 on the production A100-PCIE-40GB host; upstream publishes no minimum",
+  "gpu_memory": "Not published by upstream. The prior image at deploy 57c8114 peaked at 5699 MiB in production task 2f16c036ae748053fe93825e17e464d4 (job 310985); no candidate-image measurement has been performed.",
+  "runtime_resources": "Single-GPU inference; that prior-image run used 8 CPUs and 3.6 GB maximum RSS. MSA and template search reach public services unless disabled. The image omits a C toolchain and runs the PyTorch triangle kernels.",
+  "notes": "gpu extra pins triton 3.3.1 and cuequivariance 0.10.0; the production image intentionally omits a C toolchain, so run.sh keeps the PyTorch triangle kernels (--trimul_kernel torch --triatt_kernel torch --enable_fusion false). v1.2.0 keeps the v1.1.1 output layout. prep/inputprep and pred already coexist before v1.2.0; inputprep is additive and always searches MSA, template, and RNA together, so the Task keeps pred and its independent MSA/template toggles. v1.2.0 changed its own precision defaults to bf16 and TF32 off, while this Runner keeps sending the explicit Task values (fp32 and TF32 on by default). v1.2.0 also interprets and validates the input JSON constraint field (contact, movable_chains, epitope); the Runner refuses contact or epitope without TFG guidance and publishes the effective settings.",
+  "behavior_changes": {
+    "dtype": "upstream default bf16 (v1.1.1 default fp32); the Runner sends the Task value, whose default remains fp32",
+    "enable_tf32": "upstream default false (v1.1.1 default true); the Runner sends the Task value, whose default remains true",
+    "constraint": "the input JSON constraint field is now interpreted and validated instead of warned and ignored; unguided contact/epitope requests are refused"
+  }
 }
