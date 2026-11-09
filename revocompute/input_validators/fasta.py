@@ -204,6 +204,8 @@ def validate_single_protein_sequence(path: str) -> str | None:
         if stripped.startswith(">"):
             headers += 1
         else:
+            if any(char in _FASTA_WHITESPACE for char in stripped):
+                return "Single-sequence input must not contain whitespace inside the sequence"
             residues += len(stripped)
     if headers != 1:
         return "Single-sequence input must contain exactly one FASTA record"

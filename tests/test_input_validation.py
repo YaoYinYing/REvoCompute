@@ -130,6 +130,7 @@ def test_single_protein_sequence_requires_exactly_one_non_empty_record(tmp_path)
     one = _write(tmp_path, b">h\nACDEFG\n", "one.fasta")
     two = _write(tmp_path, b">a\nACDE\n>b\nFGHI\n", "two.fasta")
     empty = _write(tmp_path, b">h\n", "empty.fasta")
+    spaced = _write(tmp_path, b">h\nACDE FG\n", "spaced.fasta")
     malformed = _write(tmp_path, b">h\nACD2EF\n", "malformed.fasta")
 
     for path in (one,):
@@ -142,6 +143,9 @@ def test_single_protein_sequence_requires_exactly_one_non_empty_record(tmp_path)
     assert "exactly one FASTA record" in validate_logical_input(str(two), "fasta", "single_protein_sequence")
     assert "at least one residue" in validate_input_file(
         str(empty), empty.name, logical_type="single_protein_sequence"
+    )
+    assert "inside the sequence" in validate_input_file(
+        str(spaced), spaced.name, logical_type="single_protein_sequence"
     )
     assert "invalid character" in validate_input_file(
         str(malformed), malformed.name, logical_type="single_protein_sequence"
