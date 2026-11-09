@@ -1,6 +1,16 @@
+diff --git a/run_alphafold.py b/run_alphafold.py
+index 2d6b1da..2f7d5d5 100644
 --- a/run_alphafold.py
 +++ b/run_alphafold.py
-@@ -143,6 +143,12 @@
+@@ -30,6 +30,7 @@ from absl import logging
+ from alphafold.common import confidence
+ from alphafold.common import protein
+ from alphafold.common import residue_constants
++from alphafold.data import parsers
+ from alphafold.data import pipeline
+ from alphafold.data import pipeline_multimer
+ from alphafold.data import templates
+@@ -143,6 +144,18 @@ flags.DEFINE_boolean('use_gpu_relax', None, 'Whether to relax on GPU. '
                       'Relax on GPU can be much faster than CPU, so it is '
                       'recommended to enable if possible. GPUs must be available'
                       ' if this setting is enabled.')
@@ -10,10 +20,63 @@
 +    ['all', 'features', 'model'],
 +    'Run the complete pipeline, feature construction only, or modeling only.',
 +)
++flags.DEFINE_boolean(
++    'single_sequence',
++    False,
++    'Build query-only features from a single FASTA record: the input sequence '
++    'is the only MSA row, and no sequence or template search is run.',
++)
  
  # added by Yinying
  flags.DEFINE_integer('num_ensemble', None, 'Set customized ensemble number')
-@@ -258,17 +264,22 @@
+@@ -169,6 +182,46 @@ def _check_flag(flag_name: str,
+                      f'"--{other_flag_name}={FLAGS[other_flag_name].value}".')
+ 
+ 
++def _read_single_sequence_fasta(input_fasta_path: str) -> tuple[str, str]:
++  """Reads exactly one non-empty FASTA record, rejecting anything else."""
++  with open(input_fasta_path) as f:
++    input_fasta_str = f.read()
++  sequences, descriptions = parsers.parse_fasta(input_fasta_str)
++  if len(sequences) != 1:
++    raise ValueError(
++        f'--single_sequence requires exactly one FASTA record, found '
++        f'{len(sequences)} in {input_fasta_path}.')
++  if not sequences[0]:
++    raise ValueError(
++        f'--single_sequence requires a non-empty sequence in '
++        f'{input_fasta_path}.')
++  return sequences[0], descriptions[0]
++
++
++def query_only_feature_dict(input_fasta_path: str) -> Dict[str, Any]:
++  """Builds model features from one query sequence, without any search.
++
++  The sequence is the only MSA row (depth one) and no template features are
++  produced.  This is a genuine query-only inference mode, not an MSA-assisted
++  prediction with an emptied alignment.
++  """
++  input_sequence, input_description = _read_single_sequence_fasta(
++      input_fasta_path)
++  num_res = len(input_sequence)
++  return {
++      **pipeline.make_sequence_features(
++          sequence=input_sequence,
++          description=input_description,
++          num_res=num_res),
++      **pipeline.make_msa_features(
++          msas=[parsers.Msa(
++              sequences=[input_sequence],
++              deletion_matrix=[[0] * num_res],
++              descriptions=[input_description],
++          )]),
++  }
++
++
+ def _jnp_to_np(output: Dict[str, Any]) -> Dict[str, Any]:
+   """Recursively changes jax arrays to numpy arrays."""
+   for k, v in output.items():
+@@ -258,17 +311,25 @@ def predict_structure(
    if not os.path.exists(msa_output_dir):
      os.makedirs(msa_output_dir)
  
@@ -34,9 +97,12 @@
 +      feature_dict = pickle.load(f)
 +  else:
 +    t_0 = time.time()
-+    feature_dict = data_pipeline.process(
-+        input_fasta_path=fasta_path,
-+        msa_output_dir=msa_output_dir)
++    if FLAGS.single_sequence:
++      feature_dict = query_only_feature_dict(fasta_path)
++    else:
++      feature_dict = data_pipeline.process(
++          input_fasta_path=fasta_path,
++          msa_output_dir=msa_output_dir)
 +    timings['features'] = time.time() - t_0
 +    with open(features_output_path, 'wb') as f:
 +      pickle.dump(feature_dict, f, protocol=4)
@@ -46,16 +112,159 @@
  
    unrelaxed_pdbs = {}
    unrelaxed_proteins = {}
-@@ -519,33 +530,36 @@
-     data_pipeline = monomer_data_pipeline
+@@ -439,22 +500,29 @@ def main(argv):
+       raise ValueError(f'Could not find path to the "{tool_name}" binary. Make '
+                        'sure it is installed on your system.')
  
-   model_runners = {}
+-  use_small_bfd = FLAGS.db_preset == 'reduced_dbs'
+-  _check_flag('small_bfd_database_path', 'db_preset',
+-              should_be_set=use_small_bfd)
+-  _check_flag('bfd_database_path', 'db_preset',
+-              should_be_set=not use_small_bfd)
+-  _check_flag('uniref30_database_path', 'db_preset',
+-              should_be_set=not use_small_bfd)
++  if FLAGS.single_sequence:
++    if FLAGS.model_preset not in ('monomer', 'monomer_ptm'):
++      raise ValueError(
++          '--single_sequence supports only --model_preset=monomer or '
++          f'monomer_ptm, got {FLAGS.model_preset}.')
++  else:
++    use_small_bfd = FLAGS.db_preset == 'reduced_dbs'
++    _check_flag('small_bfd_database_path', 'db_preset',
++                should_be_set=use_small_bfd)
++    _check_flag('bfd_database_path', 'db_preset',
++                should_be_set=not use_small_bfd)
++    _check_flag('uniref30_database_path', 'db_preset',
++                should_be_set=not use_small_bfd)
+ 
+   run_multimer_system = 'multimer' in FLAGS.model_preset
+   model_type = 'Multimer' if run_multimer_system else 'Monomer'
+-  _check_flag('pdb70_database_path', 'model_preset',
+-              should_be_set=not run_multimer_system)
+-  _check_flag('pdb_seqres_database_path', 'model_preset',
+-              should_be_set=run_multimer_system)
+-  _check_flag('uniprot_database_path', 'model_preset',
+-              should_be_set=run_multimer_system)
++  if not FLAGS.single_sequence:
++    _check_flag('pdb70_database_path', 'model_preset',
++                should_be_set=not run_multimer_system)
++    _check_flag('pdb_seqres_database_path', 'model_preset',
++                should_be_set=run_multimer_system)
++    _check_flag('uniprot_database_path', 'model_preset',
++                should_be_set=run_multimer_system)
+ 
+   if FLAGS.model_preset == 'monomer_casp14':
+     num_ensemble = 8
+@@ -466,86 +534,98 @@ def main(argv):
+   if len(fasta_names) != len(set(fasta_names)):
+     raise ValueError('All FASTA paths must have a unique basename.')
+ 
+-  if run_multimer_system:
+-    template_searcher = hmmsearch.Hmmsearch(
+-        binary_path=FLAGS.hmmsearch_binary_path,
+-        hmmbuild_binary_path=FLAGS.hmmbuild_binary_path,
+-        database_path=FLAGS.pdb_seqres_database_path)
+-    template_featurizer = templates.HmmsearchHitFeaturizer(
+-        mmcif_dir=FLAGS.template_mmcif_dir,
+-        max_template_date=FLAGS.max_template_date,
+-        max_hits=MAX_TEMPLATE_HITS,
+-        kalign_binary_path=FLAGS.kalign_binary_path,
+-        release_dates_path=None,
+-        obsolete_pdbs_path=FLAGS.obsolete_pdbs_path)
++  data_pipeline = None
++  num_predictions_per_model = 1
++  if FLAGS.single_sequence:
++    for fasta_path in FLAGS.fasta_paths:
++      _read_single_sequence_fasta(fasta_path)
+   else:
+-    template_searcher = hhsearch.HHSearch(
+-        binary_path=FLAGS.hhsearch_binary_path,
+-        databases=[FLAGS.pdb70_database_path])
+-    template_featurizer = templates.HhsearchHitFeaturizer(
+-        mmcif_dir=FLAGS.template_mmcif_dir,
+-        max_template_date=FLAGS.max_template_date,
+-        max_hits=MAX_TEMPLATE_HITS,
+-        kalign_binary_path=FLAGS.kalign_binary_path,
+-        release_dates_path=None,
+-        obsolete_pdbs_path=FLAGS.obsolete_pdbs_path)
+-
+-  monomer_data_pipeline = pipeline.DataPipeline(
+-      jackhmmer_binary_path=FLAGS.jackhmmer_binary_path,
+-      hhblits_binary_path=FLAGS.hhblits_binary_path,
+-      uniref90_database_path=FLAGS.uniref90_database_path,
+-      mgnify_database_path=FLAGS.mgnify_database_path,
+-      bfd_database_path=FLAGS.bfd_database_path,
+-      uniref30_database_path=FLAGS.uniref30_database_path,
+-      small_bfd_database_path=FLAGS.small_bfd_database_path,
+-      template_searcher=template_searcher,
+-      template_featurizer=template_featurizer,
+-      use_small_bfd=use_small_bfd,
+-      use_precomputed_msas=FLAGS.use_precomputed_msas,
+-      # yinying added it
+-      num_threads=FLAGS.num_threads)
+-
+-  if run_multimer_system:
+-    num_predictions_per_model = FLAGS.num_multimer_predictions_per_model
+-    data_pipeline = pipeline_multimer.DataPipeline(
+-        monomer_data_pipeline=monomer_data_pipeline,
++    if run_multimer_system:
++      template_searcher = hmmsearch.Hmmsearch(
++          binary_path=FLAGS.hmmsearch_binary_path,
++          hmmbuild_binary_path=FLAGS.hmmbuild_binary_path,
++          database_path=FLAGS.pdb_seqres_database_path)
++      template_featurizer = templates.HmmsearchHitFeaturizer(
++          mmcif_dir=FLAGS.template_mmcif_dir,
++          max_template_date=FLAGS.max_template_date,
++          max_hits=MAX_TEMPLATE_HITS,
++          kalign_binary_path=FLAGS.kalign_binary_path,
++          release_dates_path=None,
++          obsolete_pdbs_path=FLAGS.obsolete_pdbs_path)
++    else:
++      template_searcher = hhsearch.HHSearch(
++          binary_path=FLAGS.hhsearch_binary_path,
++          databases=[FLAGS.pdb70_database_path])
++      template_featurizer = templates.HhsearchHitFeaturizer(
++          mmcif_dir=FLAGS.template_mmcif_dir,
++          max_template_date=FLAGS.max_template_date,
++          max_hits=MAX_TEMPLATE_HITS,
++          kalign_binary_path=FLAGS.kalign_binary_path,
++          release_dates_path=None,
++          obsolete_pdbs_path=FLAGS.obsolete_pdbs_path)
++
++    monomer_data_pipeline = pipeline.DataPipeline(
+         jackhmmer_binary_path=FLAGS.jackhmmer_binary_path,
+-        uniprot_database_path=FLAGS.uniprot_database_path,
++        hhblits_binary_path=FLAGS.hhblits_binary_path,
++        uniref90_database_path=FLAGS.uniref90_database_path,
++        mgnify_database_path=FLAGS.mgnify_database_path,
++        bfd_database_path=FLAGS.bfd_database_path,
++        uniref30_database_path=FLAGS.uniref30_database_path,
++        small_bfd_database_path=FLAGS.small_bfd_database_path,
++        template_searcher=template_searcher,
++        template_featurizer=template_featurizer,
++        use_small_bfd=use_small_bfd,
+         use_precomputed_msas=FLAGS.use_precomputed_msas,
+         # yinying added it
+         num_threads=FLAGS.num_threads)
+-  else:
+-    num_predictions_per_model = 1
+-    data_pipeline = monomer_data_pipeline
+ 
+-  model_runners = {}
 -  model_names = config.MODEL_PRESETS[FLAGS.model_preset]
 -  for model_name in model_names:
 -    model_config = config.model_config(model_name)
--    if run_multimer_system:
+     if run_multimer_system:
 -      model_config.model.num_ensemble_eval = num_ensemble
--    else:
++      num_predictions_per_model = FLAGS.num_multimer_predictions_per_model
++      data_pipeline = pipeline_multimer.DataPipeline(
++          monomer_data_pipeline=monomer_data_pipeline,
++          jackhmmer_binary_path=FLAGS.jackhmmer_binary_path,
++          uniprot_database_path=FLAGS.uniprot_database_path,
++          use_precomputed_msas=FLAGS.use_precomputed_msas,
++          # yinying added it
++          num_threads=FLAGS.num_threads)
+     else:
 -      model_config.data.eval.num_ensemble = num_ensemble
 -    model_params = data.get_model_haiku_params(
 -        model_name=model_name, data_dir=FLAGS.data_dir)
@@ -73,11 +282,18 @@
 -      exclude_residues=RELAX_EXCLUDE_RESIDUES,
 -      max_outer_iterations=RELAX_MAX_OUTER_ITERATIONS,
 -      use_gpu=FLAGS.use_gpu_relax)
++      data_pipeline = monomer_data_pipeline
++
++  model_runners = {}
 +  amber_relaxer = None
 +  if FLAGS.run_stage != 'features':
 +    model_names = config.MODEL_PRESETS[FLAGS.model_preset]
 +    for model_name in model_names:
 +      model_config = config.model_config(model_name)
++      if FLAGS.single_sequence:
++        model_config.data.common.use_templates = False
++        model_config.model.embeddings_and_evoformer.template.enabled = False
++        model_config.model.embeddings_and_evoformer.template.embed_torsion_angles = False
 +      if run_multimer_system:
 +        model_config.model.num_ensemble_eval = num_ensemble
 +      else:

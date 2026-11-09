@@ -19,3 +19,4 @@ runtime:
   - /app/revocompute/run.sh
 tasks:
 - tasks/alphafold/task.yaml
+- tasks/single_sequence/task.yaml

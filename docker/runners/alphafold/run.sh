@@ -15,11 +15,23 @@ input_file=$(readlink -f "$input_file"); output_dir=$(readlink -f "$output_dir")
 mkdir -p "$output_dir"
 
 MODEL_PRESET=$(_parse_param model_preset)
-MAX_TEMPLATE_DATE=$(_parse_param max_template_date)
-DB_PRESET=$(_parse_param db_preset)
-NUM_MULTIMER=$(_parse_param num_multimer_predictions_per_model)
 MODELS_TO_RELAX=$(_parse_param models_to_relax)
 BENCHMARK=$(_parse_param benchmark)
+# The single-sequence Task declares only the inference controls.  Its
+# database/template parameters are intentionally absent, so pass the harmless
+# upstream defaults instead of empty values; the patched script does not read
+# any database in that mode.
+if [[ "$(task_type)" == alphafold_single_sequence ]]; then
+  single_sequence=true
+  MAX_TEMPLATE_DATE=$(_parse_param max_template_date 2021-11-01)
+  DB_PRESET=$(_parse_param db_preset full_dbs)
+  NUM_MULTIMER=$(_parse_param num_multimer_predictions_per_model 1)
+else
+  single_sequence=false
+  MAX_TEMPLATE_DATE=$(_parse_param max_template_date)
+  DB_PRESET=$(_parse_param db_preset)
+  NUM_MULTIMER=$(_parse_param num_multimer_predictions_per_model)
+fi
 fasta_path=$(task_input sequence)
 fasta_name=$(basename "$fasta_path")
 fasta_name=${fasta_name%.*}
@@ -93,6 +105,9 @@ af_args=(
   "--uniref90_database_path=${DB}/uniref90/uniref90.fasta"
   "--uniref30_database_path=${DB}/uniref30_uc30/UniRef30_2022_02/UniRef30_2022_02"
 )
+if [[ "$single_sequence" == true ]]; then
+  af_args+=("--single_sequence")
+fi
 if [[ "$MODEL_PRESET" == "multimer" ]]; then
   af_args+=(
     "--uniprot_database_path=${DB}/uniprot/uniprot.fasta"
@@ -106,34 +121,50 @@ else
 fi
 
 cd "${ALPHAFOLD_PATH:-/opt/alphafold}"
-# AlphaFold logs its phases to stderr (absl logging); the shared translator
-# rewrites the stable ones into the stdout stage protocol while passing the
-# original lines through to the stderr log unchanged.  PYTHONUNBUFFERED=1:
-# Python <3.9 block-buffers stderr when it is a pipe, which would hold every
-# phase line until exit and freeze run_stage at its liveness value.
-# A FIFO makes the translator an ordinary child that can be drained before the
-# wrapper exits, including on tool failure.
-stage_tmp=$(mktemp -d "${TMPDIR:-/tmp}/revodesign-alphafold-stage.XXXXXX")
-stage_fifo="${stage_tmp}/stderr"
-mkfifo "${stage_fifo}"
-cleanup_stage_pipe() { rm -rf -- "${stage_tmp}"; }
-trap cleanup_stage_pipe EXIT
-stage_translator="${ALPHAFOLD_STAGE_TRANSLATOR:-$runtime_root/common/runtime/stage_translate.py}"
-stage_patterns="${ALPHAFOLD_STAGE_PATTERNS:-/app/revocompute/alphafold.stages}"
-if [[ ${stage_translator} == *.awk ]]; then
-  awk -f "${stage_translator}" -v PATTERNS="${stage_patterns}" < "${stage_fifo}" >&1 &
+if [[ "$single_sequence" == true ]]; then
+  # Query-only mode has no MSA-search or template phase to translate, so the
+  # stage boundaries are emitted directly and deterministically.
+  if [[ "$run_stage" == features || "$run_stage" == all ]]; then
+    echo "REVODESIGN_STAGE:featuring"
+  fi
+  if [[ "$run_stage" == model || "$run_stage" == all ]]; then
+    echo "REVODESIGN_STAGE:modeling"
+  fi
+  set +e
+  PYTHONUNBUFFERED=1 "${ALPHAFOLD_PYTHON:-python3}" run_alphafold.py "${af_args[@]}"
+  alphafold_status=$?
+  translator_status=0
+  set -e
 else
-  python3 "${stage_translator}" "${stage_patterns}" < "${stage_fifo}" >&1 &
+  # AlphaFold logs its phases to stderr (absl logging); the shared translator
+  # rewrites the stable ones into the stdout stage protocol while passing the
+  # original lines through to the stderr log unchanged.  PYTHONUNBUFFERED=1:
+  # Python <3.9 block-buffers stderr when it is a pipe, which would hold every
+  # phase line until exit and freeze run_stage at its liveness value.
+  # A FIFO makes the translator an ordinary child that can be drained before the
+  # wrapper exits, including on tool failure.
+  stage_tmp=$(mktemp -d "${TMPDIR:-/tmp}/revodesign-alphafold-stage.XXXXXX")
+  stage_fifo="${stage_tmp}/stderr"
+  mkfifo "${stage_fifo}"
+  cleanup_stage_pipe() { rm -rf -- "${stage_tmp}"; }
+  trap cleanup_stage_pipe EXIT
+  stage_translator="${ALPHAFOLD_STAGE_TRANSLATOR:-$runtime_root/common/runtime/stage_translate.py}"
+  stage_patterns="${ALPHAFOLD_STAGE_PATTERNS:-/app/revocompute/alphafold.stages}"
+  if [[ ${stage_translator} == *.awk ]]; then
+    awk -f "${stage_translator}" -v PATTERNS="${stage_patterns}" < "${stage_fifo}" >&1 &
+  else
+    python3 "${stage_translator}" "${stage_patterns}" < "${stage_fifo}" >&1 &
+  fi
+  translator_pid=$!
+  set +e
+  PYTHONUNBUFFERED=1 "${ALPHAFOLD_PYTHON:-python3}" run_alphafold.py "${af_args[@]}" 2> "${stage_fifo}"
+  alphafold_status=$?
+  wait "${translator_pid}"
+  translator_status=$?
+  set -e
+  cleanup_stage_pipe
+  trap - EXIT
 fi
-translator_pid=$!
-set +e
-PYTHONUNBUFFERED=1 "${ALPHAFOLD_PYTHON:-python3}" run_alphafold.py "${af_args[@]}" 2> "${stage_fifo}"
-alphafold_status=$?
-wait "${translator_pid}"
-translator_status=$?
-set -e
-cleanup_stage_pipe
-trap - EXIT
 if [[ ${alphafold_status} -ne 0 || ${translator_status} -ne 0 ]]; then
   echo "AlphaFold exited ${alphafold_status}; stage translator exited ${translator_status}" >&2
   [[ ${alphafold_status} -ne 0 ]] && exit "${alphafold_status}"

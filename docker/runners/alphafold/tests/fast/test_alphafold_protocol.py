@@ -9,6 +9,7 @@ import os
 from functools import partial
 from pathlib import Path
 
+from revocompute.task_types import isolated_discovery
 from runner_protocol import ROOT, run_with_manifest
 from stage_input_contract import write_server_reuse_document
 
@@ -29,7 +30,8 @@ def test_alphafold_runner_drains_final_stage_before_exit(tmp_path):
     alphafold_root.mkdir()
     fake_context.write_text(
         '_parse_param() { case "$1" in model_type) echo auto;; msa_mode) echo mmseqs2_uniref_env;; num_recycle) echo 3;; num_models) echo 5;; num_seeds) echo 1;; random_seed) echo 0;; num_relax) echo 1;; esac; }\n'
-            'task_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
+            'task_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n'
+            'task_type() { printf "%s\\n" "${FAKE_TASK_TYPE:-alphafold}"; }\n',
         encoding="utf-8",
     )
     fake_python.write_text(
@@ -79,7 +81,8 @@ def test_alphafold_feature_stage_stops_before_modeling(tmp_path):
     alphafold_root.mkdir()
     fake_context.write_text(
         '_parse_param() { [[ "$1" == model_preset ]] && printf "multimer\\n" || printf "%s\\n" "$2"; }\n'
-            'task_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
+            'task_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n'
+            'task_type() { printf "%s\\n" "${FAKE_TASK_TYPE:-alphafold}"; }\n',
         encoding="utf-8",
     )
     fake_python.write_text(
@@ -119,6 +122,7 @@ def test_alphafold_feature_stage_stops_before_modeling(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     args = fake_args.read_text(encoding="utf-8")
+    assert "--single_sequence" not in args
     assert "--model_preset=multimer" in args
     assert "--uniref30_database_path=" in args
     assert "--uniprot_database_path=" in args
@@ -165,7 +169,8 @@ def _retry_env(tmp_path):
     fake_context = tmp_path / "task_context.sh"
     fake_context.write_text(
         '_parse_param() { :; }\n'
-        'task_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
+        'task_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n'
+        'task_type() { printf "%s\\n" "${FAKE_TASK_TYPE:-alphafold}"; }\n',
         encoding="utf-8",
     )
     env = os.environ.copy()
@@ -386,3 +391,114 @@ def test_alphafold_failed_attempt_publishes_no_stale_output(tmp_path):
     assert not (output_dir / "sequence" / "ranked_0.pdb").exists()
     assert not (output_dir / "task_finished").exists()
     assert (output_dir / "sequence" / "features.pkl").is_file()
+
+
+def test_alphafold_family_discovers_both_tasks():
+    with isolated_discovery(str(ROOT / "docker" / "runners"), {"alphafold"}) as manager:
+        tasks = {task.name: task for _identifier, task in manager.contributions.items("tasks")}
+
+    assert set(tasks) == {"alphafold", "alphafold_single_sequence"}
+    single = tasks["alphafold_single_sequence"]
+    assert single.display_name == "AlphaFold2 — Single sequence (no MSA)"
+    assert [role.type for role in single.inputs] == ["single_protein_sequence"]
+    assert {param.name for param in single.params} == {"model_preset", "models_to_relax", "benchmark"}
+    assert [stage.name for stage in single.workflow] == [
+        "alphafold_single_sequence.features",
+        "alphafold_single_sequence.model",
+    ]
+    assert [stage.requires_gpu for stage in single.workflow] == [False, True]
+
+
+def _write_single_sequence_fake_alphafold(path):
+    path.write_text(
+        "#!/bin/bash\n"
+        "set -e\n"
+        'printf "%s\\n" "$@" > "$FAKE_ARGS_FILE"\n'
+        'for arg in "$@"; do case "$arg" in --output_dir=*) output_dir=${arg#*=} ;; '
+        '--fasta_paths=*) fasta=${arg#*=} ;; --run_stage=*) stage=${arg#*=} ;; esac; done\n'
+        'job=$(basename "$fasta"); job=${job%.*}\n'
+        'mkdir -p "$output_dir/$job"\n'
+        'if [[ "$stage" == features ]]; then printf "FEATURES\\n" > "$output_dir/$job/features.pkl"; exit 0; fi\n'
+        '[[ "${FAKE_NO_STRUCTURE:-}" == "1" ]] || printf "MODEL\\n" > "$output_dir/$job/ranked_0.pdb"\n'
+        'printf "{}\\n" > "$output_dir/$job/ranking_debug.json"\n',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
+def _single_sequence_env(tmp_path):
+    input_file = tmp_path / "sequence.fasta"
+    input_file.write_text(">query\nGSHMASMTGGQQMGRDLYDD\n", encoding="utf-8")
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    fake_context = tmp_path / "task_context.sh"
+    fake_context.write_text(
+        '_parse_param() { case "$1" in model_preset) printf "monomer_ptm\\n";; '
+        'models_to_relax) printf "none\\n";; benchmark) printf "false\\n";; '
+        '*) printf "%s\\n" "${2:-}";; esac; }\n'
+        'task_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n'
+        'task_type() { printf "%s\\n" "${FAKE_TASK_TYPE:-alphafold}"; }\n',
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "ALPHAFOLD_PATH": str(tmp_path),
+            "ALPHAFOLD_PYTHON": str(_write_single_sequence_fake_alphafold(tmp_path / "fake-af2-single")),
+            "FAKE_ARGS_FILE": str(tmp_path / "alphafold.args"),
+            "FAKE_PRIMARY_INPUT": str(input_file),
+            "FAKE_TASK_TYPE": "alphafold_single_sequence",
+            "TASK_CONTEXT_SRC": str(fake_context),
+            "TMPDIR": str(tmp_path),
+        }
+    )
+    return env, input_file, output_dir
+
+
+def test_alphafold_single_sequence_features_stage_forwards_query_only_mode(tmp_path):
+    env, input_file, output_dir = _single_sequence_env(tmp_path)
+
+    completed = _run_with_manifest(
+        ALPHAFOLD_RUNNER_SCRIPT, input_file, output_dir, env, extra_args=("-s", "features")
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    args = Path(env["FAKE_ARGS_FILE"]).read_text(encoding="utf-8")
+    assert "--single_sequence" in args
+    assert "--num_multimer_predictions_per_model" not in args
+    assert "--max_template_date=2021-11-01" in args
+    assert "--db_preset=full_dbs" in args
+    assert "REVODESIGN_STAGE:featuring" in completed.stdout
+    assert "msa_searching" not in completed.stdout
+    assert (output_dir / ".alphafold-features-complete").is_file()
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_alphafold_single_sequence_model_stage_keeps_marker_and_structure_checks(tmp_path):
+    env, input_file, output_dir = _single_sequence_env(tmp_path)
+
+    missing = _run_with_manifest(
+        ALPHAFOLD_RUNNER_SCRIPT, input_file, output_dir, env, extra_args=("-s", "model")
+    )
+
+    assert missing.returncode != 0
+    assert "Validated AlphaFold features are missing" in missing.stderr
+    assert "REVODESIGN_STAGE:modeling" not in missing.stdout
+
+    features = output_dir / "sequence" / "features.pkl"
+    features.parent.mkdir(parents=True)
+    features.write_text("FEATURES\n", encoding="utf-8")
+    (output_dir / ".alphafold-features-complete").write_text(
+        hashlib.sha256(features.read_bytes()).hexdigest(), encoding="utf-8"
+    )
+    env["FAKE_NO_STRUCTURE"] = "1"
+
+    no_structure = _run_with_manifest(
+        ALPHAFOLD_RUNNER_SCRIPT, input_file, output_dir, env, extra_args=("-s", "model")
+    )
+
+    assert no_structure.returncode != 0
+    assert "REVODESIGN_STAGE:modeling" in no_structure.stdout
+    assert "produced no ranked_0.pdb" in no_structure.stderr
+    assert not (output_dir / "task_finished").exists()
