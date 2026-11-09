@@ -534,6 +534,10 @@ def validate_logical_input(path: str, format_name: str, logical_type: str) -> st
         }
         if len(sequences) < 2 or len(widths) != 1 or 0 in widths:
             return "Alignment must contain at least two equal-length sequences"
+    elif logical_type == "single_protein_sequence" and format_name in {"a3m", "fa", "faa", "fas", "fasta"}:
+        from revocompute.input_validators.fasta import validate_single_protein_sequence
+
+        return validate_single_protein_sequence(path)
     elif format_name == "json":
         # _error is not reachable: the .json extension always runs
         # json_file.validate_json before this logical-type check.

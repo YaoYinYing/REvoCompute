@@ -180,3 +180,33 @@ def validate_fasta(path: str, *, allow_lowercase: bool = False) -> str | None:
 def validate_a3m(path: str) -> str | None:
     """Return an error message if *path* is not a plausible A3M file."""
     return validate_fasta(path, allow_lowercase=True)
+
+
+def validate_single_protein_sequence(path: str) -> str | None:
+    """Return an error unless *path* is exactly one non-empty protein record.
+
+    A single-chain inference mode needs a single sequence; a multi-record FASTA
+    is a complex, not a longer protein. The physical alphabet and framing are
+    still enforced by :func:`validate_fasta`.
+    """
+    error = validate_fasta(path)
+    if error is not None:
+        return error
+    text, error = _read_text(path, kind="single protein sequence")
+    if error is not None:
+        return error
+    headers = 0
+    residues = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(">"):
+            headers += 1
+        else:
+            residues += len(stripped)
+    if headers != 1:
+        return "Single-sequence input must contain exactly one FASTA record"
+    if residues == 0:
+        return "Single-sequence input must contain at least one residue"
+    return None

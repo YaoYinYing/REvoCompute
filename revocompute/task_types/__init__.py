@@ -1099,10 +1099,14 @@ def _load_input_workspace(
             role = roles_by_name.get(role_name)
             if role is None:
                 raise ValueError(f"Input workspace capability {capability.id!r} references unknown role {role_name!r}")
-            expected_type = {"sequence": "protein_sequence", "structure": "protein_structure"}.get(capability.plugin)
-            if expected_type and role.type != expected_type:
+            expected_types = {
+                "sequence": {"protein_sequence", "single_protein_sequence"},
+                "structure": {"protein_structure"},
+            }.get(capability.plugin)
+            if expected_types and role.type not in expected_types:
                 raise ValueError(
-                    f"Input workspace capability {capability.id!r} requires a {expected_type!r} role, not {role.type!r}"
+                    f"Input workspace capability {capability.id!r} requires one of "
+                    f"{sorted(expected_types)!r} for role {role_name!r}, not {role.type!r}"
                 )
         primary_role = capability.options.get("primary_role")
         if primary_role and primary_role not in roles_by_name:
