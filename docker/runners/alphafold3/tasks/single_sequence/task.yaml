@@ -1,0 +1,211 @@
+id: alphafold3_single_sequence
+display_name: AlphaFold3 — Single sequence (no MSA)
+category: structure
+citations:
+- num: 1
+  doi: 10.1038/s41586-024-07487-w
+  bibtex: >-
+    @article{Abramson_2024, title={Accurate structure prediction of biomolecular interactions with AlphaFold 3}, volume={630}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-024-07487-w}, DOI={10.1038/s41586-024-07487-w}, number={8016}, journal={Nature}, publisher={Springer Science and Business Media LLC}, author={Abramson, Josh and Adler, Jonas and Dunger, Jack and Evans, Richard and Green, Tim and Pritzel, Alexander and Ronneberger, Olaf and Willmore, Lindsay and Ballard, Andrew J. and Bambrick, Joshua and Bodenstein, Sebastian W. and Evans, David A. and Hung, Chia-Chun and O’Neill, Michael and Reiman, David and Tunyasuvunakool, Kathryn and Wu, Zachary and Žemgulytė, Akvilė and Arvaniti, Eirini and Beattie, Charles and Bertolli, Ottavia and Bridgland, Alex and Cherepanov, Alexey and Congreve, Miles and Cowen-Rivers, Alexander I. and Cowie, Andrew and Figurnov, Michael and Fuchs, Fabian B. and Gladman, Hannah and Jain, Rishub and Khan, Yousuf A. and Low, Caroline M. R. and Perlin, Kuba and Potapenko, Anna and Savy, Pascal and Singh, Sukhdeep and Stecula, Adrian and Thillaisundaram, Ashok and Tong, Catherine and Yakneen, Sergei and Zhong, Ellen D. and Zielinski, Michal and Žídek, Augustin and Bapst, Victor and Kohli, Pushmeet and Jaderberg, Max and Hassabis, Demis and Jumper, John M.}, year={2024}, month=May, pages={493–500} }
+summary: AlphaFold 3 single-chain structure prediction without MSA or template search.
+use_when: Use this for one protein chain when no MSA or template information is available
+  or wanted; the sequence is converted to the upstream AlphaFold 3 JSON format automatically.
+input_summary: One pasted protein sequence or one single-record FASTA file. Multiple records
+  are rejected because this Task predicts exactly one chain.
+output_summary: Ranked mmCIF structures, confidence data, ranking scores, the processed
+  data-pipeline input, and the generated upstream JSON with source provenance.
+considerations:
+- "Single-sequence inference uses empty inline `unpairedMsa` and `pairedMsa` fields and no
+  templates: the upstream data pipeline skips MSA and template search and materializes a
+  query-only MSA. The converter records the original FASTA hash and the generated JSON hash
+  as `derived/input_provenance.json`; the Server's immutable input snapshot keeps the
+  original uploaded bytes unchanged."
+- Single-sequence predictions have lower confidence and accuracy than predictions informed
+  by homology search and templates, so confidence measures require careful scientific
+  interpretation.
+- Predictions are computational estimates whose confidence measures and biological context
+  require scientific interpretation.
+- Use of the mounted model parameters and generated output remains subject to the current
+  upstream AlphaFold 3 noncommercial terms; access requires operator approval.
+gpus: true
+inputs:
+  sequence:
+    title: Protein sequence
+    type: single_protein_sequence
+    cardinality: {min: 1, max: 1}
+    formats: [fasta, fa, faa]
+stage_markers:
+  data_pipeline: MSA and template data pipeline
+  feature_validation: Processed input validation
+  inference: AlphaFold 3 inference
+  output_validation: Prediction output validation
+workflow:
+- name: features
+  display_name: Feature generation
+  requires_gpu: false
+  requires_network: false
+  runner_args:
+  - -s
+  - features
+  stage_markers:
+  - data_pipeline
+  - feature_validation
+  outputs:
+  - name: processed_input
+    type: alphafold3_processed_input
+    path: features/*/*_data.json
+- name: model
+  display_name: Structure inference
+  requires_gpu: true
+  requires_network: false
+  runner_args:
+  - -s
+  - model
+  inputs:
+  - name: features
+    type: alphafold3_processed_input
+    from: alphafold3_single_sequence.features:processed_input
+  stage_markers:
+  - inference
+  - output_validation
+execution_modes:
+  full:
+    label: Full prediction
+    stages: [features, model]
+  prepare_only:
+    label: Preparation only
+    stages: [features]
+    output_contract: stages
+  model_only:
+    label: Model from prepared features
+    stages: [model]
+    output_contract: full
+    reuse:
+      model.features: {role: prepared_features, type: alphafold3_processed_input, inputs: [sequence]}
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    model_seed:
+      type: integer
+      description: Seed recorded in the generated upstream JSON and used to select the
+        model seed for prediction.
+      default: 1
+      minimum: 0
+      maximum: 2147483647
+    num_recycles:
+      type: integer
+      description: Number of model recycling iterations used to refine each prediction.
+      minimum: 1
+      maximum: 100
+      default: 10
+    num_diffusion_samples:
+      type: integer
+      description: Number of structure samples generated by the diffusion head for
+        each model seed.
+      minimum: 1
+      maximum: 100
+      default: 5
+    save_embeddings:
+      type: boolean
+      description: Publishes single and pair model embeddings in the prediction output.
+      default: false
+    save_distogram:
+      type: boolean
+      description: Publishes the predicted inter-residue distance distribution in the
+        output.
+      default: false
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein sequence
+    description: Upload a single-record FASTA file or paste one protein sequence.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Sequence file
+    - plugin: sequence
+      id: sequence_editor
+      title: Paste a sequence
+      options: {role: sequence}
+  - id: settings
+    title: Set the prediction
+    description: Choose model recycling, diffusion, and output controls.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Prediction settings
+  - id: review
+    title: Review and run
+    description: Check the sequence and settings before creating the task snapshot.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: predicted_structures
+    role: primary
+    title: Predicted structures
+    description: AlphaFold 3 structure candidates in mmCIF format, including the top-ranked
+      model at the job output root.
+    sources:
+      candidates:
+      - glob: modeling/*/*_model.cif
+        required: true
+    mapping: {}
+  - plugin: scalar-summary
+    id: confidence_summary
+    role: evidence
+    title: Structure confidence
+    description: Global confidence measures emitted by AlphaFold 3 for each predicted
+      structure.
+    sources:
+      data:
+      - glob: modeling/*/*_summary_confidences.json
+        required: true
+    mapping:
+      fields:
+      - path: ptm
+        label: pTM
+        unit: score
+        direction: higher
+      - path: iptm
+        label: ipTM
+        unit: score
+        direction: higher
+        nullable: true
+      - path: ranking_score
+        label: Ranking score
+        unit: score
+        direction: higher
+      - path: fraction_disordered
+        label: Fraction disordered
+        unit: fraction
+        direction: lower
+      - path: has_clash
+        label: Has clash
+        unit: flag
+        direction: lower
+  - plugin: evidence-bundle
+    id: prediction_data
+    role: evidence
+    title: Prediction data and provenance
+    description: Ranking, full confidence, processed input, generated upstream JSON,
+      and upstream terms files retained with the prediction.
+    sources:
+      items:
+      - glob: modeling/*/*_ranking_scores.csv
+        required: true
+      - glob: modeling/*/*_confidences.json
+        required: true
+      - glob: features/*/*_data.json
+        required: true
+      - glob: modeling/*/TERMS_OF_USE.md
+        required: true
+      - glob: derived/af3_input.json
+        required: true
+    mapping: {}

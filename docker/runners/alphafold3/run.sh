@@ -33,16 +33,24 @@ mkdir -p "$output_dir"
 # features stage also clears the modeling tree, which it invalidates.
 case "$run_stage" in
   features|all)
-    rm -rf "$features_dir" "$feature_marker" "$modeling_dir" "$output_dir/task_finished" ;;
+    rm -rf "$features_dir" "$feature_marker" "$modeling_dir" "$output_dir/derived" "$output_dir/task_finished" ;;
   model)
-    rm -rf "$modeling_dir" "$output_dir/task_finished" ;;
+    rm -rf "$modeling_dir" "$output_dir/derived" "$output_dir/task_finished" ;;
 esac
 
 [[ -f "$input_file" ]] || { echo "Task manifest not found: $input_file" >&2; exit 1; }
 
-json_path=$(task_input specification)
-[[ -f "$json_path" ]] || { echo "AlphaFold 3 JSON input not found: $json_path" >&2; exit 1; }
-[[ "${json_path,,}" == *.json ]] || { echo "AlphaFold 3 input must be a .json file" >&2; exit 1; }
+task_id=$(task_type)
+single_sequence=no
+if [[ "$task_id" == alphafold3_single_sequence ]]; then
+  single_sequence=yes
+  sequence_path=$(task_input sequence)
+  [[ -f "$sequence_path" ]] || { echo "AlphaFold 3 protein sequence input not found: $sequence_path" >&2; exit 1; }
+else
+  json_path=$(task_input specification)
+  [[ -f "$json_path" ]] || { echo "AlphaFold 3 JSON input not found: $json_path" >&2; exit 1; }
+  [[ "${json_path,,}" == *.json ]] || { echo "AlphaFold 3 input must be a .json file" >&2; exit 1; }
+fi
 
 db_dir="${ALPHAFOLD3_DB_DIR:-/mnt/alphafold3/databases}"
 small_bfd="${ALPHAFOLD3_SMALL_BFD_PATH:-/mnt/alphafold3/reduced_bfd/bfd-first_non_consensus_sequences.fasta}"
@@ -50,6 +58,8 @@ model_dir="${ALPHAFOLD3_MODEL_DIR:-/mnt/alphafold3/models}"
 af3_python="${ALPHAFOLD3_PYTHON:-/alphafold3_venv/bin/python3}"
 af3_script="${ALPHAFOLD3_SCRIPT:-/app/alphafold/run_alphafold.py}"
 stage_inputs_py="${ALPHAFOLD3_STAGE_INPUTS_PY:-$runtime_root/common/runtime/stage_inputs.py}"
+sequence_to_json_py="${ALPHAFOLD3_SEQUENCE_TO_JSON:-$runtime_root/alphafold3/sequence_to_json.py}"
+derived_dir="$output_dir/derived"
 
 # AF3 launches four protein MSA searches concurrently (and three RNA searches).
 # NPROC is the total scheduler allocation, so translate it into per-process
@@ -70,6 +80,42 @@ af3_nhmmer_n_cpu=$(( allocated_cpus / 3 ))
 (( af3_jackhmmer_n_cpu > 8 )) && af3_jackhmmer_n_cpu=8
 (( af3_nhmmer_n_cpu > 8 )) && af3_nhmmer_n_cpu=8
 af3_hmmsearch_n_cpu=$(( allocated_cpus < 8 ? allocated_cpus : 8 ))
+
+# The derived input is regenerated on every attempt, after the cleanup above,
+# so a failed attempt never publishes an earlier attempt's derivative. It is
+# evidence and the features-stage input; model-only stages still consume the
+# verified processed JSON, never this file.
+write_single_sequence_derivatives() {
+  local source_sha generated_sha
+  mkdir -p "$derived_dir"
+  "$af3_python" "$sequence_to_json_py" "$sequence_path" "$derived_dir/af3_input.json" "$model_seed"
+  source_sha=$(sha256sum "$sequence_path" | cut -d ' ' -f 1)
+  generated_sha=$(sha256sum "$derived_dir/af3_input.json" | cut -d ' ' -f 1)
+  "$af3_python" - "$derived_dir/input_provenance.json" "$source_sha" "$generated_sha" "$model_seed" <<'PY'
+import json
+import sys
+
+path, source_sha, generated_sha, seed = sys.argv[1:5]
+document = {
+    "source": {"role": "sequence", "sha256": source_sha},
+    "generated": {"path": "derived/af3_input.json", "sha256": generated_sha},
+    "mode": "single_sequence_no_msa",
+    "unpairedMsa": "",
+    "pairedMsa": "",
+    "templates": [],
+    "modelSeeds": [int(seed)],
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(document, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
+  json_path="$derived_dir/af3_input.json"
+}
+
+if [[ "$single_sequence" == yes ]]; then
+  model_seed="$(_parse_param model_seed 1)"
+  write_single_sequence_derivatives
+fi
 
 find_processed_json() {
   local -a matches=()
@@ -100,15 +146,24 @@ scientific_args() {
     esac
   }
   if [[ "$stage" == features ]]; then
-    max_template_date="$(_parse_param max_template_date)"
-    resolve_msa_overlaps=$(normalize_bool "$(_parse_param resolve_msa_overlaps)")
-    conformer_max_iterations="$(_parse_param conformer_max_iterations)"
-    fix_standalone_glycans=$(normalize_bool "$(_parse_param fix_standalone_glycans)")
-    AF3_SCIENTIFIC_ARGS=(
-      "--max_template_date=$max_template_date" "--resolve_msa_overlaps=$resolve_msa_overlaps"
-      "--fix_standalone_glycans=$fix_standalone_glycans"
-    )
-    [[ -n "$conformer_max_iterations" ]] && AF3_SCIENTIFIC_ARGS+=("--conformer_max_iterations=$conformer_max_iterations")
+    if [[ "$single_sequence" == yes ]]; then
+      # The single-sequence Task deliberately does not expose these knobs:
+      # no templates and no MSA search make them non-user-facing.
+      AF3_SCIENTIFIC_ARGS=(
+        "--max_template_date=2021-09-30" "--resolve_msa_overlaps=true"
+        "--fix_standalone_glycans=false"
+      )
+    else
+      max_template_date="$(_parse_param max_template_date)"
+      resolve_msa_overlaps=$(normalize_bool "$(_parse_param resolve_msa_overlaps)")
+      conformer_max_iterations="$(_parse_param conformer_max_iterations)"
+      fix_standalone_glycans=$(normalize_bool "$(_parse_param fix_standalone_glycans)")
+      AF3_SCIENTIFIC_ARGS=(
+        "--max_template_date=$max_template_date" "--resolve_msa_overlaps=$resolve_msa_overlaps"
+        "--fix_standalone_glycans=$fix_standalone_glycans"
+      )
+      [[ -n "$conformer_max_iterations" ]] && AF3_SCIENTIFIC_ARGS+=("--conformer_max_iterations=$conformer_max_iterations")
+    fi
     AF3_SCIENTIFIC_ARGS+=(
       "--jackhmmer_n_cpu=$af3_jackhmmer_n_cpu" "--jackhmmer_max_parallel_shards=1"
       "--nhmmer_n_cpu=$af3_nhmmer_n_cpu" "--nhmmer_max_parallel_shards=1"

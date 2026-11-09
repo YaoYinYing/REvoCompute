@@ -429,3 +429,126 @@ def test_alphafold3_wrapper_propagates_upstream_failure_and_validates_structure(
     recovered_model = _run_stage(env, manifest, output, "model")
     assert recovered_model.returncode == 0, recovered_model.stderr
     assert (output / "task_finished").is_file()
+
+
+def _sequence_runner_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]:
+    env, _, call_log = _runner_env(tmp_path)
+    source = tmp_path / "single.fasta"
+    source.write_text(">query\nMKTAYIAK\n", encoding="utf-8")
+    manifest = tmp_path / "task.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "task_type": "alphafold3_single_sequence",
+                "inputs": {"sequence": [{"path": str(source)}]},
+                "params": {
+                    "model_seed": 23,
+                    "num_recycles": 10,
+                    "num_diffusion_samples": 2,
+                    "save_embeddings": False,
+                    "save_distogram": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    env["ALPHAFOLD3_SEQUENCE_TO_JSON"] = str(ROOT / "docker/runners/alphafold3/sequence_to_json.py")
+    return env, manifest, call_log, source
+
+
+def _documents(call_log: Path) -> list[list[str]]:
+    return [json.loads(line) for line in call_log.read_text(encoding="utf-8").splitlines()]
+
+
+def test_single_sequence_task_generates_the_upstream_json_and_preserves_the_source(tmp_path):
+    env, manifest, call_log, source = _sequence_runner_env(tmp_path)
+    output = tmp_path / "result"
+    source_bytes = source.read_bytes()
+
+    features = _run_stage(env, manifest, output, "features")
+
+    assert features.returncode == 0, features.stderr
+    derived = output / "derived/af3_input.json"
+    document = json.loads(derived.read_text(encoding="utf-8"))
+    assert document == {
+        "name": "single",
+        "modelSeeds": [23],
+        "sequences": [
+            {
+                "protein": {
+                    "id": "A",
+                    "sequence": "MKTAYIAK",
+                    "unpairedMsa": "",
+                    "pairedMsa": "",
+                    "templates": [],
+                }
+            }
+        ],
+        "dialect": "alphafold3",
+        "version": 1,
+    }
+    feature_call = _documents(call_log)[0]
+    assert f"--json_path={derived}" in feature_call
+    assert "--run_data_pipeline=true" in feature_call
+    assert "--run_inference=false" in feature_call
+    assert "--max_template_date=2021-09-30" in feature_call
+    assert "--resolve_msa_overlaps=true" in feature_call
+    assert "--fix_standalone_glycans=false" in feature_call
+    assert not any(arg.startswith("--conformer_max_iterations") for arg in feature_call)
+    assert source.read_bytes() == source_bytes
+
+    model = _run_stage(env, manifest, output, "model")
+
+    assert model.returncode == 0, model.stderr
+    model_call = _documents(call_log)[1]
+    assert f"--json_path={output}/features/test_job/test_job_data.json" in model_call
+    assert "--run_data_pipeline=false" in model_call
+    assert "--run_inference=true" in model_call
+    assert "--num_diffusion_samples=2" in model_call
+    provenance = json.loads((output / "derived/input_provenance.json").read_text(encoding="utf-8"))
+    assert provenance["source"] == {"role": "sequence", "sha256": hashlib.sha256(source_bytes).hexdigest()}
+    assert provenance["generated"] == {
+        "path": "derived/af3_input.json",
+        "sha256": hashlib.sha256(derived.read_bytes()).hexdigest(),
+    }
+    assert provenance["mode"] == "single_sequence_no_msa"
+    assert provenance["unpairedMsa"] == provenance["pairedMsa"] == ""
+    assert provenance["templates"] == []
+    assert provenance["modelSeeds"] == [23]
+    assert (output / "task_finished").is_file()
+    assert source.read_bytes() == source_bytes
+
+
+def test_single_sequence_attempt_regenerates_a_stale_derived_input(tmp_path):
+    env, manifest, _, _ = _sequence_runner_env(tmp_path)
+    output = tmp_path / "result"
+    assert _run_stage(env, manifest, output, "features").returncode == 0
+    derived = output / "derived/af3_input.json"
+    derived.write_text('{"stale": true}', encoding="utf-8")
+
+    env["AF3_FAIL_STAGE"] = "features"
+    failed = _run_stage(env, manifest, output, "features")
+
+    assert failed.returncode == 9
+    assert json.loads(derived.read_text(encoding="utf-8"))["sequences"][0]["protein"]["sequence"] == "MKTAYIAK"
+    assert not (output / "features/test_job/test_job_data.json").exists()
+    assert not (output / "task_finished").exists()
+
+
+def test_alphafold3_tasks_are_discoverable_with_their_contracts():
+    with isolated_discovery(str(ROOT / "docker/runners"), {"alphafold3"}):
+        normal, _ = get("alphafold3")
+        single, _ = get("alphafold3_single_sequence")
+
+    assert normal.name == "alphafold3"
+    assert single.display_name == "AlphaFold3 — Single sequence (no MSA)"
+    assert single.runtime.access_policy.id == "alphafold3_noncommercial"
+    assert [(role.name, role.type) for role in single.inputs] == [("sequence", "single_protein_sequence")]
+    assert [param.name for param in single.params] == [
+        "model_seed",
+        "num_recycles",
+        "num_diffusion_samples",
+        "save_embeddings",
+        "save_distogram",
+    ]
+    assert single.workflow[1].inputs[0].source == "alphafold3_single_sequence.features:processed_input"
