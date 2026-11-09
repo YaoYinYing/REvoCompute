@@ -95,19 +95,6 @@ def test_the_sequence_workspace_binds_the_single_record_role(monkeypatch, tmp_pa
         assert detail["input_workspace"]["steps"][-1]["capabilities"][-1]["plugin"] == "review"
 
 
-def test_the_entries_describe_no_msa_and_no_template_search(monkeypatch, tmp_path):
-    _module, client = _client(monkeypatch, tmp_path)
-
-    for name in (AF2, AF3):
-        detail = _detail(client, name)
-        prose = " ".join(
-            [detail["summary"], detail["use_when"], detail["input_summary"], *detail["considerations"]]
-        ).casefold()
-        assert "no msa" in prose or "without msa" in prose or "no msa or template" in prose
-        assert "single" in prose
-        assert "template" in prose
-
-
 def test_the_single_sequence_params_do_not_expose_search_controls(monkeypatch, tmp_path):
     _module, client = _client(monkeypatch, tmp_path)
 

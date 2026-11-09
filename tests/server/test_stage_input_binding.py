@@ -486,6 +486,11 @@ def test_reuse_refuses_wrong_stage_port_type_and_digest(tmp_path, monkeypatch):
     with pytest.raises(task_runtime.ReuseReferenceError) as exc:
         task_runtime.resolve_reuse_source(reference, user_id=0, expected_type="other")
     assert exc.value.reason == "reuse_type_mismatch"
+    with pytest.raises(task_runtime.ReuseReferenceError) as exc:
+        task_runtime.resolve_reuse_source(
+            reference, user_id=0, expected_type="features", expected_task_type="another_task"
+        )
+    assert exc.value.reason == "reuse_source_incompatible"
 
 
 def test_reuse_refuses_a_superseded_completed_attempt(tmp_path, monkeypatch):
