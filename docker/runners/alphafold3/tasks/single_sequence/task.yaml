@@ -34,7 +34,7 @@ inputs:
     cardinality: {min: 1, max: 1}
     formats: [fasta, fa, faa]
 stage_markers:
-  data_pipeline: MSA and template data pipeline
+  data_pipeline: Single-sequence data pipeline
   feature_validation: Processed input validation
   inference: AlphaFold 3 inference
   output_validation: Prediction output validation
@@ -195,7 +195,7 @@ result_workspace:
     role: evidence
     title: Prediction data and provenance
     description: Ranking, full confidence, processed input, generated upstream JSON,
-      and upstream terms files retained with the prediction.
+      source provenance, and upstream terms files retained with the prediction.
     sources:
       items:
       - glob: modeling/*/*_ranking_scores.csv
@@ -207,5 +207,7 @@ result_workspace:
       - glob: modeling/*/TERMS_OF_USE.md
         required: true
       - glob: derived/af3_input.json
+        required: true
+      - glob: derived/input_provenance.json
         required: true
     mapping: {}

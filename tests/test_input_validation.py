@@ -126,6 +126,28 @@ def test_fasta_accepts_full_alphabet_and_gaps(tmp_path):
     assert validate_fasta(str(path)) is None
 
 
+def test_single_protein_sequence_requires_exactly_one_non_empty_record(tmp_path):
+    one = _write(tmp_path, b">h\nACDEFG\n", "one.fasta")
+    two = _write(tmp_path, b">a\nACDE\n>b\nFGHI\n", "two.fasta")
+    empty = _write(tmp_path, b">h\n", "empty.fasta")
+    malformed = _write(tmp_path, b">h\nACD2EF\n", "malformed.fasta")
+
+    for path in (one,):
+        assert validate_input_file(str(path), path.name) is None  # plain protein FASTA
+        assert validate_input_file(str(path), path.name, logical_type="single_protein_sequence") is None
+        assert validate_logical_input(str(path), "fasta", "single_protein_sequence") is None
+    assert "exactly one FASTA record" in validate_input_file(
+        str(two), two.name, logical_type="single_protein_sequence"
+    )
+    assert "exactly one FASTA record" in validate_logical_input(str(two), "fasta", "single_protein_sequence")
+    assert "at least one residue" in validate_input_file(
+        str(empty), empty.name, logical_type="single_protein_sequence"
+    )
+    assert "invalid character" in validate_input_file(
+        str(malformed), malformed.name, logical_type="single_protein_sequence"
+    )
+
+
 def test_fasta_rejects_nul_byte_deep_in_file(tmp_path):
     # The HTTP-layer sniff only reads 4096 bytes, so the NUL must be caught here.
     path = _write(tmp_path, b">h\n" + b"A" * 8192 + b"\0ACDE\n")
