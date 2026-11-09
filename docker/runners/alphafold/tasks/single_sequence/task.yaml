@@ -14,7 +14,8 @@ summary: AlphaFold2 inference with a query-only MSA (the input sequence is the o
   MSA row) and no MSA or template search.
 use_when: Use this to fold one protein chain from its sequence alone, without
   database searches, when no MSA information is available or wanted.
-input_summary: One single-record FASTA file containing one protein chain.
+input_summary: One pasted protein sequence or one single-record FASTA file containing
+  one protein chain.
 output_summary: Ranked predicted structures, confidence data, query-only features,
   and optional relaxed models.
 considerations:
