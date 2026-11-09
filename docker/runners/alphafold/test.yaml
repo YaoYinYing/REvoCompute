@@ -9,4 +9,4 @@ collections:
     - id: minimal-alphafold-single-sequence
       task: alphafold_single_sequence
       input: {roles: {sequence: [tests/data/msa/2KL8.fasta]}}
-      parameters: {model_preset: monomer, models_to_relax: none}
+      parameters: {model_preset: monomer_ptm, models_to_relax: none}

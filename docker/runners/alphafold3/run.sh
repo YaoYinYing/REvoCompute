@@ -230,6 +230,25 @@ run_model() {
     echo "AlphaFold 3 processed JSON changed after feature validation" >&2
     exit 1
   }
+  if [[ "$single_sequence" == yes ]]; then
+    # A single-sequence processed input already fixes the model seed. Refuse a
+    # model-only submission whose model_seed differs instead of publishing a
+    # derived input that describes a seed the inference did not use.
+    "$af3_python" - "$processed_json" "$model_seed" <<'PY'
+import json
+import sys
+
+path, requested = sys.argv[1], int(sys.argv[2])
+with open(path, encoding="utf-8") as handle:
+    seeds = json.load(handle).get("modelSeeds") or []
+if seeds != [requested]:
+    raise SystemExit(
+        f"The prepared features were generated for modelSeeds={seeds}, but this "
+        f"submission requested model_seed={requested}. Resubmit with the prepared "
+        "seed, or rerun the feature stage."
+    )
+PY
+  fi
   [[ -d "$model_dir" ]] || { echo "AlphaFold 3 model parameter directory is missing: $model_dir" >&2; exit 1; }
   find "$model_dir" -maxdepth 1 -type f -name '*.bin.zst' -size +0c -print -quit | grep -q . || {
     echo "AlphaFold 3 model parameters are missing from: $model_dir" >&2

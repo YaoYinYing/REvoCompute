@@ -456,6 +456,23 @@ def _single_sequence_env(tmp_path):
     return env, input_file, output_dir
 
 
+def test_alphafold_refuses_to_guess_the_pipeline_without_a_task_type(tmp_path):
+    env, input_file, output_dir = _single_sequence_env(tmp_path)
+    Path(env["TASK_CONTEXT_SRC"]).write_text(
+        '_parse_param() { :; }\n'
+        'task_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
+        encoding="utf-8",
+    )
+
+    completed = _run_with_manifest(
+        ALPHAFOLD_RUNNER_SCRIPT, input_file, output_dir, env, extra_args=("-s", "features")
+    )
+
+    assert completed.returncode != 0
+    assert "Task type is unavailable" in completed.stderr
+    assert not Path(env["FAKE_ARGS_FILE"]).exists()
+
+
 def test_alphafold_single_sequence_features_stage_forwards_query_only_mode(tmp_path):
     env, input_file, output_dir = _single_sequence_env(tmp_path)
 

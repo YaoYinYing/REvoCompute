@@ -21,7 +21,8 @@ BENCHMARK=$(_parse_param benchmark)
 # database/template parameters are intentionally absent, so pass the harmless
 # upstream defaults instead of empty values; the patched script does not read
 # any database in that mode.
-if [[ "$(task_type)" == alphafold_single_sequence ]]; then
+task_type_id=$(task_type) || { echo "Task type is unavailable; refusing to guess the feature pipeline" >&2; exit 1; }
+if [[ "$task_type_id" == alphafold_single_sequence ]]; then
   single_sequence=true
   MAX_TEMPLATE_DATE=$(_parse_param max_template_date 2021-11-01)
   DB_PRESET=$(_parse_param db_preset full_dbs)

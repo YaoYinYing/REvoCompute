@@ -75,7 +75,11 @@ if os.environ.get('AF3_FAIL_STAGE') == stage:
 out = Path(values['--output_dir']) / 'test_job'
 out.mkdir(parents=True)
 if stage == 'features':
-    (out / 'test_job_data.json').write_text('{\"name\": \"Test Job\"}', encoding='utf-8')
+    source = json.loads(Path(values['--json_path']).read_text(encoding='utf-8'))
+    processed = {'name': 'Test Job'}
+    if 'modelSeeds' in source:
+        processed['modelSeeds'] = source['modelSeeds']
+    (out / 'test_job_data.json').write_text(json.dumps(processed), encoding='utf-8')
 else:
     if not values['--json_path'].endswith('/features/test_job/test_job_data.json'):
         raise SystemExit(8)
@@ -532,6 +536,29 @@ def test_single_sequence_attempt_regenerates_a_stale_derived_input(tmp_path):
     assert failed.returncode == 9
     assert json.loads(derived.read_text(encoding="utf-8"))["sequences"][0]["protein"]["sequence"] == "MKTAYIAK"
     assert not (output / "features/test_job/test_job_data.json").exists()
+    assert not (output / "task_finished").exists()
+
+
+def test_single_sequence_model_only_refuses_a_seed_the_prepared_features_did_not_use(tmp_path, monkeypatch):
+    env, manifest, call_log, _ = _sequence_runner_env(tmp_path)
+    output = tmp_path / "result"
+    document, _ = _staged_processed_document(
+        tmp_path, monkeypatch, content=b'{"name": "Test Job", "modelSeeds": [23]}'
+    )
+    _stage_inputs_env(env, document)
+
+    matching = _run_stage(env, manifest, output, "model")
+    assert matching.returncode == 0, matching.stderr
+
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["params"]["model_seed"] = 9
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    mismatch = _run_stage(env, manifest, output, "model")
+
+    assert mismatch.returncode != 0
+    assert "modelSeeds=[23]" in mismatch.stderr
+    assert "requested model_seed=9" in mismatch.stderr
+    assert len(call_log.read_text(encoding="utf-8").splitlines()) == 1
     assert not (output / "task_finished").exists()
 
 
