@@ -534,7 +534,7 @@ def validate_logical_input(path: str, format_name: str, logical_type: str) -> st
         }
         if len(sequences) < 2 or len(widths) != 1 or 0 in widths:
             return "Alignment must contain at least two equal-length sequences"
-    elif logical_type == "single_protein_sequence" and format_name in {"a3m", "fa", "faa", "fas", "fasta"}:
+    elif logical_type == "single_protein_sequence" and format_name in {"fa", "faa", "fas", "fasta"}:
         from revocompute.input_validators.fasta import validate_single_protein_sequence
 
         return validate_single_protein_sequence(path)
