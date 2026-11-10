@@ -45,10 +45,10 @@ PROTEIN_CHARS = frozenset("ACDEFGHIKLMNPQRSTVWYX")
 #: deleting anything the Server published.
 PROPAGATION_OUTPUTS = ("samples.xtc", "physicality.json")
 
-#: mmCIF categories upstream cannot reconstruct when it infers a system from the
-#: starting structure. It warns and ignores them, which would propagate a
-#: different molecule from the one the user submitted; propagation refuses
-#: instead unless the submission declares the matching system YAML.
+#: mmCIF categories whose molecular meaning upstream's CIF inference does not
+#: preserve: explicit connections are ignored and branched entities omitted.
+#: Either would propagate a structure other than the one submitted, so the
+#: Runner refuses unless the submission declares the matching system YAML.
 _INFERENCE_LOSS_CATEGORIES = (
     ("_struct_conn", "explicit _struct_conn connections"),
     ("_pdbx_entity_branch", "branched entities"),
@@ -100,8 +100,14 @@ def optional_input_path(manifest: dict, role: str) -> Path | None:
     files = manifest.get("inputs", {}).get(role)
     if files is None:
         return None
-    if not isinstance(files, list) or len(files) != 1:
-        raise ValueError(f"input role {role!r} must hold exactly one file")
+    if not isinstance(files, list):
+        raise ValueError(f"input role {role!r} must hold at most one file")
+    if not files:
+        # The server declares every role in the immutable manifest and leaves
+        # an unsubmitted optional role as an empty list.
+        return None
+    if len(files) != 1:
+        raise ValueError(f"input role {role!r} must hold at most one file")
     return Path(files[0]["path"])
 
 
@@ -121,8 +127,8 @@ def require_exact_system(cif_path: Path, system_path: Path | None) -> None:
 
     A declared system YAML makes the molecular definition explicit, and upstream
     still compares every starting atom and its order against it.  Without one,
-    upstream ignores these CIF records with only a warning, so the Runner states
-    the limitation before any model work starts.
+    upstream drops or ignores these records with only a warning, so the Runner
+    states the limitation before any model work starts.
     """
     if system_path is not None:
         return

@@ -47,8 +47,9 @@ inputs:
 input_workspace:
   steps:
   - id: material
-    title: Provide the starting structure
-    description: Upload the CIF structure to propagate
+    title: Provide the structure and system
+    description: Upload the CIF structure to propagate, plus an optional system YAML
+      when explicit connections or branched entities need a declared definition.
     capabilities:
     - plugin: files
       id: source_files

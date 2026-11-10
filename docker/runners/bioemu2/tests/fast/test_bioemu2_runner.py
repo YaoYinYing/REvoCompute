@@ -147,7 +147,7 @@ def _workspace(tmp_path, *, with_cli=False):
 
 def _run(
     tmp_path, asset_root, manifest, modules, input_file, params, extra_env=None,
-    role="sequence", extra_inputs=None,
+    role="sequence", extra_inputs=None, empty_roles=(),
 ):
     from runner_protocol import run_with_manifest
 
@@ -166,7 +166,8 @@ def _run(
     )
     env.update(extra_env or {})
     completed = run_with_manifest(
-        RUNNER, input_file, output_dir, env, params=params, role=role, extra_inputs=extra_inputs
+        RUNNER, input_file, output_dir, env, params=params, role=role,
+        extra_inputs=extra_inputs, empty_roles=empty_roles,
     )
     return completed, output_dir, capture
 
@@ -406,6 +407,25 @@ def test_bioemu2_propagation_forwards_an_explicit_system(tmp_path):
     assert forwards[forwards.index("--x0-cif") + 1] == str(starting)
     assert forwards[forwards.index("--system") + 1] == str(declared)
     assert "declared system YAML" in completed.stdout
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu2_propagation_treats_a_declared_empty_system_role_as_absent(tmp_path):
+    """The server manifest declares every role, leaving an optional one empty."""
+    asset_root, manifest, modules, argv_capture, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "starting.cif"
+    starting.write_text("data_test\n", encoding="utf-8")
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env,
+        role="starting_structure", empty_roles=("system",),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    forwards = json.loads(argv_capture.read_text(encoding="utf-8"))
+    assert "--system" not in forwards
+    assert "inferred from the starting CIF" in completed.stdout
     assert (output_dir / "task_finished").is_file()
 
 

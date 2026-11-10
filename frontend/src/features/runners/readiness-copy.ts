@@ -23,6 +23,8 @@ export function nextActionLabel(action: string): string {
       return t('runners.nextAction.validate');
     case 'promote':
       return t('runners.nextAction.activate');
+    case 'retry':
+      return t('runners.nextAction.retry');
     case 'none':
       return t('runners.nextAction.none');
     default:

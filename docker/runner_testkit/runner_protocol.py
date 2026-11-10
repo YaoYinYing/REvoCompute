@@ -13,9 +13,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def run_with_manifest(
-    script, input_file, output_dir, env, params=None, extra_args=(), *, role, extra_inputs=None
+    script, input_file, output_dir, env, params=None, extra_args=(), *,
+    role, extra_inputs=None, empty_roles=(),
 ):
-    """Run a Runner with a protocol-v4 manifest bound to its named input roles."""
+    """Run a Runner with a protocol-v4 manifest bound to its named input roles.
+
+    ``empty_roles`` mirrors the server manifest, which declares every input role
+    and leaves an unsubmitted optional role as an empty list.
+    """
     inputs = {
         role: [{
             "path": str(input_file),
@@ -29,6 +34,8 @@ def run_with_manifest(
             "relative_path": extra_file.name,
             "sha256": "abc",
         }]
+    for empty_role in empty_roles:
+        inputs.setdefault(empty_role, [])
     manifest_path = input_file.parent / "task.json"
     manifest_path.write_text(
         json.dumps(

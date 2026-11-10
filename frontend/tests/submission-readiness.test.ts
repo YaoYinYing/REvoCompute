@@ -70,6 +70,7 @@ describe('submission readiness copy', () => {
     expect(nextActionLabel('build-sif')).toBe('Build the Runner image');
     expect(nextActionLabel('live-test')).toBe('Run the live test');
     expect(nextActionLabel('promote')).toBe('Activate the staged image');
+    expect(nextActionLabel('retry')).toBe('Retry the submission');
     expect(nextActionLabel('none')).toBe('No action required');
     expect(nextActionLabel('custom-host-step')).toBe('custom-host-step');
   });
