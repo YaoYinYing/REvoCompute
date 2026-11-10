@@ -93,6 +93,18 @@ def _detail(name: str, label: str, submission: dict) -> dict:
             "plugins": [],
             "steps": [
                 {
+                    "id": "settings",
+                    "title": "Settings",
+                    "description": "Tune the run.",
+                    "capabilities": [
+                        {
+                            "plugin": "parameters",
+                            "id": "task_parameters",
+                            "title": "Method settings",
+                        }
+                    ],
+                },
+                {
                     "id": "review",
                     "title": "Review",
                     "description": "Check the submission.",
@@ -132,7 +144,15 @@ def _install_methods(page: Page) -> dict[str, dict]:
                     "$schema": "https://json-schema.org/draft/2020-12/schema",
                     "type": "object",
                     "additionalProperties": False,
-                    "properties": {},
+                    "properties": {
+                        "seed": {
+                            "type": "integer",
+                            "title": "Seed",
+                            "description": "Random seed.",
+                            "default": 1,
+                            "minimum": 0,
+                        }
+                    },
                 }
             ),
         )
@@ -242,6 +262,8 @@ def test_a_refused_final_post_keeps_the_server_reason_and_the_prepared_form(page
     page.goto(f"{ORIGIN}/compute/create_task?task_type=ready_method")
     control = page.locator("button.ct-primary")
     expect(control).to_have_text("Run task")
+    seed = page.locator('[data-ct-parameter="seed"]')
+    seed.fill("42")
     control.click()
 
     # Readiness changed after the preflight the browser saw. The POST response's
@@ -254,6 +276,9 @@ def test_a_refused_final_post_keeps_the_server_reason_and_the_prepared_form(page
     expect(validation).to_contain_text(refusal["message"])
     expect(validation).to_contain_text("Recommended: Run the live test")
     assert validation.inner_text().count(refusal["message"]) == 1
+    # The prepared form survives the refusal: the parameter the reader set is
+    # still there for the recheck.
+    expect(seed).to_have_value("42")
 
     assert len(preflight_calls) == 1
     assert len(post_calls) == 1, "a refused submission must not be retried automatically"

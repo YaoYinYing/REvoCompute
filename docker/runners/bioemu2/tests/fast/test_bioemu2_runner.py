@@ -389,6 +389,33 @@ def test_bioemu2_propagation_refuses_inference_loss_before_sampling(tmp_path):
     assert not argv_capture.exists(), "a refused CIF must not reach upstream"
 
 
+def test_bioemu2_inference_loss_scan_reads_cif_tokens_not_line_prefixes(tmp_path):
+    adapter = _adapter()
+    cases = {
+        # Legal CIF forms that put the data name away from the line start.
+        "loop_same_line.cif": "data_x\nloop_ _struct_conn.id _struct_conn.conn_type_id\n1 covale\n",
+        "value_then_tag.cif": "data_x _struct_conn.id 1\n",
+        "uppercase.cif": "data_x\n_STRUCT_CONN.ID 1\n",
+        "branched_same_line.cif": "data_x\n_pdbx_entity_branch.entity_id 2\n",
+    }
+    for filename, text in cases.items():
+        path = tmp_path / filename
+        path.write_text(text, encoding="utf-8")
+        assert adapter.inference_losses(path), filename
+
+    # Comments, quoted values, and semicolon text fields cannot carry a data
+    # name, so their text is not a refusal.
+    innocent = {
+        "comment.cif": "data_x\n# _struct_conn.id 1\n",
+        "quoted.cif": "data_x\n_note 'see _struct_conn.id below'\n",
+        "text_field.cif": "data_x\n_descriptor\n; _struct_conn.id 1\n;\n",
+    }
+    for filename, text in innocent.items():
+        path = tmp_path / filename
+        path.write_text(text, encoding="utf-8")
+        assert adapter.inference_losses(path) == [], filename
+
+
 def test_bioemu2_propagation_forwards_an_explicit_system(tmp_path):
     asset_root, manifest, modules, argv_capture, env = _propagation_workspace(tmp_path)
     starting = tmp_path / "complex.cif"
@@ -437,7 +464,13 @@ def test_bioemu2_propagation_reports_an_atom_mismatch(tmp_path):
     completed, output_dir, _ = _run(
         tmp_path, asset_root, manifest, modules, starting,
         {"num_samples": 1, "lag_time_ns": 1},
-        {**env, "BIOEMU2_CLI_FAIL": "--x0-cif atoms do not match the system: atom 3 is ('CA', 'C', 'ALA', 0), system has ('CB', 'C', 'ALA', 0)"},
+        {
+            **env,
+            "BIOEMU2_CLI_FAIL": (
+                "--x0-cif atoms do not match the system: atom 3 is "
+                "('CA', 'C', 'ALA', 0), system has ('CB', 'C', 'ALA', 0)"
+            ),
+        },
         role="starting_structure",
     )
 

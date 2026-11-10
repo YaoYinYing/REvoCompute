@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
 
 #: The protein alphabet BioEmu2's ``Protein`` entity accepts. Stricter than the
@@ -111,11 +112,49 @@ def optional_input_path(manifest: dict, role: str) -> Path | None:
     return Path(files[0]["path"])
 
 
+def _cif_tokens(text: str) -> Iterator[str]:
+    """Yield lowercase unquoted CIF data names and values.
+
+    Data names are whitespace-delimited tokens, not line prefixes: a legal
+    ``loop_`` may put several on one line. Comments, quoted values, and
+    semicolon text fields cannot carry a data name, so they are skipped.
+    """
+    in_text_field = False
+    for line in text.splitlines():
+        if in_text_field:
+            in_text_field = not line.startswith(";")
+            continue
+        if line.startswith(";"):
+            in_text_field = True
+            continue
+        index = 0
+        while index < len(line):
+            char = line[index]
+            if char in " \t":
+                index += 1
+                continue
+            if char == "#":
+                break
+            if char in "'\"":
+                quote = char
+                index += 1
+                while index < len(line) and not (
+                    line[index] == quote and (index + 1 == len(line) or line[index + 1] in " \t")
+                ):
+                    index += 1
+                index += 1
+                continue
+            start = index
+            while index < len(line) and line[index] not in " \t":
+                index += 1
+            yield line[start:index].lower()
+
+
 def inference_losses(cif_path: Path) -> list[str]:
     """The features upstream's CIF inference would silently omit."""
     found: list[str] = []
-    for line in cif_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        token = line.lstrip("\ufeff \t").lower()
+    text = cif_path.read_text(encoding="utf-8", errors="replace").lstrip("﻿")
+    for token in _cif_tokens(text):
         for category, label in _INFERENCE_LOSS_CATEGORIES:
             if token.startswith(category + ".") and label not in found:
                 found.append(label)
