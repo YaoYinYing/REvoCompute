@@ -130,7 +130,7 @@ def _cif_tokens(text: str) -> Iterator[str]:
         index = 0
         while index < len(line):
             char = line[index]
-            if char in " \t":
+            if char.isspace():
                 index += 1
                 continue
             if char == "#":
@@ -139,13 +139,14 @@ def _cif_tokens(text: str) -> Iterator[str]:
                 quote = char
                 index += 1
                 while index < len(line) and not (
-                    line[index] == quote and (index + 1 == len(line) or line[index + 1] in " \t")
+                    line[index] == quote
+                    and (index + 1 == len(line) or line[index + 1].isspace())
                 ):
                     index += 1
                 index += 1
                 continue
             start = index
-            while index < len(line) and line[index] not in " \t":
+            while index < len(line) and not line[index].isspace():
                 index += 1
             yield line[start:index].lower()
 

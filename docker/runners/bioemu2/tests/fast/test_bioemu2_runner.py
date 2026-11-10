@@ -396,6 +396,7 @@ def test_bioemu2_inference_loss_scan_reads_cif_tokens_not_line_prefixes(tmp_path
         "loop_same_line.cif": "data_x\nloop_ _struct_conn.id _struct_conn.conn_type_id\n1 covale\n",
         "value_then_tag.cif": "data_x _struct_conn.id 1\n",
         "uppercase.cif": "data_x\n_STRUCT_CONN.ID 1\n",
+        "nbsp_indent.cif": "data_x\n _struct_conn.id 1\n",
         "branched_same_line.cif": "data_x\n_pdbx_entity_branch.entity_id 2\n",
     }
     for filename, text in cases.items():
