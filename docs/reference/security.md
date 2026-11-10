@@ -183,11 +183,15 @@ by file extension and fails closed for formats without a Core validator.
   non-empty records, and size ceilings — and leaves canonical semantic parsing
   to Chai itself. The `boltz_specification` profile covers both of Boltz's
   serializations: a YAML document and the `>CHAIN|TYPE[|MSA]` FASTA, whose
-  `ccd` and `smiles` entity payloads are not protein residues. Both FASTA
-  dialects are registered as physical-format dialects, so they *replace* the
-  strict `validate_fasta` for their logical type rather than running after it;
-  every other FASTA role keeps the protein alphabet. The Boltz profile requires
-  every chain to resolve to one of the three upstream MSA modes: an uploaded
+  `ccd` and `smiles` entity payloads are not protein residues. The Chai and
+  Boltz FASTA dialects are registered as physical-format dialects, so they
+  *replace* the strict `validate_fasta` for their logical type rather than
+  running after it; every other FASTA role keeps the protein alphabet. The
+  `single_protein_sequence` profile is the stricter first-party protein profile
+  used by the sequence-first Tasks: it requires exactly one non-empty record,
+  no interior whitespace, and only uppercase amino-acid letters (the general
+  FASTA gap and stop symbols are rejected). The Boltz
+  profile requires every chain to resolve to one of the three upstream MSA modes: an uploaded
   `.a3m` or `.csv` asset named through a confined relative reference, explicit
   single-sequence `msa: empty`, or the default online ColabFold service.
   A reference that is an absolute path, a traversal, or a URL is rejected, and

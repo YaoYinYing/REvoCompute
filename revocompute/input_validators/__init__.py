@@ -45,6 +45,7 @@ from revocompute.input_validators.fasta import (  # noqa: F401 — public API
     validate_a3m,
     validate_chai_entity_fasta,
     validate_fasta,
+    validate_single_protein_sequence,
 )
 from revocompute.input_validators.json_file import validate_json  # noqa: F401
 from revocompute.input_validators.mmcif import validate_mmcif  # noqa: F401
@@ -93,6 +94,10 @@ _DIALECTS: dict[tuple[str, str], Callable[[str], str | None]] = {
     ("fasta", "chai_entity_specification"): fasta.validate_chai_entity_fasta,
     ("fa", "chai_entity_specification"): fasta.validate_chai_entity_fasta,
     ("faa", "chai_entity_specification"): fasta.validate_chai_entity_fasta,
+    ("fasta", "single_protein_sequence"): fasta.validate_single_protein_sequence,
+    ("fa", "single_protein_sequence"): fasta.validate_single_protein_sequence,
+    ("faa", "single_protein_sequence"): fasta.validate_single_protein_sequence,
+    ("fas", "single_protein_sequence"): fasta.validate_single_protein_sequence,
     ("fasta", "boltz_specification"): profiles.validate_boltz_fasta_specification,
     ("fa", "boltz_specification"): profiles.validate_boltz_fasta_specification,
     ("fas", "boltz_specification"): profiles.validate_boltz_fasta_specification,

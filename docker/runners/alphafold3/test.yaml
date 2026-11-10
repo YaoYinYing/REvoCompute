@@ -6,3 +6,7 @@ collections:
       task: alphafold3
       input: {roles: {specification: [tests/data/json/alphafold3_tiny.json]}}
       parameters: {num_recycles: 1, num_diffusion_samples: 1}
+    - id: minimal-alphafold3-single-sequence
+      task: alphafold3_single_sequence
+      input: {roles: {sequence: [tests/data/msa/2KL8.fasta]}}
+      parameters: {num_recycles: 1, num_diffusion_samples: 1}

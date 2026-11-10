@@ -26,3 +26,7 @@ task_input() {
 task_inputs() {
   python3 "$_task_context_dir/task_context.py" inputs "$1"
 }
+
+task_type() {
+  python3 "$_task_context_dir/task_context.py" task-type
+}
