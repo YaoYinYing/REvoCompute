@@ -29,7 +29,7 @@ from revocompute.input_validators.common import (
 _CHAI_ENTITY_TYPES = frozenset({"protein", "ligand", "rna", "dna", "glycan"})
 # A single-chain inference feeds upstream protein parsers, which accept amino
 # acids only; the general FASTA gaps and stop symbols are not residues.
-_SINGLE_PROTEIN_RESIDUES = _FASTA_ALPHABET - frozenset("*-.")
+_SINGLE_PROTEIN_RESIDUES = frozenset(string.ascii_uppercase)
 # Upstream accepts RNA/DNA modification blocks and ligand SMILES punctuation.
 _CHAI_POLYMER_CHARS = frozenset(string.ascii_letters + string.digits + "()[]")
 _CHAI_LIGAND_CHARS = frozenset(string.ascii_letters + string.digits + ".-+=#$%:/\\[]()<>@")

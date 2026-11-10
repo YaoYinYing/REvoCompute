@@ -188,8 +188,9 @@ by file extension and fails closed for formats without a Core validator.
   *replace* the strict `validate_fasta` for their logical type rather than
   running after it; every other FASTA role keeps the protein alphabet. The
   `single_protein_sequence` profile is the stricter first-party protein profile
-  used by the sequence-first Tasks: it keeps that alphabet and additionally
-  requires exactly one non-empty record, with no interior whitespace. The Boltz
+  used by the sequence-first Tasks: it requires exactly one non-empty record,
+  no interior whitespace, and only uppercase amino-acid letters (the general
+  FASTA gap and stop symbols are rejected). The Boltz
   profile requires every chain to resolve to one of the three upstream MSA modes: an uploaded
   `.a3m` or `.csv` asset named through a confined relative reference, explicit
   single-sequence `msa: empty`, or the default online ColabFold service.
