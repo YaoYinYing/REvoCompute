@@ -1,11 +1,11 @@
-import { getTaskCatalog, getTaskDefinition, preflightTask, requestAccess, submitTask } from './api';
+import { CreateTaskApiError, getTaskCatalog, getTaskDefinition, preflightTask, requestAccess, submitTask } from './api';
 import { fetchDemoFile, getTaskDemos } from './demo';
 import type { TaskDemo } from './demo';
 import { InputWorkspace } from './input-workspace/InputWorkspace';
 import type { PresetApplication, WorkspacePreset } from './input-workspace/InputWorkspace';
 import { buildSubmissionFormData } from './submission';
 import type { TaskCatalog, TaskFormDefinition, TaskPreflight, TaskSummary } from './types';
-import { submissionNotice } from '../runners/readiness-copy';
+import { submissionNotice, submissionRefusal } from '../runners/readiness-copy';
 import { t } from '../../app/i18n';
 import { loadEnvironment } from '../../app/environment';
 import { safeExternalUrl } from '../../app/domain-vocabulary';
@@ -425,7 +425,24 @@ export class CreateTask {
     try {
       const task = await submitTask(data);
       this.actionFailed = false; this.setStatus(t('ct.queued', { id: task.task_id }), 'ok'); window.location.assign('/compute/dashboard');
-    } catch (error) { if (generation !== this.generation) return; this.actionFailed = true; this.setStatus(t('ct.submissionFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'); this.preflight = null; this.setBusy(false); this.refreshValidation(); }
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.actionFailed = true; this.setBusy(false); this.preflight = null;
+      // A READY preflight is advice, not a reservation. When the admission
+      // boundary refuses this POST, adopt that response's own reason and
+      // recovery so the page never shows a generic failure for a refusal the
+      // server described. The workspace is untouched, so the inputs and
+      // settings stay ready for a recheck.
+      const refusal = error instanceof CreateTaskApiError ? submissionRefusal(error.payload) : null;
+      if (refusal) {
+        this.definition.submission = refusal;
+        this.refreshValidation();
+        this.setStatus(t('ct.submissionRefused'), 'error');
+        return;
+      }
+      this.setStatus(t('ct.submissionFailed', { message: error instanceof Error ? error.message : String(error) }), 'error');
+      this.refreshValidation();
+    }
   }
 
   /** Load an example into the form: a local edit, never a submission. */

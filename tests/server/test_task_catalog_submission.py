@@ -18,7 +18,10 @@ from pathlib import Path
 from conftest import _load_pssm_module, _test_client_auth
 
 
-def _write_attestation(module, *, status: str, ready: bool, reason: str, message: str, next_action: str) -> None:
+def _write_attestation(
+    module, *, status: str, ready: bool, reason: str, message: str, next_action: str,
+    omitted_tasks: tuple[str, ...] = (),
+) -> None:
     path = Path(module.CONFIG.server_dir) / "readiness" / "cpu_runner.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -30,6 +33,7 @@ def _write_attestation(module, *, status: str, ready: bool, reason: str, message
                 "reason_code": reason,
                 "message": message,
                 "next_action": next_action,
+                "omitted_tasks": list(omitted_tasks),
                 # Admin-only evidence that must never reach the public projection.
                 "sif_path": "/deployment/images/cpu_runner_v1.sif",
                 "sif_sha256": "sha256:" + "a" * 64,
@@ -118,3 +122,34 @@ def test_catalog_and_detail_project_the_published_submission_decision(monkeypatc
     assert "sha256:" + "b" * 64 not in rendered
     for field in ("sif_path", "sif_sha256", "receipt_sif_sha256", "build_provenance_digest", "evidence"):
         assert field not in rendered
+
+
+def test_a_ready_family_that_omitted_this_case_is_a_separate_refusal(monkeypatch, tmp_path):
+    """READY does not mean every Task's live-test case ran.
+
+    The family can be validated while its acceptance covered a narrower task
+    set. That is not a stale receipt and not an unavailable Runner, so the
+    projection keeps the READY status and names the omitted case.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    _write_attestation(
+        module,
+        status="READY",
+        ready=True,
+        reason="READY",
+        message="Active Runner SIF passed all required current smoke cases",
+        next_action="none",
+        omitted_tasks=("cpu_runner",),
+    )
+    client = module.app.test_client()
+
+    submission = _method(client, "cpu_runner", _test_client_auth(module))["submission"]
+    assert submission == {
+        "ready": False,
+        "status": "READY",
+        "reason_code": "LIVE_TEST_CASE_OMITTED",
+        "message": "The deployment's Runner acceptance did not run this Task's live-test case",
+        "next_action": "live-test",
+    }
+    assert _method(client, "cpu_runner", {})["submission"] == {"submittable": False}

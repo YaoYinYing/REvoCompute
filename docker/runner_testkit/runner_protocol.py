@@ -12,8 +12,30 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def run_with_manifest(script, input_file, output_dir, env, params=None, extra_args=(), *, role):
-    """Run a Runner with a protocol-v4 manifest bound to its named input role."""
+def run_with_manifest(
+    script, input_file, output_dir, env, params=None, extra_args=(), *,
+    role, extra_inputs=None, empty_roles=(),
+):
+    """Run a Runner with a protocol-v4 manifest bound to its named input roles.
+
+    ``empty_roles`` mirrors the server manifest, which declares every input role
+    and leaves an unsubmitted optional role as an empty list.
+    """
+    inputs = {
+        role: [{
+            "path": str(input_file),
+            "relative_path": input_file.name,
+            "sha256": "abc",
+        }]
+    }
+    for extra_role, extra_file in (extra_inputs or {}).items():
+        inputs[extra_role] = [{
+            "path": str(extra_file),
+            "relative_path": extra_file.name,
+            "sha256": "abc",
+        }]
+    for empty_role in empty_roles:
+        inputs.setdefault(empty_role, [])
     manifest_path = input_file.parent / "task.json"
     manifest_path.write_text(
         json.dumps(
@@ -21,13 +43,7 @@ def run_with_manifest(script, input_file, output_dir, env, params=None, extra_ar
                 "task_id": "testtask",
                 "task_type": "test",
                 "params": params or {},
-                "inputs": {
-                    role: [{
-                        "path": str(input_file),
-                        "relative_path": input_file.name,
-                        "sha256": "abc",
-                    }]
-                },
+                "inputs": inputs,
             }
         ),
         encoding="utf-8",

@@ -93,6 +93,18 @@ def _detail(name: str, label: str, submission: dict) -> dict:
             "plugins": [],
             "steps": [
                 {
+                    "id": "settings",
+                    "title": "Settings",
+                    "description": "Tune the run.",
+                    "capabilities": [
+                        {
+                            "plugin": "parameters",
+                            "id": "task_parameters",
+                            "title": "Method settings",
+                        }
+                    ],
+                },
+                {
                     "id": "review",
                     "title": "Review",
                     "description": "Check the submission.",
@@ -132,7 +144,15 @@ def _install_methods(page: Page) -> dict[str, dict]:
                     "$schema": "https://json-schema.org/draft/2020-12/schema",
                     "type": "object",
                     "additionalProperties": False,
-                    "properties": {},
+                    "properties": {
+                        "seed": {
+                            "type": "integer",
+                            "title": "Seed",
+                            "description": "Random seed.",
+                            "default": 1,
+                            "minimum": 0,
+                        }
+                    },
                 }
             ),
         )
@@ -195,6 +215,73 @@ def test_compare_marks_a_blocked_method_without_offering_submission(page: Page):
     expect(configure.locator("a[href^=\"/compute/create_task\"]")).to_have_count(1)
     expect(configure.get_by_role("button", name="Create task unavailable")).to_be_disabled()
     expect(configure).to_contain_text(BLOCKED["message"])
+
+
+def test_a_refused_final_post_keeps_the_server_reason_and_the_prepared_form(page: Page):
+    _install_app(page)
+    _install_methods(page)
+    preflight_calls: list[str] = []
+    post_calls: list[str] = []
+
+    def accept_preflight(route, request):
+        preflight_calls.append(request.url)
+        route.fulfill(
+            json={
+                "valid": True,
+                "security": {"status": "passed"},
+                "contract": {"status": "passed"},
+                "admission": {
+                    "allowed": True,
+                    "runner_ready": True,
+                    "infrastructure_ready": True,
+                    "infrastructure_status": "READY",
+                },
+                "normalized_params": {},
+                "inputs": [],
+                "warnings": [],
+                "errors": [],
+            }
+        )
+
+    refusal = {
+        "error": "Runner is currently unavailable for new submissions",
+        "runner": "demo",
+        "status": "VALIDATION_STALE",
+        "reason": "RECEIPT_STALE",
+        "message": "Live-test receipt does not match the active Runner identity",
+        "next_action": "live-test",
+    }
+
+    def refuse_post(route, request):
+        post_calls.append(request.url)
+        route.fulfill(status=503, json=refusal)
+
+    page.route(f"{ORIGIN}/compute/api/preflight/ready_method", accept_preflight)
+    page.route(f"{ORIGIN}/compute/api/post", refuse_post)
+
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=ready_method")
+    control = page.locator("button.ct-primary")
+    expect(control).to_have_text("Run task")
+    seed = page.locator('[data-ct-parameter="seed"]')
+    seed.fill("42")
+    control.click()
+
+    # Readiness changed after the preflight the browser saw. The POST response's
+    # own reason and recovery replace the generic failure string, and the page
+    # returns to the non-mutating availability recheck.
+    expect(page.locator("button.ct-primary")).to_have_text("Recheck availability")
+    expect(page.locator(".ct-status")).to_contain_text("refused this submission")
+    expect(page.locator(".ct-status")).not_to_contain_text("Submission failed")
+    validation = page.locator(".ct-validation")
+    expect(validation).to_contain_text(refusal["message"])
+    expect(validation).to_contain_text("Recommended: Run the live test")
+    assert validation.inner_text().count(refusal["message"]) == 1
+    # The prepared form survives the refusal: the parameter the reader set is
+    # still there for the recheck.
+    expect(seed).to_have_value("42")
+
+    assert len(preflight_calls) == 1
+    assert len(post_calls) == 1, "a refused submission must not be retried automatically"
 
 
 def test_create_task_deep_link_rechecks_availability_instead_of_submitting(page: Page):

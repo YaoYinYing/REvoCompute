@@ -36,7 +36,10 @@ class _AvailableInfrastructure:
         return None
 
 
-def _write_attestation(module, *, status: str, ready: bool, reason: str, next_action: str) -> Path:
+def _write_attestation(
+    module, *, status: str, ready: bool, reason: str, next_action: str,
+    omitted_tasks: tuple[str, ...] = (),
+) -> Path:
     path = Path(module.CONFIG.server_dir) / "readiness" / "cpu_runner.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -48,6 +51,7 @@ def _write_attestation(module, *, status: str, ready: bool, reason: str, next_ac
                 "reason_code": reason,
                 "message": "Runner readiness evidence for the race case.",
                 "next_action": next_action,
+                "omitted_tasks": list(omitted_tasks),
             }
         ),
         encoding="utf-8",
@@ -220,6 +224,47 @@ def test_direct_post_without_readiness_evidence_is_refused_before_any_side_effec
 
     assert response.status_code == 503
     assert response.get_json()["reason"] == "RUNNER_UNAVAILABLE"
+    assert module.task_store.list_tasks() == []
+    assert module.task_store.list_live_reservations() == []
+    assert _durable_uploads(module) == []
+    assert queued == []
+
+
+def test_a_ready_family_that_omitted_this_case_refuses_the_post_without_side_effects(
+    monkeypatch, tmp_path
+):
+    """The case-omitted refusal is distinct from stale readiness.
+
+    A READY family whose acceptance covered other tasks refuses this one with
+    its own reason and the same recovery action, before any upload or Task.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    module.app.config["infrastructure_readiness"] = _AvailableInfrastructure()
+    queued: list[bool] = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_args, **_kwargs: queued.append(True))
+    _write_attestation(
+        module, status="READY", ready=True, reason="READY", next_action="none",
+        omitted_tasks=("cpu_runner",),
+    )
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=_test_client_auth(module),
+        data=_payload(),
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 503, response.get_data(as_text=True)
+    body = response.get_json()
+    assert body["status"] == "READY"
+    assert body["reason"] == "LIVE_TEST_CASE_OMITTED"
+    assert body["next_action"] == "live-test"
+    assert "did not run this Task's live-test case" in body["message"]
     assert module.task_store.list_tasks() == []
     assert module.task_store.list_live_reservations() == []
     assert _durable_uploads(module) == []

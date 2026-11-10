@@ -1,4 +1,5 @@
 import type { TaskTypeSummary } from '../../api/app-api';
+import type { components } from '../../api/schema.generated';
 import { t } from '../../app/i18n';
 
 /**
@@ -22,6 +23,8 @@ export function nextActionLabel(action: string): string {
       return t('runners.nextAction.validate');
     case 'promote':
       return t('runners.nextAction.activate');
+    case 'retry':
+      return t('runners.nextAction.retry');
     case 'none':
       return t('runners.nextAction.none');
     default:
@@ -49,5 +52,31 @@ export function submissionNotice(
   return {
     message: submission.message,
     recovery: t('runners.recovery', { action: nextActionLabel(submission.next_action) }),
+  };
+}
+
+/**
+ * The admission refusal a final POST can return, in the same shape the method
+ * detail projects.
+ *
+ * A READY preflight does not bind the submission; readiness can change between
+ * the two requests. The server answers that race with the same typed refusal it
+ * uses at the admission boundary, so the page can keep the reader's inputs and
+ * show the current reason instead of collapsing it into the generic error
+ * string. Anything that is not that exact payload stays a generic failure.
+ */
+export function submissionRefusal(payload: unknown): SubmissionState | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const item = payload as Record<string, unknown>;
+  if (item.runner === undefined) return null;
+  for (const field of ['status', 'reason', 'message', 'next_action'] as const) {
+    if (typeof item[field] !== 'string' || !item[field]) return null;
+  }
+  return {
+    ready: false,
+    status: item.status as components['schemas']['RunnerReadinessStatus'],
+    reason_code: item.reason as string,
+    message: item.message as string,
+    next_action: item.next_action as string,
   };
 }
