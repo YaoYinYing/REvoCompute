@@ -171,6 +171,27 @@ def test_preflight_rejects_multi_record_and_empty_sequences_before_scheduling(mo
     assert queued == []
 
 
+def test_preflight_rejects_gap_and_stop_symbols_before_scheduling(monkeypatch, tmp_path):
+    module, _client_obj = _client(monkeypatch, tmp_path)
+    _allow_gpu_tasks(module)
+    queued: list[bool] = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
+
+    for name in (AF2, AF3):
+        for symbol in "-.*":
+            response = _preflight(module, name, f">one\nACD{symbol}EF\n", "one.fasta")
+            assert response.status_code == 400, response.get_data(as_text=True)
+            payload = response.get_json()
+            assert payload["valid"] is False
+            assert payload["security"]["status"] == "failed"
+            assert payload["errors"][0]["code"] == "input_format_invalid"
+            assert payload["errors"][0]["role"] == "sequence"
+            assert "amino-acid letters" in payload["errors"][0]["message"]
+
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+
+
 def test_preflight_accepts_one_single_record_fasta(monkeypatch, tmp_path):
     module, _client_obj = _client(monkeypatch, tmp_path)
     _allow_gpu_tasks(module)

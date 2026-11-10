@@ -137,6 +137,15 @@ def test_single_protein_sequence_requires_exactly_one_non_empty_record(tmp_path)
         assert validate_input_file(str(path), path.name) is None  # plain protein FASTA
         assert validate_input_file(str(path), path.name, logical_type="single_protein_sequence") is None
         assert validate_logical_input(str(path), "fasta", "single_protein_sequence") is None
+    # The general FASTA alphabet keeps gaps and stops; single-chain inference
+    # feeds upstream parsers that accept amino-acid letters only.
+    for index, symbol in enumerate("-.*"):
+        gapped = _write(tmp_path, f">h\nACD{symbol}EF\n".encode(), f"symbol_{index}.fasta")
+        assert validate_input_file(str(gapped), gapped.name) is None
+        assert "amino-acid letters" in validate_input_file(
+            str(gapped), gapped.name, logical_type="single_protein_sequence"
+        )
+        assert "amino-acid letters" in validate_logical_input(str(gapped), "fasta", "single_protein_sequence")
     assert "exactly one FASTA record" in validate_input_file(
         str(two), two.name, logical_type="single_protein_sequence"
     )

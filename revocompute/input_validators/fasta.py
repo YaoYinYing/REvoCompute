@@ -27,6 +27,9 @@ from revocompute.input_validators.common import (
 )
 
 _CHAI_ENTITY_TYPES = frozenset({"protein", "ligand", "rna", "dna", "glycan"})
+# A single-chain inference feeds upstream protein parsers, which accept amino
+# acids only; the general FASTA gaps and stop symbols are not residues.
+_SINGLE_PROTEIN_RESIDUES = _FASTA_ALPHABET - frozenset("*-.")
 # Upstream accepts RNA/DNA modification blocks and ligand SMILES punctuation.
 _CHAI_POLYMER_CHARS = frozenset(string.ascii_letters + string.digits + "()[]")
 _CHAI_LIGAND_CHARS = frozenset(string.ascii_letters + string.digits + ".-+=#$%:/\\[]()<>@")
@@ -186,8 +189,10 @@ def validate_single_protein_sequence(path: str) -> str | None:
     """Return an error unless *path* is exactly one non-empty protein record.
 
     A single-chain inference mode needs a single sequence; a multi-record FASTA
-    is a complex, not a longer protein. The physical alphabet and framing are
-    still enforced by :func:`validate_fasta`.
+    is a complex, not a longer protein. The framing and the general FASTA
+    alphabet are enforced by :func:`validate_fasta`; this logical type
+    additionally excludes the gap and stop symbols that upstream protein
+    parsers do not accept.
     """
     error = validate_fasta(path)
     if error is not None:
@@ -206,6 +211,8 @@ def validate_single_protein_sequence(path: str) -> str | None:
         else:
             if any(char in _FASTA_WHITESPACE for char in stripped):
                 return "Single-sequence input must not contain whitespace inside the sequence"
+            if any(char not in _SINGLE_PROTEIN_RESIDUES for char in stripped):
+                return "Single-sequence input must contain only amino-acid letters"
             residues += len(stripped)
     if headers != 1:
         return "Single-sequence input must contain exactly one FASTA record"
