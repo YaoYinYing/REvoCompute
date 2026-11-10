@@ -94,6 +94,8 @@ import sys
 from pathlib import Path
 
 Path(os.environ["BIOEMU2_CLI_CAPTURE"]).write_text(json.dumps(sys.argv[1:]))
+if failure := os.environ.get("BIOEMU2_CLI_FAIL"):
+    sys.exit(failure)
 out = Path(sys.argv[sys.argv.index("--out") + 1])
 out.mkdir(parents=True, exist_ok=True)
 (out / "samples.xtc").write_bytes(b"xtc")
@@ -143,7 +145,10 @@ def _workspace(tmp_path, *, with_cli=False):
     return asset_root, manifest, modules, fasta, None
 
 
-def _run(tmp_path, asset_root, manifest, modules, input_file, params, extra_env=None, role="sequence"):
+def _run(
+    tmp_path, asset_root, manifest, modules, input_file, params, extra_env=None,
+    role="sequence", extra_inputs=None,
+):
     from runner_protocol import run_with_manifest
 
     output_dir = tmp_path / "outputs"
@@ -160,7 +165,9 @@ def _run(tmp_path, asset_root, manifest, modules, input_file, params, extra_env=
         }
     )
     env.update(extra_env or {})
-    completed = run_with_manifest(RUNNER, input_file, output_dir, env, params=params, role=role)
+    completed = run_with_manifest(
+        RUNNER, input_file, output_dir, env, params=params, role=role, extra_inputs=extra_inputs
+    )
     return completed, output_dir, capture
 
 
@@ -322,6 +329,101 @@ def test_bioemu2_propagation_omits_unresolved_optional_flags(tmp_path):
         "1",
     ]
     assert (output_dir / "topology.cif").is_file()
+
+
+def _propagation_workspace(tmp_path):
+    asset_root, manifest, modules, _fasta, cli = _workspace(tmp_path, with_cli=True)
+    argv_capture = tmp_path / "argv.json"
+    env = {
+        "TASK_TYPE": "bioemu2_propagate",
+        "BIOEMU2_CLI": str(cli),
+        "BIOEMU2_CLI_CAPTURE": str(argv_capture),
+    }
+    return asset_root, manifest, modules, argv_capture, env
+
+
+def test_bioemu2_propagation_accepts_a_ligand_that_inference_represents(tmp_path):
+    asset_root, manifest, modules, argv_capture, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "complex.cif"
+    starting.write_text(
+        "data_complex\n"
+        "_pdbx_entity_nonpoly.entity_id 2\n"
+        "_pdbx_entity_nonpoly.comp_id LIG\n"
+        "loop_\n_atom_site.id\n1\n",
+        encoding="utf-8",
+    )
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (output_dir / "task_finished").is_file()
+    # Presence of a non-polymer entity is not by itself lossy: upstream infers
+    # the ligand, so no explicit system is required.
+    assert "--system" not in json.loads(argv_capture.read_text(encoding="utf-8"))
+    assert "inferred from the starting CIF" in completed.stdout
+
+
+def test_bioemu2_propagation_refuses_inference_loss_before_sampling(tmp_path):
+    asset_root, manifest, modules, argv_capture, env = _propagation_workspace(tmp_path)
+    cases = {
+        "struct_conn.cif": ("_struct_conn.id 1\n", "_struct_conn connections"),
+        "branched.cif": ("_pdbx_entity_branch.entity_id 2\n", "branched entities"),
+    }
+    for filename, (record, label) in cases.items():
+        starting = tmp_path / filename
+        starting.write_text(f"data_lossy\n{record}", encoding="utf-8")
+
+        completed, output_dir, _ = _run(
+            tmp_path, asset_root, manifest, modules, starting,
+            {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
+        )
+
+        assert completed.returncode != 0, filename
+        assert label in completed.stderr, completed.stderr
+        assert "system YAML" in completed.stderr
+        assert not (output_dir / "task_finished").exists()
+    assert not argv_capture.exists(), "a refused CIF must not reach upstream"
+
+
+def test_bioemu2_propagation_forwards_an_explicit_system(tmp_path):
+    asset_root, manifest, modules, argv_capture, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "complex.cif"
+    starting.write_text("data_complex\n_struct_conn.id 1\n", encoding="utf-8")
+    declared = tmp_path / "system.yaml"
+    declared.write_text("entities: []\n", encoding="utf-8")
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env,
+        role="starting_structure", extra_inputs={"system": declared},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    forwards = json.loads(argv_capture.read_text(encoding="utf-8"))
+    assert forwards[forwards.index("--x0-cif") + 1] == str(starting)
+    assert forwards[forwards.index("--system") + 1] == str(declared)
+    assert "declared system YAML" in completed.stdout
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu2_propagation_reports_an_atom_mismatch(tmp_path):
+    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "starting.cif"
+    starting.write_text("data_test\n", encoding="utf-8")
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1},
+        {**env, "BIOEMU2_CLI_FAIL": "--x0-cif atoms do not match the system: atom 3 is ('CA', 'C', 'ALA', 0), system has ('CB', 'C', 'ALA', 0)"},
+        role="starting_structure",
+    )
+
+    assert completed.returncode != 0
+    assert "atoms do not match the system" in completed.stderr
+    assert not (output_dir / "task_finished").exists()
 
 
 def test_bioemu2_propagation_requires_the_starting_structure_role(tmp_path):

@@ -4,19 +4,22 @@ id: bioemu2_propagate
 summary: Sample endpoints at a time lag from one starting structure with BioEmu2.
 use_when: Use this to propagate one all-atom starting structure forward by a fixed lag;
   choose the equilibrium Task when you need an ensemble from a sequence instead.
-input_summary: One all-atom protein structure in mmCIF. The system is inferred from
-  the CIF atoms and standard residues; explicit connections and branched entities are
-  not imported.
+input_summary: One all-atom structure in mmCIF, plus an optional explicit BioEmu2
+  system YAML. Without the YAML the molecular system is inferred from the CIF atoms,
+  standard residues, and supported ligands; a CIF whose explicit connections or
+  branched entities cannot be inferred is refused rather than altered.
 output_summary: Independent endpoints at the requested lag, the matching topology,
   per-endpoint physicality results, and the resolved sampling system.
 considerations:
 - The endpoints are independent samples at one lag from the same starting structure,
   not a time-ordered trajectory; frame order is input order.
-- The molecular system is inferred from the starting CIF, so the CIF atoms must match
-  that system exactly. Upstream does not import explicit `_struct_conn` connections
-  or branched entities from the CIF; use a simple protein system, such as a BioEmu2
-  sampling output, rather than an arbitrary structure with covalent links. Exactly
-  one starting structure is accepted per run.
+- The molecular system is inferred from the starting CIF unless a system YAML is
+  supplied, and the CIF atoms must match that system exactly, including atom order.
+  Upstream does not import explicit `_struct_conn` connections or branched entities
+  from the CIF, so a CIF containing them is refused unless the matching system YAML
+  declares them. A ligand that CIF inference represents is kept; presence of a ligand
+  alone is not a reason for refusal. Exactly one starting structure is accepted per
+  run.
 - Physicality checking reports per-endpoint results in physicality.json; every endpoint
   is retained and none is removed because of the report.
 - BioEmu2 queries the public ColabFold MMseqs2 service (api.colabfold.com) for the
@@ -31,9 +34,16 @@ inputs:
     type: protein_structure
     cardinality: {min: 1, max: 1}
     formats: [cif]
-    description: Exactly one all-atom mmCIF structure of a simple protein system. Its
-      atoms must match the system BioEmu2 infers from it; explicit connections and
-      branched entities are not imported.
+    description: Exactly one all-atom mmCIF structure. Its atoms and their order must
+      match the system BioEmu2 infers from it, or the system declared alongside it.
+  system:
+    title: Explicit system definition (optional)
+    type: supporting_data
+    cardinality: {min: 0, max: 1}
+    formats: [yaml, yml]
+    description: Optional BioEmu2 system YAML that declares the entities and bonds
+      CIF inference cannot reproduce. Its atoms must match the starting structure
+      exactly; a mismatched system is refused before sampling.
 input_workspace:
   steps:
   - id: material
