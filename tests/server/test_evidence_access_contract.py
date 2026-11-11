@@ -77,6 +77,14 @@ def _acl_permissions(text: str) -> dict[tuple[str, str], int]:
     return entries
 
 
+def _principal_name(lookup, numeric: int) -> str:
+    """The name ``getfacl`` prints, or the numeric qualifier when unregistered."""
+    try:
+        return lookup(numeric)
+    except KeyError:
+        return str(numeric)
+
+
 def _named_entry(entries: dict[tuple[str, str], int], kind: str, numeric: int, name: str) -> int:
     for qualifier in (name, str(numeric)):
         if (key := (kind, qualifier)) in entries:
@@ -118,8 +126,12 @@ def test_default_acl_mask_permits_shared_read(tmp_path):
     )
     entries = _acl_permissions(result.stdout)
     mask = entries.get(("mask", ""), 0)
-    user_entry = _named_entry(entries, "user", _SERVICE_UID, pwd.getpwuid(_SERVICE_UID).pw_name)
-    group_entry = _named_entry(entries, "group", _SERVICE_GID, grp.getgrgid(_SERVICE_GID).gr_name)
+    user_entry = _named_entry(
+        entries, "user", _SERVICE_UID, _principal_name(lambda uid: pwd.getpwuid(uid).pw_name, _SERVICE_UID)
+    )
+    group_entry = _named_entry(
+        entries, "group", _SERVICE_GID, _principal_name(lambda gid: grp.getgrgid(gid).gr_name, _SERVICE_GID)
+    )
     assert mask & 0o4, entries
     assert user_entry & mask & 0o4, entries
     assert group_entry & mask & 0o4, entries
