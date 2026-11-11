@@ -208,7 +208,9 @@ def test_gpu_accounting_uses_any_gpu_stage_in_the_graph(monkeypatch):
         lambda _user_id: {"period": "2026-10", "remaining_gpu_seconds": 10},
     )
     monkeypatch.setattr(
-        live_test_executor, "atomic_write_json", lambda path, payload: published.append((path, payload))
+        live_test_executor,
+        "atomic_write_json",
+        lambda path, payload, **_kwargs: published.append((path, payload)),
     )
 
     context = live_test_executor._prepare_gpu_accounting(task_type)
