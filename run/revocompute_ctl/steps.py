@@ -320,6 +320,43 @@ def require_prepared_snapshot(state) -> None:
         raise SystemExit(1)
 
 
+def prepared_family_names(state) -> set[str]:
+    """Family IDs declared by the prepared Runner snapshot."""
+    from revocompute.plugins import PluginManager
+
+    return {manifest.id for manifest in PluginManager().discover(deployment_plugin_root(state, prepared=True))}
+
+
+def validate_prepared_family_selection(state) -> None:
+    """Refuse a candidate whose family set differs from the configured one.
+
+    ``prepare --enabled-runners`` narrows the candidate for a build/live-test
+    window.  Promoting that candidate would silently remove every other family
+    from the deployed Runner tree, so a prepared restart requires the candidate
+    to match ``ENABLED_TASKRUNNERS`` exactly when that setting names any family.
+    """
+    configured = {name.strip() for name in state.get("ENABLED_TASKRUNNERS").split(",") if name.strip()}
+    if not configured:
+        return
+    prepared = prepared_family_names(state)
+    missing = sorted(configured - prepared)
+    unexpected = sorted(prepared - configured)
+    if not missing and not unexpected:
+        return
+    detail = []
+    if missing:
+        detail.append("missing " + ", ".join(missing))
+    if unexpected:
+        detail.append("unexpected " + ", ".join(unexpected))
+    print(
+        "Prepared Runner snapshot does not match ENABLED_TASKRUNNERS "
+        f"({'; '.join(detail)}). Run a bare `bash run/restart.sh prepare` "
+        "or update ENABLED_TASKRUNNERS.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
 def _write_prepared_marker(state) -> None:
     marker = _prepared_marker_path(state)
     marker.parent.mkdir(parents=True, exist_ok=True)
@@ -744,11 +781,28 @@ def drain_tool_calls(
             raise RuntimeError(f"Timed out with {active} outstanding Tool call(s); deployment was not stopped")
         sleep(min(1.0, remaining))
 
-# The resource-policy audit argv, kept as one literal so the static test
-# assertion stays a one-liner.  No --no-build: `docker compose run` rejects
+# The resource-policy audit argv.  No --no-build: `docker compose run` rejects
 # it (the worker image already exists — the prepared preflight proves that
 # first), and the image check precedes this call.
-RESOURCE_AUDIT_CMD = "run --rm --no-deps --entrypoint python worker -m revocompute.resource_audit"
+RESOURCE_AUDIT_PREFIX = ("run", "--rm", "--no-deps", "--entrypoint", "python")
+RESOURCE_AUDIT_SERVICE = ("worker", "-m", "revocompute.resource_audit")
+
+
+def resource_audit_argv(runners_dir: Path | str | None = None) -> list[str]:
+    """Compose ``run`` argv for the resource audit.
+
+    The worker service resolves ``RUNNERS_DIR`` from the Compose model
+    (``${SERVER_DIR}/docker/runners``).  A prepared preflight must audit the
+    candidate tree instead, so an explicit ``-e`` override is inserted before
+    the service name; the worker already mounts ``SERVER_DIR``, so the prepared
+    path needs no extra volume.  Without an override the audit reads the active
+    tree exactly as before.
+    """
+    argv = [*RESOURCE_AUDIT_PREFIX]
+    if runners_dir is not None:
+        argv.extend(["-e", f"RUNNERS_DIR={runners_dir}"])
+    argv.extend(RESOURCE_AUDIT_SERVICE)
+    return argv
 
 
 @dataclass
@@ -825,10 +879,18 @@ def run_walk(steps: list[Step], dry_run: bool = False) -> dict[str, float]:
 # -- prepared-mode preflight -------------------------------------------------
 
 
-def validate_resource_policies(state, compose_cmd: tuple[str, ...]) -> None:
+def validate_resource_policies(
+    state, compose_cmd: tuple[str, ...], *, runners_dir: Path | str | None = None
+) -> None:
     print("Validating resolved task resource policies with the prepared worker image...")
     run_cmd(
-        [*compose_cmd, *compose_args(state), "--env-file", state.env_file, *RESOURCE_AUDIT_CMD.split()],
+        [
+            *compose_cmd,
+            *compose_args(state),
+            "--env-file",
+            state.env_file,
+            *resource_audit_argv(runners_dir),
+        ],
         env=state.exported(),
     )
 
@@ -857,7 +919,7 @@ def _prepared_preflight(
         prepare_result_storage(state, uid, gid)
     validate_compose_model(state, compose_cmd)
     if not dry_run:  # the audit launches a throwaway worker container
-        validate_resource_policies(state, compose_cmd)
+        validate_resource_policies(state, compose_cmd, runners_dir=plugin_root)
 
 
 def validate_prepared_snapshot(
@@ -871,6 +933,7 @@ def validate_prepared_snapshot(
     a bad candidate leaves the deployment untouched.
     """
     require_prepared_snapshot(state)
+    validate_prepared_family_selection(state)
     plugin_root = deployment_plugin_root(state, prepared=True)
     families = validate_deployment_files(state, prepared=True)
     if state.use_slurm():
@@ -1267,6 +1330,7 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         # Validate it here, before any step can stop the healthy deployment.
         require_prepared_snapshot(state)
         if flags.dry_run:
+            validate_prepared_family_selection(state)
             load_revision(materialize=False, dry_run=True, prepared=True)
         else:
             validate_prepared_snapshot(state, compose_cmd)

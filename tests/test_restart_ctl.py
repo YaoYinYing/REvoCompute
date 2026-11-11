@@ -711,6 +711,54 @@ def test_prepared_restart_without_a_snapshot_fails_before_stopping_anything(monk
     assert events == []
 
 
+def test_prepared_restart_refuses_a_narrowed_candidate_before_stopping(monkeypatch, tmp_path, capsys):
+    fixture = SERVER_DIR / "tests" / "fixtures" / "runners"
+    source = tmp_path / "source-runners"
+    shutil.copytree(fixture / "common", source / "common")
+    shutil.copytree(fixture / "cpu_runner", source / "cpu_runner")
+    shutil.copytree(fixture / "gpu_runner", source / "gpu_runner")
+    deployed = tmp_path / "server"
+
+    # `prepare --enabled-runners=cpu_runner` wrote a narrowed candidate.
+    narrowed = EnvState(
+        str(tmp_path / "narrow.env"),
+        values={
+            "SERVER_DIR": str(deployed),
+            "RUNNER_SOURCE_ROOT": str(source),
+            "ENABLED_TASKRUNNERS": "cpu_runner",
+            "USE_SLURM": "0",
+            "REVOCOMPUTE_JOB_EXECUTOR": "docker",
+        },
+    )
+    steps_mod.materialize_prepared_snapshot(narrowed)
+
+    # The deployment itself is configured for both families.
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={
+            "SERVER_DIR": str(deployed),
+            "RUNNER_SOURCE_ROOT": str(source),
+            "ENABLED_TASKRUNNERS": "cpu_runner,gpu_runner",
+            "USE_SLURM": "0",
+            "REVOCOMPUTE_JOB_EXECUTOR": "docker",
+            "ADMIN_USERS": "admin",
+        },
+    )
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "validate_required_settings", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
+    events: list[str] = []
+    monkeypatch.setattr(steps_mod, "cmd_down", lambda *_args, **_kwargs: events.append("stop"))
+
+    with pytest.raises(SystemExit):
+        steps_mod.build_restart_plan(
+            state, ("docker", "compose"), steps_mod.RestartFlags(mode="prepared")
+        )
+
+    assert events == []
+    assert "does not match ENABLED_TASKRUNNERS (missing gpu_runner)" in capsys.readouterr().err
+
+
 def test_failed_pre_stop_sweep_never_invokes_compose_down(monkeypatch, tmp_path):
     state = EnvState(
         str(tmp_path / "server.env"),
@@ -729,6 +777,56 @@ def test_failed_pre_stop_sweep_never_invokes_compose_down(monkeypatch, tmp_path)
         steps_mod.cmd_down(state, ("docker", "compose"))
 
     assert calls == []
+
+
+def test_resource_audit_targets_the_prepared_runner_tree_only_when_named(monkeypatch, tmp_path):
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"SERVER_DIR": str(tmp_path / "server")},
+    )
+    calls: list[list[str]] = []
+    monkeypatch.setattr(steps_mod, "run_cmd", lambda argv, **_kwargs: calls.append(argv))
+
+    steps_mod.validate_resource_policies(state, ("docker", "compose"))
+    active_argv = calls[-1]
+    assert "RUNNERS_DIR=" not in " ".join(active_argv)
+
+    prepared = Path(state.server_dir()) / "docker" / "runners.prepared"
+    steps_mod.validate_resource_policies(state, ("docker", "compose"), runners_dir=prepared)
+    prepared_argv = calls[-1]
+    assert "-e" in prepared_argv
+    override = prepared_argv.index("-e")
+    assert prepared_argv[override + 1] == f"RUNNERS_DIR={prepared}"
+    assert override < prepared_argv.index("worker")
+    assert prepared_argv[prepared_argv.index("worker") :] == [
+        "worker",
+        "-m",
+        "revocompute.resource_audit",
+    ]
+
+
+def test_prepared_preflight_audits_the_candidate_runner_tree(monkeypatch, tmp_path):
+    prepared = tmp_path / "server" / "docker" / "runners.prepared"
+    prepared.mkdir(parents=True)
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"SERVER_DIR": str(tmp_path / "server"), "AUTH_DIR": str(tmp_path / "auth")},
+    )
+    monkeypatch.setattr(steps_mod, "validate_plugin_policies", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "validate_prepared_images", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "validate_auth_storage", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
+    monkeypatch.setattr(steps_mod, "prepare_auth_storage", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "prepare_result_storage", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "validate_compose_model", lambda *_args: None)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(steps_mod, "run_cmd", lambda argv, **_kwargs: calls.append(argv))
+
+    steps_mod._prepared_preflight(state, ("docker", "compose"), [], plugin_root=prepared)
+
+    audit = calls[-1]
+    assert f"RUNNERS_DIR={prepared}" in audit
+    assert audit.index(f"RUNNERS_DIR={prepared}") < audit.index("worker")
 
 
 def _tool_source(tmp_path: Path) -> Path:

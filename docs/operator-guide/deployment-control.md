@@ -342,7 +342,8 @@ environment file:
 - `--mode=prepared` activates the candidate snapshot written by `prepare`.
   Before it stops anything, it verifies the prepared Runner/Tool/demo trees,
   server Docker images, every required SIF and candidate receipt, auth-storage
-  separation, and the rendered Compose model. It then stops, atomically
+  separation, and the rendered Compose model, and audits the resolved resource
+  policies against the prepared Runner contracts. It then stops, atomically
   promotes the prepared trees over the active ones (keeping `.previous`
   backups), performs no build or pull, starts with `--no-build`, and waits for
   all five Compose services to report running. A failed `up` or readiness check
@@ -355,8 +356,9 @@ environment file:
   rewrites the active trees the running worker reads. `prepare --build-sif`
   stages each stale SIF as `<sif>.next` while the stack stays up; a later
   `restart --mode=prepared` atomically replaces it after `down` (requires
-  Apptainer on PATH). Candidates without a target-cluster smoke receipt are
-  never promoted.
+  Apptainer on PATH). A prepared restart refuses a candidate whose family set
+  differs from `ENABLED_TASKRUNNERS` before stopping anything. Candidates
+  without a target-cluster smoke receipt are never promoted.
 
 Provision production bind-mounted directories as writable by the configured
 service UID/GID. This identity contract provides non-root execution and
