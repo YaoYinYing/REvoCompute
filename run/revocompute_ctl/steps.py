@@ -1370,6 +1370,7 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
     baseline: dict[str, dict[str, str]] = {}
     backup_path_holder: list[str] = [""]
     promoted_sifs: set[str] = set()
+    promoted_sif_records: list[promotion.PromotedSif] = []
     promoted_snapshots: list[tuple[Path, Path, bool]] = []
     snapshot_committed = [False]
 
@@ -1427,7 +1428,13 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
             load_revision(materialize=True)
 
     def rollback_revision() -> None:
-        if promoted_snapshots and not snapshot_committed[0]:
+        """Undo a prepared activation as one transaction: SIFs and trees."""
+        if snapshot_committed[0]:
+            return
+        if promoted_sif_records:
+            promotion.restore_promoted_sifs(promoted_sif_records)
+            promoted_sif_records.clear()
+        if promoted_snapshots:
             restore_previous_snapshot(promoted_snapshots)
             promoted_snapshots.clear()
 
@@ -1530,7 +1537,12 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         promoted_sifs.update(
             family.name for family in selected_families if os.path.isfile(f"{family.slurm_image}.next")
         )
-        promotion.promote_sifs(state, selected_families)
+        # Prepared activation commits SIFs together with the Runner/Tool/demo
+        # trees, so a later up/readiness failure restores both sides of the
+        # contract/artifact pair.  Dev/prod keeps its immediate cleanup.
+        promoted_sif_records[:] = promotion.promote_sifs(
+            state, selected_families, retain_backups=flags.mode == "prepared"
+        )
 
     if state.use_slurm():
         steps.append(Step("promote-sifs", promote_sifs))
@@ -1569,8 +1581,10 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         def commit_snapshot() -> None:
             # Past readiness the candidate is the deployment.  Mark it committed
             # before removing the backups so a cleanup after this point cannot
-            # try to restore trees that no longer exist.
+            # try to restore trees or SIFs that no longer exist.
             snapshot_committed[0] = True
+            promotion.commit_promoted_sifs(promoted_sif_records)
+            promoted_sif_records.clear()
             commit_prepared_snapshot(state, promoted_snapshots)
 
         steps.append(Step("commit-snapshot", commit_snapshot))

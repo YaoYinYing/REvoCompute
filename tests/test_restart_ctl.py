@@ -41,6 +41,7 @@ from revocompute_ctl.env import EnvState, parse_env_file  # noqa: E402
 from revocompute.artifact_evidence import (  # noqa: E402
     evidence_path,
     read_artifact_evidence,
+    staged_identity_describes,
     write_staged_identity,
 )
 from revocompute.serialization import sha256_file  # noqa: E402
@@ -557,7 +558,7 @@ def _patch_prepared_plan(monkeypatch) -> None:
     monkeypatch.setattr(admin_mod, "prepare_admin_bootstrap", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(promotion, "taggable_images", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(promotion, "capture_baseline_digests", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(promotion, "promote_sifs", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(promotion, "promote_sifs", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(promotion, "prune_dangling", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(stamp_mod, "backup_config", lambda *_args, **_kwargs: "")
     monkeypatch.setattr("revocompute_ctl.mcp.apply_gateway", lambda *_args, **_kwargs: False)
@@ -970,6 +971,135 @@ def test_prepared_commit_removes_backups_and_consumes_the_marker(monkeypatch, tm
     assert not (server / "docker" / "runners.prepared").exists()
     assert not (server / "docker" / "runners.previous").exists()
     assert not (server / "docker" / "tools.previous").exists()
+
+
+def _prepared_sif_state(monkeypatch, tmp_path):
+    """Prepared activation with one changed SIF candidate and a changed tree."""
+    from revocompute.runner_readiness import load_instance_families
+
+    source = _cpu_runner_source(tmp_path)
+    state = _prepared_runner_state(tmp_path, source)
+    steps_mod.materialize_runner_families(state)
+    runner_root = Path(state.server_dir()) / "docker" / "runners"
+    old_tree = _tree_bytes(runner_root)
+    source_task = source / "cpu_runner" / "tasks" / "predict" / "task.yaml"
+    source_task.write_text(
+        source_task.read_text(encoding="utf-8").replace("role: sequence", "role: protein_sequence"),
+        encoding="utf-8",
+    )
+    steps_mod.materialize_prepared_snapshot(state)
+
+    images = Path(state.server_dir()).parent / "images"
+    images.mkdir(parents=True, exist_ok=True)
+    active_sif = images / "cpu_runner_v1.sif"
+    active_sif.write_bytes(b"old-sif")
+    staged = Path(f"{active_sif}.next")
+    staged.write_bytes(b"new-sif")
+    family = next(item for item in load_instance_families(state, prepared=True) if item.name == "cpu_runner")
+    write_staged_identity(family, sha256_file(staged), "sha256:provenance")
+    monkeypatch.setattr("revocompute.runner_live_test.candidate_receipt_valid", lambda *_args, **_kwargs: True)
+    return state, runner_root, old_tree, active_sif, staged, family
+
+
+def _patch_prepared_activation(monkeypatch) -> None:
+    """Keep the real Runner/SIF validation; silence only unrelated side effects."""
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "validate_required_settings", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
+    monkeypatch.setattr(steps_mod, "validate_prepared_snapshot", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(steps_mod, "migrate_legacy_sif_evidence", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "materialize_runner_bundles", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(steps_mod, "clear_deployment_attestations", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(admin_mod, "prepare_admin_bootstrap", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(promotion, "taggable_images", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(promotion, "capture_baseline_digests", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(promotion, "prune_dangling", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(stamp_mod, "backup_config", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr("revocompute_ctl.mcp.apply_gateway", lambda *_args, **_kwargs: False)
+
+
+@pytest.mark.parametrize("failure_step", ["up", "readiness"])
+def test_prepared_activation_rolls_back_sifs_and_trees_together(monkeypatch, tmp_path, failure_step):
+    state, runner_root, old_tree, active_sif, staged, family = _prepared_sif_state(monkeypatch, tmp_path)
+    _patch_prepared_activation(monkeypatch)
+    monkeypatch.setattr(steps_mod, "cmd_down", lambda *_args, **_kwargs: None)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError(f"{failure_step} failed")
+
+    monkeypatch.setattr(
+        steps_mod, "cmd_up", fail if failure_step == "up" else (lambda *_args, **_kwargs: None)
+    )
+    monkeypatch.setattr(
+        steps_mod, "wait_for_services", fail if failure_step == "readiness" else (lambda *_args: None)
+    )
+
+    plan = steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="prepared"))
+    with pytest.raises(RuntimeError, match=failure_step):
+        run_walk(plan.steps)
+
+    assert _tree_bytes(runner_root) == old_tree
+    assert active_sif.read_bytes() == b"old-sif"
+    assert staged.read_bytes() == b"new-sif"
+    assert not list(tmp_path.rglob("*.promote-backup"))
+    assert staged_identity_describes(family, sha256_file(staged))
+    assert steps_mod._prepared_marker_path(state).is_file()
+    assert not (Path(state.server_dir()) / "docker" / "runners.previous").exists()
+
+
+def test_prepared_commit_makes_sif_and_tree_promotion_durable(monkeypatch, tmp_path):
+    state, runner_root, _old_tree, active_sif, staged, family = _prepared_sif_state(monkeypatch, tmp_path)
+    _patch_prepared_activation(monkeypatch)
+    monkeypatch.setattr(steps_mod, "cmd_down", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "cmd_up", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "wait_for_services", lambda *_args: None)
+
+    plan = steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="prepared"))
+    run_walk(plan.steps)
+
+    assert active_sif.read_bytes() == b"new-sif"
+    assert not staged.exists()
+    assert not list(tmp_path.rglob("*.promote-backup"))
+    assert not Path(f"{family.slurm_image}.next.build.json").exists()
+    assert not steps_mod._prepared_marker_path(state).exists()
+    assert not (Path(state.server_dir()) / "docker" / "runners.previous").exists()
+    assert "role: protein_sequence" in (
+        runner_root / "cpu_runner" / "tasks" / "predict" / "task.yaml"
+    ).read_text(encoding="utf-8")
+
+
+def test_promote_sifs_partial_failure_with_retention_restores_all(tmp_path, monkeypatch):
+    first = _direct_family(tmp_path / "first")
+    second = _direct_family(tmp_path / "second")
+    for family, active_data, candidate_data in (
+        (first, b"active-1", b"candidate-1"),
+        (second, b"active-2", b"candidate-2"),
+    ):
+        active = Path(family.slurm_image)
+        active.parent.mkdir(parents=True)
+        active.write_bytes(active_data)
+        candidate = Path(f"{family.slurm_image}.next")
+        candidate.write_bytes(candidate_data)
+        write_staged_identity(family, sha256_file(candidate), "sha256:provenance")
+    state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
+    monkeypatch.setattr("revocompute.runner_live_test.candidate_receipt_valid", lambda *_args, **_kwargs: True)
+    real_replace = os.replace
+
+    def replace(source, destination):
+        if source == f"{second.slurm_image}.next":
+            raise OSError("second activation failed")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(promotion.os, "replace", replace)
+    with pytest.raises(OSError, match="second activation"):
+        promotion.promote_sifs(state, [first, second], retain_backups=True)
+
+    assert Path(first.slurm_image).read_bytes() == b"active-1"
+    assert Path(f"{first.slurm_image}.next").read_bytes() == b"candidate-1"
+    assert Path(second.slurm_image).read_bytes() == b"active-2"
+    assert Path(f"{second.slurm_image}.next").read_bytes() == b"candidate-2"
+    assert not list(tmp_path.rglob("*.promote-backup"))
+    assert staged_identity_describes(first, sha256_file(Path(f"{first.slurm_image}.next")))
 
 
 def test_prepared_preflight_reads_the_prepared_tree_not_the_active_one(monkeypatch, tmp_path):

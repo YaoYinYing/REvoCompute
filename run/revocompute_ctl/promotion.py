@@ -7,11 +7,22 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 from revocompute_ctl.compose import image_id, run_cmd
 from revocompute.runner_registry import RuntimeFamily, _docker_tag, runner_enabled
 from revocompute.artifact_evidence import remove_staged_identity, staged_identity_describes
 from revocompute.serialization import sha256_file
+
+
+@dataclass(frozen=True)
+class PromotedSif:
+    """One candidate promoted in place, retained until the activation commits."""
+
+    staged: str
+    sif: str
+    backup: str | None
+    family: RuntimeFamily
 
 
 def taggable_images(state, families: list[RuntimeFamily]) -> dict[str, str]:
@@ -36,11 +47,19 @@ def changed_image_names(state, images: dict[str, str], baseline: dict[str, dict[
     }
 
 
-def promote_sifs(state, families: list[RuntimeFamily]) -> None:
+def promote_sifs(
+    state, families: list[RuntimeFamily], *, retain_backups: bool = False
+) -> list[PromotedSif]:
     """Activate immutable candidates with valid smoke receipts as one transaction.
 
     Every candidate is prevalidated, then old active files are retained until
     all replacements succeed so a failed multi-family activation can roll back.
+    ``retain_backups`` keeps the rollback machinery (the ``.promote-backup``,
+    the ``.source`` sidecar, and the staged-identity record) so a prepared
+    activation can commit SIFs and Runner trees together after readiness; the
+    caller then calls :func:`commit_promoted_sifs` or
+    :func:`restore_promoted_sifs`.  Without it, cleanup is immediate and the
+    return value is empty, preserving the dev/prod behavior byte for byte.
     """
     from revocompute.runner_live_test import candidate_receipt_valid
     from revocompute.runner_registry import RegistryError
@@ -113,13 +132,35 @@ def promote_sifs(state, families: list[RuntimeFamily]) -> None:
                 os.replace(backup, sif)
         raise
 
-    for staged, sif, backup, family in promoted:
-        if backup:
-            os.remove(backup)
-        if os.path.isfile(f"{staged}.source"):
-            os.remove(f"{staged}.source")
-        remove_staged_identity(family)
-        print(f"[SLURM] Promoted staged SIF: {sif}")
+    records = [PromotedSif(staged, sif, backup, family) for staged, sif, backup, family in promoted]
+    if retain_backups:
+        return records
+    commit_promoted_sifs(records)
+    return []
+
+
+def commit_promoted_sifs(records: list[PromotedSif]) -> None:
+    """Make retained promotions durable by dropping their rollback machinery."""
+    for record in records:
+        if record.backup and os.path.isfile(record.backup):
+            os.remove(record.backup)
+        if os.path.isfile(f"{record.staged}.source"):
+            os.remove(f"{record.staged}.source")
+        remove_staged_identity(record.family)
+        print(f"[SLURM] Promoted staged SIF: {record.sif}")
+
+
+def restore_promoted_sifs(records: list[PromotedSif]) -> None:
+    """Undo retained promotions: candidate back to ``.next``, old bytes active.
+
+    The staged-identity record and receipt are intentionally kept, so the same
+    candidate can be promoted again after the operator fixes the failure.
+    """
+    for record in reversed(records):
+        if os.path.isfile(record.sif):
+            os.replace(record.sif, record.staged)
+        if record.backup and os.path.isfile(record.backup):
+            os.replace(record.backup, record.sif)
 
 
 def prune_dangling(state) -> None:

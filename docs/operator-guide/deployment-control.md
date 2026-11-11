@@ -347,7 +347,9 @@ environment file:
   promotes the prepared trees over the active ones (keeping `.previous`
   backups), performs no build or pull, starts with `--no-build`, and waits for
   all five Compose services to report running. A failed `up` or readiness check
-  restores the previous active trees so the old deployment can be restarted.
+  restores the previous active trees and any promoted SIFs together, returning
+  the candidate artifact to `<sif>.next` with its receipt intact, so the old
+  deployment can be restarted and the same candidate retried.
   Activation is one-shot: a successful restart consumes the candidate, so run
   `prepare` again before the next prepared restart. Runtime Bundle pins are not
   re-materialized by the pre-stop preflight; activation materializes them after
