@@ -382,9 +382,6 @@ def _prepare_gpu_accounting(task_type_def: Any) -> dict[str, Any] | None:
             "ready": True,
             "reason_code": "LIVE_TEST_CANDIDATE",
         },
-        # The isolated worker container runs as the service identity and reads
-        # this attestation through the mounted SERVER_DIR.
-        shared_read=True,
     )
     return {
         "user_id": _LIVE_TEST_GPU_USER_ID,

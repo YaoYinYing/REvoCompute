@@ -34,6 +34,9 @@ from revocompute.artifact_evidence import (
     EVIDENCE_ACCESS_OK,
     EVIDENCE_ACCESS_UNREADABLE,
     evidence_access_state,
+    staged_identity_path,
+    write_artifact_evidence,
+    write_staged_identity,
 )
 from revocompute.operator_service import OperatorService
 from revocompute.runner_host import ServerHostPaths
@@ -137,6 +140,37 @@ def test_default_acl_mask_permits_shared_read(tmp_path):
     assert group_entry & mask & 0o4, entries
 
 
+def test_production_evidence_writers_are_group_readable(tmp_path):
+    """Deleting a caller's ``shared_read=True`` must fail this test."""
+    family = SimpleNamespace(name="demo", slurm_image=str(tmp_path / "images" / "demo.sif"))
+    digest = "sha256:" + "a" * 64
+
+    build = write_artifact_evidence(family, digest, "build", {"build_provenance_digest": "prov"})
+    assert _mode(build) == 0o640
+
+    receipt = write_artifact_evidence(
+        family,
+        digest,
+        "receipt",
+        {
+            "runner_family": family.name,
+            "sif_sha256": digest,
+            "build_provenance_digest": "prov",
+            "runtime_bundle_sha256": None,
+            "test_definition_digest": "test",
+            "configuration_digest": "config",
+            "execution_uid": 1,
+            "execution_gid": 2,
+            "scheduler_user": "revodesign",
+            "cases": [],
+        },
+    )
+    assert _mode(receipt) == 0o640
+
+    write_staged_identity(family, digest, "prov")
+    assert _mode(staged_identity_path(family)) == 0o640
+
+
 def test_atomic_replace_is_complete_and_carries_the_new_mode(tmp_path):
     path = tmp_path / "record.json"
     atomic_write_json(path, {"version": 1}, shared_read=True)
@@ -212,8 +246,17 @@ def test_evidence_access_states_are_distinct(tmp_path):
     (root / "a.receipt.json").write_text("not json", encoding="utf-8")
     assert evidence_access_state(family) == EVIDENCE_ACCESS_INVALID
 
+    (root / "a.receipt.json").write_bytes(b"\xff\xfe\x00")
+    assert evidence_access_state(family) == EVIDENCE_ACCESS_INVALID
+
     atomic_write_json(root / "a.receipt.json", {"runner_family": "cpu_runner"})
     assert evidence_access_state(family) == EVIDENCE_ACCESS_OK
+
+    # The staged identity sidecar beside the SIF is evidence too.
+    (root / "a.receipt.json").unlink()
+    write_staged_identity(family, "sha256:" + "a" * 64, "prov")
+    assert evidence_access_state(family) == EVIDENCE_ACCESS_OK
+    atomic_write_json(root / "a.receipt.json", {"runner_family": "cpu_runner"})
 
     (root / "a.receipt.json").chmod(0o000)
     try:
@@ -222,6 +265,17 @@ def test_evidence_access_states_are_distinct(tmp_path):
         assert evidence_access_state(family) == EVIDENCE_ACCESS_UNREADABLE
     finally:
         (root / "a.receipt.json").chmod(0o600)
+
+
+def test_non_regular_entries_are_ignored(tmp_path):
+    family = SimpleNamespace(name="cpu_runner", slurm_image=str(tmp_path / "images" / "cpu_runner.sif"))
+    root = tmp_path / "images" / "evidence" / "cpu_runner"
+    root.mkdir(parents=True)
+    try:
+        os.mkfifo(root / "pipe.json")
+    except (AttributeError, OSError) as exc:
+        pytest.skip(f"FIFO creation is unavailable: {exc}")
+    assert evidence_access_state(family) == EVIDENCE_ACCESS_MISSING
 
 
 def test_admin_diagnostic_names_unreadable_evidence_without_leaking_paths(monkeypatch, tmp_path):
@@ -242,7 +296,13 @@ def test_admin_diagnostic_names_unreadable_evidence_without_leaking_paths(monkey
     root.mkdir(parents=True)
     (root / "a.receipt.json").write_text("not json", encoding="utf-8")
     invalid = client.get("/compute/api/auth/admin/runners/cpu_runner", headers=admin)
+    assert invalid.status_code == 200, invalid.get_data(as_text=True)
     assert invalid.get_json()["readiness"]["evidence"]["access"] == EVIDENCE_ACCESS_INVALID
+
+    (root / "a.receipt.json").write_bytes(b"\xff\xfe\x00")
+    binary = client.get("/compute/api/auth/admin/runners/cpu_runner", headers=admin)
+    assert binary.status_code == 200, binary.get_data(as_text=True)
+    assert binary.get_json()["readiness"]["evidence"]["access"] == EVIDENCE_ACCESS_INVALID
 
     atomic_write_json(root / "a.receipt.json", {"runner_family": family.name})
     (root / "a.receipt.json").chmod(0o000)
@@ -277,7 +337,10 @@ def test_public_catalog_and_refusal_payloads_do_not_expose_the_diagnostic(monkey
     catalog = client.get("/compute/api/types", headers=ordinary)
     assert catalog.status_code == 200, catalog.get_data(as_text=True)
     text = catalog.get_data(as_text=True)
-    assert "evidence_access" not in text
+    catalog_payload = catalog.get_json()
+    for entry in catalog_payload["task_types"]:
+        assert "readiness" not in entry
+        assert "evidence" not in entry
     assert EVIDENCE_ACCESS_UNREADABLE not in text
 
     module.app.config["manage_db"].resource_set("slurm_enabled", "true")

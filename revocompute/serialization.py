@@ -45,6 +45,11 @@ def atomic_write_json(path: str | Path, value: Mapping[str, Any], *, shared_read
     ``fchmod`` before the atomic replace, so the final inode carries it and an
     inherited ACL mask is reset to permit the group read bit.  This function
     never touches the parent directory mode or changes file ownership.
+
+    Shared read requires every ancestor directory to be traversable by the
+    reader, and either an inheritable default ACL naming the reader or a file
+    group equal to the reader's group.  A ``0700`` directory with no default
+    ACL cannot be repaired by a file mode alone.
     """
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
