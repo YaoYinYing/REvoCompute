@@ -3241,7 +3241,8 @@
         "build_provenance_current",
         "receipt_exists",
         "receipt_valid",
-        "doctor_ok"
+        "doctor_ok",
+        "access"
       ],
       "properties": {
         "sif_path": {"type": "string"},
@@ -3255,7 +3256,12 @@
         "receipt_tested_at": {"type": ["string", "null"]},
         "required_smoke_cases": {"type": "array", "items": {"type": "string"}},
         "passed_smoke_cases": {"type": "array", "items": {"type": "string"}},
-        "doctor_ok": {"type": "boolean"}
+        "doctor_ok": {"type": "boolean"},
+        "access": {
+          "type": "string",
+          "enum": ["ok", "missing", "unreadable", "invalid"],
+          "description": "Why the evidence could not be attributed: absent, unreadable by this process, or malformed. A coarse state, never a path."
+        }
       },
       "additionalProperties": false
     },

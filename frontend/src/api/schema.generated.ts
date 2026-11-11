@@ -3150,6 +3150,11 @@ export interface components {
             required_smoke_cases?: string[];
             passed_smoke_cases?: string[];
             doctor_ok: boolean;
+            /**
+             * @description Why the evidence could not be attributed: absent, unreadable by this process, or malformed. A coarse state, never a path.
+             * @enum {string}
+             */
+            access: "ok" | "missing" | "unreadable" | "invalid";
         };
         /** @description The active artifact's identity as established from canonical evidence; presence alone is never an identity. */
         RunnerActiveImage: {

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from revocompute.access_control import AccessPolicy, load_policy_documents, resolve_policy
+from revocompute.artifact_evidence import evidence_access_state
 from revocompute.runner_host import HostPaths
 from revocompute.runner_readiness import (
     RunnerReadiness,
@@ -118,7 +119,7 @@ def active_image_view(row: RunnerReadiness) -> dict[str, Any]:
     return {"state": "UNKNOWN", "sha256": None, "reason_code": "ACTIVE_IMAGE_IDENTITY_UNKNOWN"}
 
 
-def _readiness_view(row: RunnerReadiness) -> dict[str, Any]:
+def _readiness_view(row: RunnerReadiness, *, evidence_access: str) -> dict[str, Any]:
     return {
         "status": row.status.value,
         "reason_code": row.reason_code,
@@ -138,6 +139,9 @@ def _readiness_view(row: RunnerReadiness) -> dict[str, Any]:
             "required_smoke_cases": list(row.required_smoke_cases),
             "passed_smoke_cases": list(row.passed_smoke_cases),
             "doctor_ok": row.doctor_ok,
+            # Admin-only: distinguishes a record this process cannot read from
+            # one that is absent or malformed.  Public projections never see it.
+            "access": evidence_access,
         },
     }
 
@@ -165,7 +169,9 @@ def fleet_view(
         rows.append(
             {
                 "runner_family": family.name,
-                "readiness": _readiness_view(resolve_runner_readiness(state, family)),
+                "readiness": _readiness_view(
+                    resolve_runner_readiness(state, family), evidence_access=evidence_access_state(family)
+                ),
                 "capacity": capacity,
                 "access": access_view(policies.get(family.name), database, user_id),
             }

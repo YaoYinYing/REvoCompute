@@ -27,6 +27,7 @@ const evidence = (): RunnerFleetEntry['readiness']['evidence'] => ({
   receipt_exists: true,
   receipt_valid: true,
   doctor_ok: true,
+  access: 'ok',
 });
 
 const entry = (family: string, status: RunnerFleetEntry['readiness']['status'], available: boolean | null = true): RunnerFleetEntry => ({

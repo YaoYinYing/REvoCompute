@@ -90,6 +90,42 @@ sudo setfacl --restore=/tmp/revocompute-acl.before
 Inspect the restored root with `sudo getfacl -p "$SERVER_STATE"`, then securely
 remove or archive the ACL backup according to the host's operations policy.
 
+### Evidence written by the operator
+
+Runner build evidence and live-test receipts are written by the operator but
+read by the service account at submission time. They live under the image root
+(the `images` sibling of `SERVER_STATE`), not under `SERVER_STATE`:
+
+- `images/evidence/<family>/*.build.json` and `*.receipt.json`;
+- `images/*.next.build.json` beside a staged candidate.
+
+New evidence is written `0640` (group read only). Shared read requires every
+ancestor directory to be traversable by the service, and either an inheritable
+default ACL naming it or a file group equal to the service group. File mode
+alone cannot repair an ancestor the service cannot traverse, nor a directory
+with no default ACL and mode `0700`. On a tree that is not already provisioned,
+grant traversal and an inheritable read ACL to the evidence directories:
+
+```bash
+IMAGE_ROOT=/path/to/the/images/directory
+sudo find "$IMAGE_ROOT/evidence" -type d -exec \
+  setfacl -m u:"$SERVER_ROLE":rX,d:u:"$SERVER_ROLE":rX,d:m::rX {} +
+```
+
+Inspect and verify without mutating:
+
+```bash
+sudo getfacl -R -p "$IMAGE_ROOT/evidence"
+namei -l "$IMAGE_ROOT/evidence/<family>/<record>.json"
+sudo -u "$SERVER_ROLE" test -r "$IMAGE_ROOT/evidence/<family>/<record>.json"
+```
+
+Records written before this contract carried mode `0600`, and the ACL mask
+suppressed the named entry. Repair those in place with `chgrp` (only when the
+group is not already the service group) followed by `chmod 0640`; `chgrp` to a
+group the operator is not a member of requires privilege. Directory modes are
+not part of this contract.
+
 ## Environment reference
 
 Create production env file:

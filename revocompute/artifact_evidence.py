@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -133,6 +135,65 @@ def read_receipt_for_identity(family, receipt_identity: Mapping[str, Any]) -> Ma
     return None
 
 
+#: Coarse on-disk evidence states for the admin diagnostic below.  They name
+#: why a record could not be attributed, never which path or identity failed.
+EVIDENCE_ACCESS_OK = "ok"
+EVIDENCE_ACCESS_MISSING = "missing"
+EVIDENCE_ACCESS_UNREADABLE = "unreadable"
+EVIDENCE_ACCESS_INVALID = "invalid"
+
+
+def evidence_access_state(family) -> str:
+    """Classify this family's evidence access without exposing a path.
+
+    ``missing`` means no record exists; ``unreadable`` means a record exists but
+    this process cannot open it (the cross-identity failure a service-account
+    submission hits while the deployment host can still read the file);
+    ``invalid`` means a record opened but is not a JSON object naming this
+    family, including bytes that are not UTF-8.  The staged identity sidecar
+    beside the SIF is included.  Non-regular entries are skipped, so a FIFO or a
+    symlink cannot block the admin scan.  Read-only and non-authoritative:
+    verdicts stay fail-closed and are never derived from this classification.
+    """
+    root = Path(family.slurm_image).parent / "evidence" / family.name
+    # ``Path.glob`` suppresses a directory it cannot scan, which would report an
+    # unreadable store as merely empty.  ``scandir`` surfaces that failure.
+    try:
+        with os.scandir(root) as entries:
+            paths = sorted(
+                root / entry.name
+                for entry in entries
+                if entry.name.endswith(".json") and entry.is_file(follow_symlinks=False)
+            )
+    except FileNotFoundError:
+        paths = []
+    except OSError:
+        return EVIDENCE_ACCESS_UNREADABLE
+    sidecar = Path(f"{family.slurm_image}.next.build.json")
+    try:
+        if stat.S_ISREG(sidecar.lstat().st_mode):
+            paths.append(sidecar)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return EVIDENCE_ACCESS_UNREADABLE
+    if not paths:
+        return EVIDENCE_ACCESS_MISSING
+    invalid = False
+    for path in paths:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except OSError:
+            return EVIDENCE_ACCESS_UNREADABLE
+        except ValueError:
+            # JSONDecodeError and UnicodeDecodeError: present but unparseable.
+            invalid = True
+            continue
+        if not isinstance(value, Mapping) or value.get("runner_family") != family.name:
+            invalid = True
+    return EVIDENCE_ACCESS_INVALID if invalid else EVIDENCE_ACCESS_OK
+
+
 def receipt_exists_for_provenance(family, build_provenance_digest: str) -> bool:
     root = Path(family.slurm_image).parent / "evidence" / family.name
     for path in root.glob("*.receipt.json"):
@@ -185,6 +246,7 @@ def write_staged_identity(family, sif_sha256: str, build_provenance_digest: str)
             "build_provenance_digest": build_provenance_digest,
             "staged_stat_identity": _staged_stat_identity(family),
         },
+        shared_read=True,
     )
 
 
@@ -272,7 +334,10 @@ def write_artifact_evidence(family, sif_sha256: str, kind: str, value: Mapping[s
                 if isinstance(case, Mapping) and case.get("passed") is True and "case_id" in case
             )
             payload["cases"] = [cases[case_id] for case_id in sorted(cases)]
-    atomic_write_json(path, payload)
+    # Build evidence and live-test receipts authorize submissions from the web
+    # and worker identities, which are not the operator identity that writes
+    # them.  Group read is the least privilege that crosses that boundary.
+    atomic_write_json(path, payload, shared_read=True)
     return path
 
 

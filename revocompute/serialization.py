@@ -36,14 +36,28 @@ def canonical_digest(value: Any) -> str:
     return f"sha256:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
 
 
-def atomic_write_json(path: str | Path, value: Mapping[str, Any]) -> None:
-    """Write JSON so a reader never observes a partial file."""
+def atomic_write_json(path: str | Path, value: Mapping[str, Any], *, shared_read: bool = False) -> None:
+    """Write JSON so a reader never observes a partial file.
+
+    Records are private (``0600``) by default.  ``shared_read`` opts a record
+    into the least privilege needed by an artifact another identity must read:
+    ``0640``, group-readable and nothing more.  The mode is applied with
+    ``fchmod`` before the atomic replace, so the final inode carries it and an
+    inherited ACL mask is reset to permit the group read bit.  This function
+    never touches the parent directory mode or changes file ownership.
+
+    Shared read requires every ancestor directory to be traversable by the
+    reader, and either an inheritable default ACL naming the reader or a file
+    group equal to the reader's group.  A ``0700`` directory with no default
+    ACL cannot be repaired by a file mode alone.
+    """
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=str(destination.parent), prefix=f".{destination.name}.", delete=False
     )
     try:
+        os.fchmod(handle.fileno(), 0o640 if shared_read else 0o600)
         json.dump(value, handle, ensure_ascii=True, indent=2, sort_keys=True)
         handle.flush()
         os.fsync(handle.fileno())
