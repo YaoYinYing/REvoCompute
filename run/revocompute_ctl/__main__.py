@@ -273,16 +273,23 @@ def main() -> None:
         )
         if subcommand == "prepare" and flags.build_sif:
             from revocompute.runner_registry import build_slurm_images, validate_runtime_files, validate_slurm_images
-            from revocompute_ctl.steps import build_tool_images, enabled_tool_families, validate_tool_images
+            from revocompute_ctl.steps import (
+                build_tool_images,
+                enabled_tool_families,
+                prepared_runner_root,
+                validate_tool_images,
+            )
 
-            families = validate_runtime_files(state)
+            # Prepare materialized the candidate snapshot; build and validate
+            # its SIFs from that tree, never from the active one.
+            families = validate_runtime_files(state, plugin_root=prepared_runner_root(state))
             build_slurm_images(state, families, fail_on_error=True)
             validate_slurm_images(state, families)
             if enabled_tool_families(state):
                 # Prepared activation rejects --build-sif, so every enabled
                 # Tool SIF must exist before `restart --mode=prepared`.
-                build_tool_images(state)
-                validate_tool_images(state)
+                build_tool_images(state, prepared=True)
+                validate_tool_images(state, prepared=True)
     elif subcommand == "live-test":
         require_env_file(state)
         validate_required_settings(state)

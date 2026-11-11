@@ -391,8 +391,24 @@ def test_proxy_build_requires_env_value_for_bare_flag(tmp_path):
     assert not any(command.startswith("build ") for command in commands)
 
 
-def test_prepared_restart_validates_new_snapshot_after_down_without_build_or_pull(tmp_path):
+def _materialize_prepared_snapshot(tmp_path: Path, config_dir: Path) -> None:
+    """Write the candidate snapshot a prepared restart activates."""
+    from revocompute_ctl.steps import materialize_prepared_snapshot
+
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={
+            "SERVER_DIR": str(tmp_path / "tasks"),
+            "CONFIG_DIR": str(config_dir),
+            "RUNNER_SOURCE_ROOT": str(Path(config_dir).parent / "runner-source" / "runners"),
+        },
+    )
+    materialize_prepared_snapshot(state)
+
+
+def test_prepared_restart_validates_new_snapshot_before_down_without_build_or_pull(tmp_path):
     config_dir = _make_deployed_config(tmp_path, executor="slurm")
+    _materialize_prepared_snapshot(tmp_path / "deployment", config_dir)
     result, commands = _run_restart_script(
         tmp_path / "deployment",
         "restart",
@@ -402,18 +418,16 @@ def test_prepared_restart_validates_new_snapshot_after_down_without_build_or_pul
 
     assert result.returncode != 0
     assert "Prepared SIF has no valid live-test receipt" in result.stderr
-    assert any("down" in command.split() for command in commands)
+    # Validation happens while the healthy stack still serves: nothing is stopped.
+    assert not any("down" in command.split() for command in commands)
     assert not any(" config --quiet" in command for command in commands)
     assert not any(" build " in command or " pull " in command for command in commands)
     assert not any("up --no-build -d redis web gateway maintenance worker" in command for command in commands)
 
-    steps_source = (Path(REPO_DIR) / "run" / "revocompute_ctl" / "steps.py").read_text(encoding="utf-8")
-    prepared = steps_source.split("def _prepared_preflight", 1)[1].split("\ndef ", 1)[0]
-    assert prepared.index("resolve_runner_identity") < prepared.index("validate_compose_model")
 
-
-def test_prepared_restart_rejects_missing_sif_after_down(tmp_path):
+def test_prepared_restart_rejects_missing_sif_before_down(tmp_path):
     config_dir = _make_deployed_config(tmp_path, executor="slurm", missing_sif="gpu_runner")
+    _materialize_prepared_snapshot(tmp_path / "deployment", config_dir)
     result, commands = _run_restart_script(
         tmp_path / "deployment",
         "restart",
@@ -423,7 +437,7 @@ def test_prepared_restart_rejects_missing_sif_after_down(tmp_path):
 
     assert result.returncode != 0
     assert "Missing SIF image" in result.stderr
-    assert any("down" in command.split() for command in commands)
+    assert not any("down" in command.split() for command in commands)
     assert not any(" build " in command or " pull " in command or " up " in command for command in commands)
 
 

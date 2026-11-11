@@ -268,13 +268,151 @@ def reserved_test_namespaces(source_root: Path, server_root: Path) -> tuple[Path
     return tuple(dict.fromkeys(root.absolute() for root in candidates))
 
 
-def materialize_runner_families(state) -> None:
-    """Atomically replace the server instance's enabled Runner snapshot."""
+def prepared_runner_root(state) -> Path:
+    """Candidate Runner tree written by prepare, activated by a prepared restart."""
+    return Path(state.server_dir()) / "docker" / "runners.prepared"
+
+
+def prepared_tool_root(state) -> Path:
+    """Candidate Tool tree written by prepare, activated by a prepared restart."""
+    return Path(state.server_dir()) / "docker" / "tools.prepared"
+
+
+def _demo_roots(state) -> tuple[Path, Path]:
+    from revocompute.demo import DEMO_REPLAYS_SUBDIR
+
+    active = Path(state.server_dir()) / DEMO_REPLAYS_SUBDIR
+    return active.with_name(f"{active.name}.prepared"), active
+
+
+def _prepared_marker_path(state) -> Path:
+    return Path(state.server_dir()) / "docker" / ".prepared-snapshot.json"
+
+
+def prepared_snapshot_pairs(state) -> list[tuple[Path, Path]]:
+    """Return ``(prepared, active)`` tree pairs a prepared activation swaps."""
+    server = Path(state.server_dir())
+    pairs = [
+        (prepared_runner_root(state), server / "docker" / "runners"),
+        (prepared_tool_root(state), server / "docker" / "tools"),
+    ]
+    if state.demo_mode():
+        pairs.append(_demo_roots(state))
+    return pairs
+
+
+def require_prepared_snapshot(state) -> None:
+    """Refuse prepared activation unless a complete candidate snapshot exists.
+
+    The marker is written last, after every candidate tree is materialized, so a
+    prepare that died midway can never be promoted.  This check runs before the
+    stop step, so a missing snapshot leaves the running deployment untouched.
+    """
+    missing = [str(active) for prepared, active in prepared_snapshot_pairs(state) if not prepared.is_dir()]
+    marker = _prepared_marker_path(state)
+    if not marker.is_file() or missing:
+        detail = f"missing {', '.join(missing)}" if missing else f"missing {marker}"
+        print(
+            f"Prepared deployment snapshot is not available ({detail}). "
+            "Run: bash run/restart.sh prepare",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+
+def _write_prepared_marker(state) -> None:
+    marker = _prepared_marker_path(state)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"version": 1}) + "\n", encoding="utf-8")
+
+
+def _clear_prepared_marker(state) -> None:
+    marker = _prepared_marker_path(state)
+    if marker.exists():
+        marker.unlink()
+
+
+def materialize_prepared_snapshot(state) -> None:
+    """Materialize the candidate Runner/Tool/Demo trees without touching active.
+
+    The running worker bind-mounts the active trees live, so prepare must never
+    rewrite them: a new contract the old server code cannot parse would break
+    work that is still executing.  The marker is written only after every tree
+    is in place, making the snapshot all-or-nothing for activation.
+    """
+    _clear_prepared_marker(state)
+    materialize_runner_families(state, prepared=True)
+    materialize_tool_families(state, prepared=True)
+    materialize_demo_replays(state, prepared=True)
+    _write_prepared_marker(state)
+
+
+def promote_prepared_snapshot(state) -> list[tuple[Path, Path, bool]]:
+    """Swap each validated candidate tree over its active counterpart.
+
+    Returns the ``(active, previous, had_previous)`` records so a failed
+    activation can restore the running instance's contracts.  Each pair is
+    renamed atomically; if any pair fails, the pairs already swapped are
+    restored before the error propagates.
+    """
+    promoted: list[tuple[Path, Path, bool]] = []
+    try:
+        for prepared, active in prepared_snapshot_pairs(state):
+            previous = active.with_name(f"{active.name}.previous")
+            if previous.exists():
+                shutil.rmtree(previous)
+            had_previous = active.exists()
+            if had_previous:
+                os.rename(active, previous)
+            try:
+                os.rename(prepared, active)
+            except BaseException:
+                if had_previous and previous.exists() and not active.exists():
+                    os.rename(previous, active)
+                raise
+            promoted.append((active, previous, had_previous))
+    except BaseException:
+        restore_previous_snapshot(promoted)
+        raise
+    return promoted
+
+
+def restore_previous_snapshot(promoted: list[tuple[Path, Path, bool]]) -> None:
+    """Return the candidate tree to prepared and put the old active tree back."""
+    for active, previous, had_previous in reversed(promoted):
+        prepared = active.with_name(f"{active.name}.prepared")
+        if active.exists():
+            if prepared.exists():
+                shutil.rmtree(prepared)
+            os.rename(active, prepared)
+        if had_previous and previous.exists():
+            os.rename(previous, active)
+
+
+def commit_prepared_snapshot(state, promoted: list[tuple[Path, Path, bool]]) -> None:
+    """Drop the rollback backups and mark the prepared snapshot consumed."""
+    for _active, previous, _had_previous in promoted:
+        if previous.exists():
+            shutil.rmtree(previous, ignore_errors=True)
+    _clear_prepared_marker(state)
+
+
+def materialize_runner_families(state, *, prepared: bool = False) -> None:
+    """Atomically replace a Runner snapshot.
+
+    ``prepared`` writes the candidate tree; the default replaces the active tree
+    the running deployment serves.  Only a stop-then-materialize restart may
+    touch the active tree.
+    """
     from revocompute_ctl import SERVER_ROOT
     from revocompute.plugins import PluginManager
 
     source_root = state.get("RUNNER_SOURCE_ROOT") or os.path.join(str(SERVER_ROOT), "docker", "runners")
-    target_root = os.path.join(state.server_dir(), "docker", "runners")
+    target_root = (
+        str(prepared_runner_root(state))
+        if prepared
+        else os.path.join(state.server_dir(), "docker", "runners")
+    )
     staging_root = f"{target_root}.next"
     previous_root = f"{target_root}.previous"
     if not os.path.isdir(source_root):
@@ -359,10 +497,11 @@ def materialize_runner_families(state) -> None:
         shutil.rmtree(previous_root)
 
 
-def materialize_demo_replays(state) -> None:
+def materialize_demo_replays(state, *, prepared: bool = False) -> None:
     """Install the curated replay bundles the demo serves.
 
-    The tracked index names checked-in replay bundles under ``tests/data``; the
+    ``prepared`` writes the candidate tree instead of the active one.  The
+    tracked index names checked-in replay bundles under ``tests/data``; the
     deployment copies only those files into its own state tree and writes a
     resolved index that names them relative to the deployment. The source tree
     is never mounted into a container, and a bundle outside the curated corpus
@@ -391,7 +530,7 @@ def materialize_demo_replays(state) -> None:
     if not isinstance(entries, list) or not entries:
         raise SystemExit("Demo replay index declares no scenarios")
 
-    target_root = Path(state.server_dir()) / DEMO_REPLAYS_SUBDIR
+    target_root = _demo_roots(state)[0] if prepared else Path(state.server_dir()) / DEMO_REPLAYS_SUBDIR
     staging_root = target_root.with_name(f"{target_root.name}.next")
     previous_root = target_root.with_name(f"{target_root.name}.previous")
     for transient in (staging_root, previous_root):
@@ -453,7 +592,7 @@ def materialize_demo_replays(state) -> None:
         shutil.rmtree(previous_root)
 
 
-def validate_deployment_files(state) -> list[RuntimeFamily]:
+def validate_deployment_files(state, *, prepared: bool = False) -> list[RuntimeFamily]:
     """Validate the files this deployment will actually serve.
 
     A production deployment validates every enabled family's build definition,
@@ -463,16 +602,22 @@ def validate_deployment_files(state) -> list[RuntimeFamily]:
     not need. It instead runs the canonical manifest loader over the
     materialized tree, so every Task definition, input role, and demo file is
     the same validated contract the Server serves -- and nothing more.
+
+    ``prepared`` points every reader at the candidate snapshot: validation must
+    describe the tree activation will promote, never the running tree.
     """
     if state.demo_mode():
         from revocompute.demo import load_demo_replays, replay_root
         from revocompute.task_types import isolated_discovery
 
-        plugin_root = deployment_plugin_root(state)
+        plugin_root = deployment_plugin_root(state, prepared=prepared)
         with isolated_discovery(plugin_root):
             pass
-        load_demo_replays(replay_root(state.server_dir()))
+        replay_path = _demo_roots(state)[0] if prepared else replay_root(state.server_dir())
+        load_demo_replays(replay_path)
         return load_plugin_families(plugin_root)
+    if prepared:
+        return validate_runtime_files(state, plugin_root=deployment_plugin_root(state, prepared=True))
     return validate_runtime_files(state)
 
 
@@ -480,12 +625,12 @@ def enabled_tool_families(state) -> tuple[str, ...]:
     return tuple(sorted({value.strip() for value in state.get("ENABLED_TOOL_FAMILIES").split(",") if value.strip()}))
 
 
-def materialize_tool_families(state) -> None:
+def materialize_tool_families(state, *, prepared: bool = False) -> None:
     """Atomically install only explicitly enabled Tool plugin trees."""
     from revocompute_ctl import SERVER_ROOT
 
     source_root = Path(state.get("TOOL_SOURCE_ROOT") or SERVER_ROOT / "docker" / "tools").resolve()
-    target_root = Path(state.server_dir()) / "docker" / "tools"
+    target_root = prepared_tool_root(state) if prepared else Path(state.server_dir()) / "docker" / "tools"
     staging_root = target_root.with_name(f"{target_root.name}.next")
     previous_root = target_root.with_name(f"{target_root.name}.previous")
     if not source_root.is_dir():
@@ -515,9 +660,9 @@ def materialize_tool_families(state) -> None:
         shutil.rmtree(previous_root)
 
 
-def tool_runtime_specs(state) -> list[tuple[str, Path, Path]]:
+def tool_runtime_specs(state, *, prepared: bool = False) -> list[tuple[str, Path, Path]]:
     """Return enabled family, definition, and deployed image paths."""
-    tools_root = Path(state.server_dir()) / "docker" / "tools"
+    tools_root = prepared_tool_root(state) if prepared else Path(state.server_dir()) / "docker" / "tools"
     image_root = Path(state.get("TOOL_IMAGE_DIR") or Path(state.server_dir()).parent / "images" / "tools")
     specs: list[tuple[str, Path, Path]] = []
     for family in enabled_tool_families(state):
@@ -539,15 +684,19 @@ def tool_runtime_specs(state) -> list[tuple[str, Path, Path]]:
     return specs
 
 
-def validate_tool_images(state) -> None:
-    missing = [f"{family}: {image}" for family, _definition, image in tool_runtime_specs(state) if not image.is_file()]
+def validate_tool_images(state, *, prepared: bool = False) -> None:
+    missing = [
+        f"{family}: {image}"
+        for family, _definition, image in tool_runtime_specs(state, prepared=prepared)
+        if not image.is_file()
+    ]
     if missing:
         raise FileNotFoundError("Enabled Tool runtime image(s) are missing: " + ", ".join(missing))
 
 
-def build_tool_images(state) -> None:
+def build_tool_images(state, *, prepared: bool = False) -> None:
     """Build each enabled Tool SIF to a staging path, then atomically promote it."""
-    for family, definition, image in tool_runtime_specs(state):
+    for family, definition, image in tool_runtime_specs(state, prepared=prepared):
         image.parent.mkdir(parents=True, exist_ok=True)
         staged = image.with_suffix(f"{image.suffix}.next")
         print(f"[TOOLS] Building exact runtime: {family} ({image})...")
@@ -685,11 +834,20 @@ def validate_resource_policies(state, compose_cmd: tuple[str, ...]) -> None:
 
 
 def _prepared_preflight(
-    state, compose_cmd: tuple[str, ...], families: list[RuntimeFamily], dry_run: bool = False
+    state,
+    compose_cmd: tuple[str, ...],
+    families: list[RuntimeFamily],
+    dry_run: bool = False,
+    *,
+    plugin_root: Path | None = None,
 ) -> None:
     """Everything a prepared restart validates before stopping the healthy
-    stack. --dry-run skips the mkdir-ing storage prep (it must write nothing)."""
-    plugin_root = deployment_plugin_root(state)
+    stack. --dry-run skips the mkdir-ing storage prep (it must write nothing).
+
+    ``plugin_root`` names the prepared snapshot under validation; without it
+    the active tree is read, which is only correct for an already-promoted one.
+    """
+    plugin_root = Path(plugin_root) if plugin_root is not None else deployment_plugin_root(state)
     validate_plugin_policies(plugin_root, os.path.join(state.config_dir(), "access_policies"))
     validate_prepared_images(state, families)
     validate_auth_storage(state)
@@ -700,6 +858,26 @@ def _prepared_preflight(
     validate_compose_model(state, compose_cmd)
     if not dry_run:  # the audit launches a throwaway worker container
         validate_resource_policies(state, compose_cmd)
+
+
+def validate_prepared_snapshot(
+    state, compose_cmd: tuple[str, ...], *, dry_run: bool = False
+) -> list[RuntimeFamily]:
+    """Validate the prepared candidate while the healthy stack still serves.
+
+    Nothing here may read the active tree: the point of the prepared mode is
+    that the contracts being approved are exactly the ones stored under the
+    candidate paths.  Every refusal therefore happens before the stop step, so
+    a bad candidate leaves the deployment untouched.
+    """
+    require_prepared_snapshot(state)
+    plugin_root = deployment_plugin_root(state, prepared=True)
+    families = validate_deployment_files(state, prepared=True)
+    if state.use_slurm():
+        validate_slurm_images(state, families)
+    validate_tool_images(state, prepared=True)
+    _prepared_preflight(state, compose_cmd, families, dry_run=dry_run, plugin_root=plugin_root)
+    return families
 
 
 # -- subcommand sequences ----------------------------------------------------
@@ -767,6 +945,9 @@ def cmd_setup(state) -> None:
         materialize_runner_families(state)
         materialize_tool_families(state)
         materialize_demo_replays(state)
+        # Setup installs the active tree directly; any earlier candidate would
+        # be older than what setup just wrote, so it must not stay activatable.
+        _clear_prepared_marker(state)
         if not state.demo_mode():
             os.makedirs(runner_bundle_root(state), exist_ok=True)
             materialize_runner_bundles(state, load_instance_families(state))
@@ -1015,14 +1196,18 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
     baseline: dict[str, dict[str, str]] = {}
     backup_path_holder: list[str] = [""]
     promoted_sifs: set[str] = set()
+    promoted_snapshots: list[tuple[Path, Path, bool]] = []
+    snapshot_committed = [False]
 
-    def load_revision(*, materialize: bool, dry_run: bool = False) -> None:
+    def load_revision(
+        *, materialize: bool, dry_run: bool = False, prepared: bool = False, preflight: bool = True
+    ) -> None:
         """Load one candidate revision without ever rewriting a running instance."""
         if materialize:
             materialize_runner_families(state)
             materialize_tool_families(state)
             materialize_demo_replays(state)
-        loaded = validate_deployment_files(state)
+        loaded = validate_deployment_files(state, prepared=prepared)
         families[:] = loaded
         if state.use_slurm() and not dry_run:
             migrate_legacy_sif_evidence(state, loaded)
@@ -1034,9 +1219,15 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         if state.use_slurm() and not flags.build_sif:
             validate_slurm_images(state, loaded)
         if not flags.build_sif:
-            validate_tool_images(state)
-        if flags.mode == "prepared":
-            _prepared_preflight(state, compose_cmd, loaded, dry_run=dry_run)
+            validate_tool_images(state, prepared=prepared)
+        if flags.mode == "prepared" and preflight:
+            _prepared_preflight(
+                state,
+                compose_cmd,
+                loaded,
+                dry_run=dry_run,
+                plugin_root=deployment_plugin_root(state, prepared=prepared),
+            )
         selected_families[:] = [family for family in loaded if runner_enabled(state, family.name)]
         images.clear()
         images.update(promotion.taggable_images(state, selected_families))
@@ -1046,7 +1237,22 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
     def activate_revision() -> None:
         if state.use_slurm():
             clear_deployment_attestations(state)
-        load_revision(materialize=True)
+        if flags.mode == "prepared":
+            # The prepared snapshot is the validated candidate: promote exactly
+            # those bytes instead of re-reading the checkout after the stop.
+            promoted_snapshots[:] = promote_prepared_snapshot(state)
+            try:
+                load_revision(materialize=False, preflight=False)
+            except BaseException:
+                rollback_revision()
+                raise
+        else:
+            load_revision(materialize=True)
+
+    def rollback_revision() -> None:
+        if promoted_snapshots and not snapshot_committed[0]:
+            restore_previous_snapshot(promoted_snapshots)
+            promoted_snapshots.clear()
 
     def stop_current_instance() -> None:
         try:
@@ -1056,7 +1262,15 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
                 end_maintenance(state)
             raise
 
-    if flags.dry_run:
+    if flags.mode == "prepared":
+        # A prepared activation promotes the snapshot prepare already wrote.
+        # Validate it here, before any step can stop the healthy deployment.
+        require_prepared_snapshot(state)
+        if flags.dry_run:
+            load_revision(materialize=False, dry_run=True, prepared=True)
+        else:
+            validate_prepared_snapshot(state, compose_cmd)
+    elif flags.dry_run:
         load_revision(materialize=False, dry_run=True)
 
     def changed_now() -> set[str]:
@@ -1111,7 +1325,7 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
                     0, backup_config(state) if flags.mode != "dev" or state.values.get("CONFIG_DIR") else ""
                 ),
             ),
-            Step("activate-revision", activate_revision),
+            Step("activate-revision", activate_revision, cleanup=rollback_revision),
             Step("capture-baselines", lambda: None),
         ]
     )
@@ -1173,6 +1387,15 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         )
     if flags.mode == "prepared":
         steps.append(Step("readiness", lambda: wait_for_services(state, compose_cmd)))
+
+        def commit_snapshot() -> None:
+            # Past readiness the candidate is the deployment.  Mark it committed
+            # before removing the backups so a cleanup after this point cannot
+            # try to restore trees that no longer exist.
+            snapshot_committed[0] = True
+            commit_prepared_snapshot(state, promoted_snapshots)
+
+        steps.append(Step("commit-snapshot", commit_snapshot))
     steps.append(Step("prune", lambda: promotion.prune_dangling(state)))
 
     def finalize(timings: dict[str, float]) -> None:

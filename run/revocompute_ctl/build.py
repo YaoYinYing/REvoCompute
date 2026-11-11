@@ -59,8 +59,14 @@ def cmd_build(
     server_only: bool = False,
     materialize: bool = True,
 ) -> None:
-    """Materialize Runner manifests and optionally build server images."""
-    from revocompute_ctl.steps import materialize_runner_families, materialize_tool_families
+    """Materialize the prepared Runner snapshot and optionally build server images.
+
+    Materialization always writes the candidate trees.  The running worker
+    bind-mounts the active trees live, so a build/prepare that rewrote them
+    could hand the old Server code a contract it cannot parse before the stop
+    step ever runs.
+    """
+    from revocompute_ctl.steps import materialize_prepared_snapshot, prepared_runner_root
 
     # The gateway route is deployment state reconciled from MCP_ENABLED, so it is
     # resolved before anything starts a container that would read it.
@@ -70,14 +76,19 @@ def cmd_build(
         apply_gateway(state)
 
     if materialize:
-        materialize_runner_families(state)
-        materialize_tool_families(state)
+        materialize_prepared_snapshot(state)
     proxy_build_args = resolve_proxy_args(state, use_proxy_from_env, use_proxy)
     from revocompute_ctl.storage import resolve_runner_identity
 
     from revocompute.runner_registry import migrate_legacy_sif_evidence, validate_runtime_files
 
-    families = validate_runtime_files(state)
+    # A materializing build validates the candidate it just wrote; a
+    # non-materializing build (the dev restart, after activation) validates the
+    # active tree that is already in place.
+    if materialize:
+        families = validate_runtime_files(state, plugin_root=prepared_runner_root(state))
+    else:
+        families = validate_runtime_files(state)
     uid, gid = resolve_runner_identity(state)
     if state.use_slurm():
         migrate_legacy_sif_evidence(state, families)

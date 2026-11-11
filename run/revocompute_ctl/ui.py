@@ -80,8 +80,9 @@ Safety:
 
 Subcommands:
   setup    Prepare the selected env file (create from .env.example if missing).
-  prepare  With --build-sif, build and stage selected Runner SIFs directly.
-           Does not restart the running deployment.
+  prepare  Materialize the candidate Runner/Tool/demo snapshot out of the
+           running tree, and with --build-sif build and stage selected Runner
+           SIFs directly. Does not touch or restart the running deployment.
   build    Build server web/worker images with Docker Compose.
   live-test Build, validate, run, and receipt exact candidate SIFs on real Slurm.
   runner-status Derive active Runner readiness from current contracts and evidence.
@@ -96,8 +97,8 @@ Subcommands:
   restart  Restart in dev mode by default.
            --mode=dev:  down, build local images with host UID/GID, then up.
            --mode=prod: down, pull configured images, then up without building.
-           --mode=prepared: preserve current tasks, down, validate the new
-                            snapshot and prepared artifacts, then up without build or pull.
+           --mode=prepared: preserve current tasks, validate the prepared
+                            snapshot, down, promote it, then up without build or pull.
            --use-proxy[=<url>]  Pass redacted, non-persisted proxy build arguments.
 """
 

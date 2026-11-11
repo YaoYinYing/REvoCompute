@@ -316,7 +316,7 @@ REVODESIGN_SERVER_ENV=.env.local bash run/restart.sh restart --mode=dev
 # production: down + pull configured Docker Hub images + up without building
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prod
 
-# prepared production: preflight local images/SIFs/config, then down + up only
+# prepared production: preflight, down, promote the prepared snapshot, then up only
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepared
 
 # subcommands
@@ -339,19 +339,24 @@ environment file:
   starts with `--no-build`. It requires `RUNNER_USERNAME` and `RUNNER_GROUP` to
   resolve on the host, and rejects an explicit `RUNNER_UID` or `RUNNER_GID` that
   does not match those account records.
-- `--mode=prepared` activates locally prepared production artifacts. Before it
-  stops anything, it verifies server Docker images, every required SIF and
-  candidate receipt, runner files, auth-storage separation, and the
-  rendered Compose model. It performs no build or pull, starts with
-  `--no-build`, and waits for all five Compose services to report running.
+- `--mode=prepared` activates the candidate snapshot written by `prepare`.
+  Before it stops anything, it verifies the prepared Runner/Tool/demo trees,
+  server Docker images, every required SIF and candidate receipt, auth-storage
+  separation, and the rendered Compose model. It then stops, atomically
+  promotes the prepared trees over the active ones (keeping `.previous`
+  backups), performs no build or pull, starts with `--no-build`, and waits for
+  all five Compose services to report running. A failed `up` or readiness check
+  restores the previous active trees so the old deployment can be restarted.
 - `job_executor: slurm` in the selected registry automatically merges
   `docker-compose.slurm.yml`, bind-mounts SLURM client tools + MUNGE, and
   validates SIF images. The admin database controls whether submissions are
   enabled.
-- `prepare --build-sif` stages each stale SIF as `<sif>.next` while the stack
-  stays up; a later `restart --mode=prepared` atomically replaces it after
-  `down` (requires Apptainer on PATH). Candidates without a target-cluster
-  smoke receipt are never promoted.
+- `prepare` materializes the candidate Runner/Tool/demo snapshot and never
+  rewrites the active trees the running worker reads. `prepare --build-sif`
+  stages each stale SIF as `<sif>.next` while the stack stays up; a later
+  `restart --mode=prepared` atomically replaces it after `down` (requires
+  Apptainer on PATH). Candidates without a target-cluster smoke receipt are
+  never promoted.
 
 Provision production bind-mounted directories as writable by the configured
 service UID/GID. This identity contract provides non-root execution and

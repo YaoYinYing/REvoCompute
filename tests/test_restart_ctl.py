@@ -515,6 +515,222 @@ def test_advancing_runner_source_does_not_mutate_current_instance_snapshot(monke
     assert "x-ui-control:\n        kind: seed" in deployed_task.read_text(encoding="utf-8")
 
 
+def _tree_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _cpu_runner_source(tmp_path: Path) -> Path:
+    fixture = SERVER_DIR / "tests" / "fixtures" / "runners"
+    source = tmp_path / "source-runners"
+    shutil.copytree(fixture / "common", source / "common")
+    shutil.copytree(fixture / "cpu_runner", source / "cpu_runner")
+    return source
+
+
+def _prepared_runner_state(tmp_path: Path, source: Path) -> EnvState:
+    return EnvState(
+        str(tmp_path / "server.env"),
+        values={
+            "SERVER_DIR": str(tmp_path / "server"),
+            "RUNNER_SOURCE_ROOT": str(source),
+            "ENABLED_TASKRUNNERS": "cpu_runner",
+            "USE_SLURM": "1",
+        },
+    )
+
+
+def _patch_prepared_plan(monkeypatch) -> None:
+    """Silence the image/storage checks so the walk's file movement is the subject."""
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "validate_required_settings", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
+    monkeypatch.setattr(steps_mod, "validate_prepared_snapshot", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(steps_mod, "validate_runtime_files", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(steps_mod, "validate_slurm_images", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "migrate_legacy_sif_evidence", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "materialize_runner_bundles", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(steps_mod, "clear_deployment_attestations", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(admin_mod, "prepare_admin_bootstrap", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(promotion, "taggable_images", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(promotion, "capture_baseline_digests", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(promotion, "promote_sifs", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(promotion, "prune_dangling", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(stamp_mod, "backup_config", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr("revocompute_ctl.mcp.apply_gateway", lambda *_args, **_kwargs: False)
+
+
+def test_prepare_does_not_mutate_contracts_the_running_worker_reads(monkeypatch, tmp_path):
+    """Prepare writes a candidate; the old worker keeps reading the old contract."""
+    source = _cpu_runner_source(tmp_path)
+    state = _prepared_runner_state(tmp_path, source)
+    steps_mod.materialize_runner_families(state)  # the running instance
+    runner_root = Path(state.server_dir()) / "docker" / "runners"
+    active_task = runner_root / "cpu_runner" / "tasks" / "predict" / "task.yaml"
+    old_contract = active_task.read_text(encoding="utf-8")
+    active_tree = _tree_bytes(runner_root)
+
+    # The new revision changes a workspace role the old Server code rejects.
+    source_task = source / "cpu_runner" / "tasks" / "predict" / "task.yaml"
+    source_task.write_text(
+        old_contract.replace("role: sequence", "role: protein_sequence"), encoding="utf-8"
+    )
+    steps_mod.materialize_prepared_snapshot(state)
+
+    assert _tree_bytes(runner_root) == active_tree
+    prepared_task = (
+        Path(state.server_dir())
+        / "docker"
+        / "runners.prepared"
+        / "cpu_runner"
+        / "tasks"
+        / "predict"
+        / "task.yaml"
+    )
+    assert "role: protein_sequence" in prepared_task.read_text(encoding="utf-8")
+
+    seen: list[str] = []
+
+    def old_worker_run(argv, **_kwargs):
+        if "--services" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout="worker\n")
+        seen.append(active_task.read_text(encoding="utf-8"))
+        if "role: protein_sequence" in seen[-1]:
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="unknown capability")
+        return subprocess.CompletedProcess(argv, 0, stdout="")
+
+    monkeypatch.setattr(sweep_mod, "run_cmd", old_worker_run)
+    sweep_mod.pre_stop_sweep_slurm(state, ("docker", "compose"))
+
+    assert seen
+    assert all("role: protein_sequence" not in text for text in seen)
+
+
+def test_prepared_activation_promotes_the_candidate_only_after_stop(monkeypatch, tmp_path):
+    source = _cpu_runner_source(tmp_path)
+    state = _prepared_runner_state(tmp_path, source)
+    steps_mod.materialize_runner_families(state)
+    runner_root = Path(state.server_dir()) / "docker" / "runners"
+    old_tree = _tree_bytes(runner_root)
+    source_task = source / "cpu_runner" / "tasks" / "predict" / "task.yaml"
+    source_task.write_text(
+        source_task.read_text(encoding="utf-8").replace("role: sequence", "role: protein_sequence"),
+        encoding="utf-8",
+    )
+    steps_mod.materialize_prepared_snapshot(state)
+    prepared_root = Path(state.server_dir()) / "docker" / "runners.prepared"
+    candidate_tree = _tree_bytes(prepared_root)
+
+    _patch_prepared_plan(monkeypatch)
+    events: list[str] = []
+
+    def stop_current(_state, _compose, **_kwargs):
+        events.append("stop")
+        assert _tree_bytes(runner_root) == old_tree
+
+    monkeypatch.setattr(steps_mod, "cmd_down", stop_current)
+    real_promote = steps_mod.promote_prepared_snapshot
+
+    def promote_current(_state):
+        events.append("promote")
+        return real_promote(_state)
+
+    monkeypatch.setattr(steps_mod, "promote_prepared_snapshot", promote_current)
+
+    plan = steps_mod.build_restart_plan(
+        state, ("docker", "compose"), steps_mod.RestartFlags(mode="prepared")
+    )
+    last = next(index for index, step in enumerate(plan.steps) if step.name == "activate-revision")
+    for step in plan.steps[: last + 1]:
+        step.run()
+
+    assert events == ["stop", "promote"]
+    assert _tree_bytes(runner_root) == candidate_tree
+    assert not prepared_root.exists()
+
+
+@pytest.mark.parametrize("failure_step", ["up", "readiness"])
+def test_failed_prepared_activation_restores_the_previous_tree(monkeypatch, tmp_path, failure_step):
+    source = _cpu_runner_source(tmp_path)
+    state = _prepared_runner_state(tmp_path, source)
+    steps_mod.materialize_runner_families(state)
+    runner_root = Path(state.server_dir()) / "docker" / "runners"
+    old_tree = _tree_bytes(runner_root)
+    source_task = source / "cpu_runner" / "tasks" / "predict" / "task.yaml"
+    source_task.write_text(
+        source_task.read_text(encoding="utf-8").replace("role: sequence", "role: protein_sequence"),
+        encoding="utf-8",
+    )
+    steps_mod.materialize_prepared_snapshot(state)
+    prepared_root = Path(state.server_dir()) / "docker" / "runners.prepared"
+    candidate_tree = _tree_bytes(prepared_root)
+
+    _patch_prepared_plan(monkeypatch)
+    monkeypatch.setattr(steps_mod, "cmd_down", lambda *_args, **_kwargs: None)
+
+    def fail(_state, *_args, **_kwargs):
+        raise RuntimeError(f"{failure_step} failed")
+
+    monkeypatch.setattr(
+        steps_mod, "cmd_up", fail if failure_step == "up" else (lambda *_args, **_kwargs: None)
+    )
+    monkeypatch.setattr(
+        steps_mod, "wait_for_services", fail if failure_step == "readiness" else (lambda *_args: None)
+    )
+
+    plan = steps_mod.build_restart_plan(
+        state, ("docker", "compose"), steps_mod.RestartFlags(mode="prepared")
+    )
+    with pytest.raises(RuntimeError, match=failure_step):
+        run_walk(plan.steps)
+
+    assert _tree_bytes(runner_root) == old_tree
+    assert _tree_bytes(prepared_root) == candidate_tree
+    assert not (Path(state.server_dir()) / "docker" / "runners.previous").exists()
+
+
+def test_prepared_restart_without_a_snapshot_fails_before_stopping_anything(monkeypatch, tmp_path):
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"SERVER_DIR": str(tmp_path / "server"), "ADMIN_USERS": "admin"},
+    )
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "validate_required_settings", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
+    events: list[str] = []
+    monkeypatch.setattr(steps_mod, "cmd_down", lambda *_args, **_kwargs: events.append("stop"))
+
+    with pytest.raises(SystemExit):
+        steps_mod.build_restart_plan(
+            state, ("docker", "compose"), steps_mod.RestartFlags(mode="prepared")
+        )
+
+    assert events == []
+
+
+def test_failed_pre_stop_sweep_never_invokes_compose_down(monkeypatch, tmp_path):
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"SERVER_DIR": str(tmp_path / "server")},
+    )
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda _state: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda _state: None)
+    monkeypatch.setattr(
+        "revocompute_ctl.sweep.pre_stop_sweep_slurm",
+        lambda _state, _compose: (_ for _ in ()).throw(RuntimeError("preservation failed")),
+    )
+    calls: list[tuple] = []
+    monkeypatch.setattr(steps_mod, "run_cmd", lambda *args, **kwargs: calls.append(args))
+
+    with pytest.raises(RuntimeError, match="preservation failed"):
+        steps_mod.cmd_down(state, ("docker", "compose"))
+
+    assert calls == []
+
+
 def _tool_source(tmp_path: Path) -> Path:
     source = tmp_path / "source-tools"
     for family in ("bioio", "chemio"):
@@ -704,8 +920,11 @@ def test_prepare_without_runner_override_keeps_the_configured_family_set(monkeyp
     result = _run_cli(monkeypatch, tmp_path, env_file, _write_shims(tmp_path), "prepare", "--build-sif")
 
     assert result.returncode == 0, result.stderr
-    materialized = task_dir / "docker" / "runners"
-    assert configured | {"common"} <= {path.name for path in materialized.iterdir() if path.is_dir()}
+    prepared = task_dir / "docker" / "runners.prepared"
+    assert configured | {"common"} <= {path.name for path in prepared.iterdir() if path.is_dir()}
+    # Prepare is a candidate write: the running deployment's tree is untouched.
+    assert not (task_dir / "docker" / "runners").exists()
+    assert (task_dir / "docker" / ".prepared-snapshot.json").is_file()
 
 
 def test_activation_preflight_does_not_write_bytecode_into_the_runner_tree(monkeypatch, tmp_path):
@@ -1515,7 +1734,7 @@ def _rollback_restart(monkeypatch, tmp_path, *, enabled: str, project_services: 
     route = task_dir / "mcp-gateway" / "mcp.conf"
     route.parent.mkdir(parents=True, exist_ok=True)
     route.write_text("location /k/ {}\n", encoding="utf-8")
-    _run_cli(monkeypatch, tmp_path, env_file, bin_dir, "restart", "--mode=prepared", "--keep-gateway")
+    _run_cli(monkeypatch, tmp_path, env_file, bin_dir, "restart", "--mode=dev", "--keep-gateway")
     return (tmp_path / "docker.log").read_text(encoding="utf-8").splitlines(), route
 
 
@@ -2080,6 +2299,9 @@ def test_failed_activation_keeps_maintenance(monkeypatch, tmp_path, failure_step
 
     monkeypatch.setattr(steps_mod, "require_env_file", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(steps_mod, "validate_required_settings", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "require_prepared_snapshot", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "validate_prepared_snapshot", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(steps_mod, "promote_prepared_snapshot", lambda *_args: [])
     monkeypatch.setattr(steps_mod, "validate_runtime_files", lambda *_args: [])
     monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
     monkeypatch.setattr(steps_mod, "_prepared_preflight", lambda *_args, **_kwargs: None)
