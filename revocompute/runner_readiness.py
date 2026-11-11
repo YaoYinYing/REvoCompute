@@ -33,6 +33,7 @@ from revocompute.runner_registry import (
     _build_provenance,
     deployment_plugin_root,
     load_plugin_families,
+    prepared_snapshot_marker,
     runner_enabled,
     sif_stale,
 )
@@ -710,9 +711,16 @@ def _instance_family(state, family: RuntimeFamily) -> RuntimeFamily:
     )
 
 
-def load_instance_families(state) -> list[RuntimeFamily]:
-    """Load the families and active SIF paths owned by the current deployment."""
-    return [_instance_family(state, family) for family in load_plugin_families(deployment_plugin_root(state))]
+def load_instance_families(state, *, prepared: bool = False) -> list[RuntimeFamily]:
+    """Load the families and artifact paths owned by this deployment.
+
+    ``prepared`` reads the candidate snapshot written by ``prepare``; the
+    default is the active tree the running instance serves.
+    """
+    return [
+        _instance_family(state, family)
+        for family in load_plugin_families(deployment_plugin_root(state, prepared=prepared))
+    ]
 
 
 def _source_families(state) -> list[RuntimeFamily]:
@@ -787,6 +795,13 @@ def activation_preflight_snapshot(state, *, runners: tuple[str, ...] | list[str]
     The rows come from the same resolver as ``runner-status``; nothing is built,
     promoted, or mutated.  Disabled families are included because enabling them
     is part of the activation the operator is preparing.
+
+    Resolution is candidate-first: a family present in the prepared snapshot
+    resolves from that candidate, so a changed existing family is judged by the
+    contracts and build identity ``restart --mode=prepared`` would promote.
+    Names absent from the candidate fall back to the active snapshot and then to
+    the checkout.  ``runner-status`` and submission readiness intentionally keep
+    reading only the active tree.
     """
     # Discovery imports workspace normalizers from the runner source tree, which
     # would otherwise write __pycache__ into it. This is a read-only preflight.
@@ -794,6 +809,13 @@ def activation_preflight_snapshot(state, *, runners: tuple[str, ...] | list[str]
     sys.dont_write_bytecode = True
     try:
         families = {family.name: family for family in load_instance_families(state)}
+        # Only a completed candidate is a candidate: activation refuses without
+        # this marker, and the advisory preflight must not describe a partial
+        # prepared tree it would refuse.
+        if prepared_snapshot_marker(state).is_file():
+            families.update(
+                {family.name: family for family in load_instance_families(state, prepared=True)}
+            )
         missing = {name for name in runners if name not in families}
         if missing:
             families.update(

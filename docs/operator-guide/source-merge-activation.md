@@ -48,11 +48,17 @@ family, current status, build identity freshness, and next action (`build-sif`,
 Disabled families are listed because enabling them is part of the activation.
 
 Resolution order determines what each row describes. A family present in the
-materialized instance snapshot resolves from that snapshot; a family absent from
-it resolves from the checkout. Before `prepare` stages `<sif>.next`, an
-instance-snapshot row describes the active deployment artifact; after `.next` is
-staged, that row describes the staged candidate. A family absent from the
-snapshot can report before `prepare`, because its row comes from the checkout.
+prepared candidate snapshot resolves from that candidate, so a changed existing
+family is judged by the contracts and build identity a prepared restart would
+promote. A prepared tree counts only when its completion marker is present; an
+interrupted `prepare` is ignored here and still refused by activation. A name
+absent from the candidate resolves from the active materialized snapshot, and
+only a name absent from both resolves from the checkout. Before `prepare` stages
+`<sif>.next`, both snapshots describe the active deployment artifact; after
+`.next` is staged, the candidate row describes the staged candidate. A family
+absent from both snapshots can report before `prepare`, because its row comes
+from the checkout. `runner-status` and submission readiness never use the
+candidate snapshot; they always describe the running deployment.
 
 ## What a source merge leaves behind
 
@@ -93,11 +99,19 @@ promotion alone completes activation:
    ```
 
    Do not pass `--enabled-runners` here. It overrides the deployment's
-   configured set for the whole window: `prepare` replaces
-   `SERVER_DIR/docker/runners` with only the listed families, and an interrupted
-   run leaves the snapshot narrowed. A bare `prepare` materializes every family
-   configured by `ENABLED_TASKRUNNERS`, and `build_slurm_images` stages only the
-   missing or stale candidates, so unrelated families stay in the deployment
+   configured set for the whole window: `prepare` replaces the candidate
+   snapshot `SERVER_DIR/docker/runners.prepared` with only the listed families,
+   and an interrupted run leaves that candidate narrowed. The completion marker
+   is written last and validation re-runs before every stop, so an interrupted
+   or narrowed candidate is refused before anything stops; only a bare
+   `prepare` restores the full configured set. The running
+   `SERVER_DIR/docker/runners` tree is never touched. A prepared restart also
+   refuses a candidate whose family set differs from `ENABLED_TASKRUNNERS` (or
+   from the full source family set when that setting is empty) before it stops
+   anything. A bare `prepare`
+   materializes every family configured by `ENABLED_TASKRUNNERS`, and
+   `build_slurm_images` stages only the missing or stale candidates, so
+   unrelated families stay in the deployment
    snapshot and their active SIFs are untouched.
 
 3. **Accept each candidate on the target host.** Run `%test`, imports, and a

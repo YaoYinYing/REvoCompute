@@ -30,6 +30,16 @@ from revocompute.server_root import SERVER_ROOT
 
 _SAFE_FAMILY_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
+#: Completion marker written last by ``prepare``.  Activation and the advisory
+#: preflight must agree that only a marked snapshot is a candidate: an
+#: interrupted prepare can leave a partial prepared tree behind.
+PREPARED_SNAPSHOT_MARKER = Path("docker") / ".prepared-snapshot.json"
+
+
+def prepared_snapshot_marker(state) -> Path:
+    """Path of the completion marker for this deployment's candidate snapshot."""
+    return Path(state.server_dir()) / PREPARED_SNAPSHOT_MARKER
+
 
 @dataclass(frozen=True)
 class RuntimeFamily:
@@ -138,14 +148,26 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
     return families
 
 
-def deployment_plugin_root(state) -> Path:
+def deployment_plugin_root(state, *, prepared: bool = False) -> Path:
     """Return the runner tree used by deployment validation.
 
-    Prepared instances use the materialized tree.  Dry-run validation happens
-    before materialization, so it intentionally falls back to the checked-out
-    source tree without consulting the retired task registry.
+    ``prepared`` selects the candidate snapshot written by ``prepare``.  It
+    never falls back to the checkout: activation promotes exactly the tree that
+    was validated, so a missing prepared tree is a refusal.  The active tree is
+    the running instance's contract and must not be rewritten while it serves.
+
+    Active validation falls back to the checked-out source tree only while a
+    fresh instance has no materialized tree yet, which is the dry-run setup
+    window.
     """
-    materialized = Path(state.server_dir()) / "docker" / "runners"
+    materialized = Path(state.server_dir()) / "docker" / ("runners.prepared" if prepared else "runners")
+    if prepared:
+        if materialized.is_dir():
+            return materialized
+        raise RegistryError(
+            f"Prepared Runner snapshot is missing: {materialized}. "
+            "Run: bash run/restart.sh prepare"
+        )
     # Once setup has created the instance tree, an empty directory is a valid
     # zero-runner snapshot and must remain authoritative.
     if materialized.is_dir():
@@ -191,11 +213,16 @@ def validate_plugin_policies(runners_dir: str | os.PathLike[str], policy_root: s
         raise RegistryError(f"Invalid Runner access policy configuration: {exc}") from exc
 
 
-def validate_runtime_files(state) -> list[RuntimeFamily]:
+def validate_runtime_files(state, *, plugin_root: str | os.PathLike[str] | None = None) -> list[RuntimeFamily]:
     """Port of validate_runtime_files() — every family, artifact, and runner
-    YAML check, with the pinned messages."""
+    YAML check, with the pinned messages.
+
+    ``plugin_root`` overrides the active instance tree, so prepare validates the
+    candidate snapshot it just materialized instead of the tree the running
+    worker reads.
+    """
     config_root = state.config_dir()
-    plugin_root = deployment_plugin_root(state)
+    plugin_root = Path(plugin_root) if plugin_root is not None else deployment_plugin_root(state)
     validate_plugin_policies(plugin_root, Path(config_root) / "access_policies")
     manifests = PluginManager().discover(plugin_root)
     families = load_plugin_families(plugin_root)

@@ -23,6 +23,7 @@ if str(RUN_DIR) not in sys.path:
 from revocompute.doctor import Diagnostic, DoctorReport  # noqa: E402
 from revocompute.live_tests import atomic_write_json, sha256_file  # noqa: E402
 from revocompute import runtime_bundle  # noqa: E402
+from revocompute import runner_readiness as readiness_mod  # noqa: E402
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.resource_policy import ResourcePolicyValues  # noqa: E402
 from revocompute.runner_readiness import (  # noqa: E402
@@ -52,6 +53,7 @@ from revocompute.artifact_evidence import (  # noqa: E402
 from revocompute.runner_registry import RuntimeFamily  # noqa: E402
 from revocompute.runner_registry import RegistryError  # noqa: E402
 from revocompute.runner_registry import _build_provenance, load_plugin_families  # noqa: E402
+from revocompute.runner_registry import prepared_snapshot_marker  # noqa: E402
 from revocompute.runner_live_test import TaskResourceSnapshot, ValidationIdentity, load_validation_identity  # noqa: E402
 
 
@@ -588,7 +590,14 @@ def test_activation_preflight_resolves_a_declared_but_disabled_family(tmp_path, 
     shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "common", source / "common")
     state = _State(tmp_path)
     state.get = lambda key: str(source) if key == "RUNNER_SOURCE_ROOT" else ""
-    monkeypatch.setattr("revocompute.runner_readiness.load_instance_families", lambda _state: [])
+    # A prepared snapshot exists but contains neither the active nor the
+    # requested family, so the checkout remains the only source for it.
+    (state.root / "server" / "docker" / "runners.prepared").mkdir(parents=True)
+    prepared_snapshot_marker(state).write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        "revocompute.runner_readiness.load_instance_families",
+        lambda _state, *, prepared=False: [],
+    )
     monkeypatch.setattr("revocompute.runner_readiness.diagnose", lambda *_args, **_kwargs: DoctorReport(()))
 
     results = activation_preflight_snapshot(state, runners=("restricted_runner",))
@@ -597,6 +606,105 @@ def test_activation_preflight_resolves_a_declared_but_disabled_family(tmp_path, 
     assert results[0].status is RunnerReadinessStatus.NOT_BUILT
     assert results[0].next_action == "build-sif"
     assert results[0].sif_path == str(tmp_path / "images" / "restricted_runner_v1.sif")
+
+
+def test_activation_preflight_prefers_the_prepared_snapshot(evidence, monkeypatch):
+    state, active_family, _active = evidence
+    prepared_root = state.root / "server" / "docker" / "runners.prepared"
+    candidate_root = prepared_root / "demo"
+    candidate_root.mkdir(parents=True)
+    prepared_snapshot_marker(state).write_text("{}", encoding="utf-8")
+    (candidate_root / "runner.yaml").write_text("candidate\n", encoding="utf-8")
+    (active_family.root / "runner.yaml").write_text("active\n", encoding="utf-8")
+    candidate = replace(active_family, root=candidate_root)
+
+    def load(_state, *, prepared=False):
+        return [candidate] if prepared else [active_family]
+
+    monkeypatch.setattr(readiness_mod, "load_instance_families", load)
+    calls: list[Path] = []
+    real_resolve = readiness_mod.resolve_runner_readiness
+
+    def spy(_state, family):
+        calls.append(family.root)
+        return real_resolve(_state, family)
+
+    monkeypatch.setattr(readiness_mod, "resolve_runner_readiness", spy)
+    before = sorted(path.relative_to(state.root).as_posix() for path in state.root.rglob("*"))
+
+    rows = activation_preflight_snapshot(state, runners=("demo",))
+
+    after = sorted(path.relative_to(state.root).as_posix() for path in state.root.rglob("*"))
+    assert rows and calls == [candidate_root]
+    assert (candidate_root / "runner.yaml").read_text(encoding="utf-8") == "candidate\n"
+    assert after == before  # read-only
+
+    # Active deployment readiness still resolves the active tree.
+    calls.clear()
+    readiness_mod.evaluate_runner_readiness(state, "demo")
+    assert calls == [active_family.root]
+
+
+def test_activation_preflight_falls_back_to_active_when_candidate_lacks_the_family(evidence, monkeypatch):
+    state, active_family, _active = evidence
+    (state.root / "server" / "docker" / "runners.prepared").mkdir(parents=True)
+    prepared_snapshot_marker(state).write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        readiness_mod,
+        "load_instance_families",
+        lambda _state, *, prepared=False: [] if prepared else [active_family],
+    )
+    calls: list[Path] = []
+    real_resolve = readiness_mod.resolve_runner_readiness
+
+    def spy(_state, family):
+        calls.append(family.root)
+        return real_resolve(_state, family)
+
+    monkeypatch.setattr(readiness_mod, "resolve_runner_readiness", spy)
+
+    activation_preflight_snapshot(state, runners=("demo",))
+
+    assert calls == [active_family.root]
+
+
+def test_activation_preflight_ignores_an_unmarked_prepared_tree(evidence, monkeypatch):
+    """An interrupted prepare leaves a directory activation will refuse."""
+    state, active_family, _active = evidence
+    candidate_root = state.root / "server" / "docker" / "runners.prepared" / "demo"
+    candidate_root.mkdir(parents=True)
+    candidate = replace(active_family, root=candidate_root)
+
+    def load(_state, *, prepared=False):
+        return [candidate] if prepared else [active_family]
+
+    monkeypatch.setattr(readiness_mod, "load_instance_families", load)
+    calls: list[Path] = []
+    real_resolve = readiness_mod.resolve_runner_readiness
+
+    def spy(_state, family):
+        calls.append(family.root)
+        return real_resolve(_state, family)
+
+    monkeypatch.setattr(readiness_mod, "resolve_runner_readiness", spy)
+
+    activation_preflight_snapshot(state, runners=("demo",))
+
+    assert calls == [active_family.root]
+
+
+def test_activation_preflight_unknown_family_with_a_prepared_snapshot_fails(evidence, monkeypatch):
+    state, _family, _active = evidence
+    (state.root / "server" / "docker" / "runners.prepared").mkdir(parents=True)
+    prepared_snapshot_marker(state).write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        readiness_mod,
+        "load_instance_families",
+        lambda _state, *, prepared=False: [],
+    )
+
+    with pytest.raises(RegistryError, match="Unknown Runner Family: missing"):
+        activation_preflight_snapshot(state, runners=("missing",))
 
 
 def test_activation_preflight_unknown_family_fails_cleanly(evidence, monkeypatch):
