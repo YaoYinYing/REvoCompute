@@ -357,7 +357,8 @@ environment file:
   stages each stale SIF as `<sif>.next` while the stack stays up; a later
   `restart --mode=prepared` atomically replaces it after `down` (requires
   Apptainer on PATH). A prepared restart refuses a candidate whose family set
-  differs from `ENABLED_TASKRUNNERS` before stopping anything. Candidates
+  differs from `ENABLED_TASKRUNNERS` (or, when that setting is empty, from the
+  full source family set) before stopping anything. Candidates
   without a target-cluster smoke receipt are never promoted.
 
 Provision production bind-mounted directories as writable by the configured

@@ -711,7 +711,10 @@ def test_prepared_restart_without_a_snapshot_fails_before_stopping_anything(monk
     assert events == []
 
 
-def test_prepared_restart_refuses_a_narrowed_candidate_before_stopping(monkeypatch, tmp_path, capsys):
+@pytest.mark.parametrize("configured", ["cpu_runner,gpu_runner", ""])
+def test_prepared_restart_refuses_a_narrowed_candidate_before_stopping(
+    monkeypatch, tmp_path, capsys, configured
+):
     fixture = SERVER_DIR / "tests" / "fixtures" / "runners"
     source = tmp_path / "source-runners"
     shutil.copytree(fixture / "common", source / "common")
@@ -732,13 +735,15 @@ def test_prepared_restart_refuses_a_narrowed_candidate_before_stopping(monkeypat
     )
     steps_mod.materialize_prepared_snapshot(narrowed)
 
-    # The deployment itself is configured for both families.
+    # The deployment is configured for both families; an empty setting means
+    # "every family the source would materialize".
+    monkeypatch.delenv("ENABLED_TASKRUNNERS", raising=False)
     state = EnvState(
         str(tmp_path / "server.env"),
         values={
             "SERVER_DIR": str(deployed),
             "RUNNER_SOURCE_ROOT": str(source),
-            "ENABLED_TASKRUNNERS": "cpu_runner,gpu_runner",
+            "ENABLED_TASKRUNNERS": configured,
             "USE_SLURM": "0",
             "REVOCOMPUTE_JOB_EXECUTOR": "docker",
             "ADMIN_USERS": "admin",
@@ -756,7 +761,7 @@ def test_prepared_restart_refuses_a_narrowed_candidate_before_stopping(monkeypat
         )
 
     assert events == []
-    assert "does not match ENABLED_TASKRUNNERS (missing gpu_runner)" in capsys.readouterr().err
+    assert "does not match the configured Runner set (missing gpu_runner)" in capsys.readouterr().err
 
 
 def test_failed_pre_stop_sweep_never_invokes_compose_down(monkeypatch, tmp_path):

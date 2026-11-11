@@ -98,8 +98,9 @@ promotion alone completes activation:
    and an interrupted run leaves that candidate narrowed (the completion marker
    is written last, so it cannot be activated). The running
    `SERVER_DIR/docker/runners` tree is never touched. A prepared restart also
-   refuses a candidate whose family set differs from `ENABLED_TASKRUNNERS`
-   before it stops anything; run a bare `prepare` to refresh the full
+   refuses a candidate whose family set differs from `ENABLED_TASKRUNNERS` (or
+   from the full source family set when that setting is empty) before it stops
+   anything; run a bare `prepare` to refresh the full
    configured set. A bare `prepare`
    materializes every family configured by `ENABLED_TASKRUNNERS`, and
    `build_slurm_images` stages only the missing or stale candidates, so

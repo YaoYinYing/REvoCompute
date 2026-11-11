@@ -328,19 +328,46 @@ def prepared_family_names(state) -> set[str]:
 
 
 def validate_prepared_family_selection(state) -> None:
-    """Refuse a candidate whose family set differs from the configured one.
+    """Refuse a candidate whose family set differs from the deployment's set.
 
     ``prepare --enabled-runners`` narrows the candidate for a build/live-test
     window.  Promoting that candidate would silently remove every other family
     from the deployed Runner tree, so a prepared restart requires the candidate
-    to match ``ENABLED_TASKRUNNERS`` exactly when that setting names any family.
+    to match the configured set exactly.
+
+    An empty ``ENABLED_TASKRUNNERS`` is the all-families configuration, not a
+    wildcard that skips the comparison: the expected set is then every family
+    the checkout would materialize, and an unavailable source tree is a refusal
+    rather than a silent pass.
     """
+    from revocompute.plugins import PluginManager
+
     configured = {name.strip() for name in state.get("ENABLED_TASKRUNNERS").split(",") if name.strip()}
-    if not configured:
-        return
+    if configured:
+        expected = configured
+    else:
+        from revocompute_ctl import SERVER_ROOT
+
+        source_root = Path(state.get("RUNNER_SOURCE_ROOT") or SERVER_ROOT / "docker" / "runners")
+        if not source_root.is_dir():
+            print(
+                f"Cannot verify the prepared Runner family set: source tree is missing: {source_root}. "
+                "Run: bash run/restart.sh prepare",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        try:
+            expected = {manifest.id for manifest in PluginManager().discover(source_root)}
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            print(
+                f"Cannot verify the prepared Runner family set from {source_root}: {exc}. "
+                "Run: bash run/restart.sh prepare",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from exc
     prepared = prepared_family_names(state)
-    missing = sorted(configured - prepared)
-    unexpected = sorted(prepared - configured)
+    missing = sorted(expected - prepared)
+    unexpected = sorted(prepared - expected)
     if not missing and not unexpected:
         return
     detail = []
@@ -349,7 +376,7 @@ def validate_prepared_family_selection(state) -> None:
     if unexpected:
         detail.append("unexpected " + ", ".join(unexpected))
     print(
-        "Prepared Runner snapshot does not match ENABLED_TASKRUNNERS "
+        "Prepared Runner snapshot does not match the configured Runner set "
         f"({'; '.join(detail)}). Run a bare `bash run/restart.sh prepare` "
         "or update ENABLED_TASKRUNNERS.",
         file=sys.stderr,
