@@ -13,6 +13,7 @@ after the walk, so it can carry the real step timings.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -304,11 +305,12 @@ def prepared_snapshot_pairs(state) -> list[tuple[Path, Path]]:
 def require_prepared_snapshot(state) -> None:
     """Refuse prepared activation unless a complete candidate snapshot exists.
 
-    The marker is written last, after every candidate tree is materialized, so a
-    prepare that died midway can never be promoted.  This check runs before the
-    stop step, so a missing snapshot leaves the running deployment untouched.
+    The marker is written last, after every candidate tree is materialized, and
+    the full preflight re-runs before every stop.  A prepare that died midway is
+    therefore refused before anything stops, leaving the running deployment
+    untouched.
     """
-    missing = [str(active) for prepared, active in prepared_snapshot_pairs(state) if not prepared.is_dir()]
+    missing = [str(prepared) for prepared, _active in prepared_snapshot_pairs(state) if not prepared.is_dir()]
     marker = _prepared_marker_path(state)
     if not marker.is_file() or missing:
         detail = f"missing {', '.join(missing)}" if missing else f"missing {marker}"
@@ -318,6 +320,21 @@ def require_prepared_snapshot(state) -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
+
+
+def invalidate_prepared_snapshot(state) -> None:
+    """Drop a candidate that an active materialization is about to supersede.
+
+    A dev/prod activation, ``setup``, or demo ``up`` advances the active
+    contracts a candidate was built from.  Leaving the marker behind would let
+    a later prepared restart promote that older tree over the newer active one,
+    a silent downgrade.  Removal happens before the active write, so a partial
+    active write cannot leave an activatable candidate either.
+    """
+    _clear_prepared_marker(state)
+    for prepared, _active in prepared_snapshot_pairs(state):
+        if prepared.exists():
+            shutil.rmtree(prepared)
 
 
 def prepared_family_names(state) -> set[str]:
@@ -384,10 +401,62 @@ def validate_prepared_family_selection(state) -> None:
     raise SystemExit(1)
 
 
+def _snapshot_digest(state) -> str:
+    """Content digest of every prepared tree, recorded for operator audit."""
+    digest = hashlib.sha256()
+    for prepared, active in prepared_snapshot_pairs(state):
+        if not prepared.is_dir():
+            continue
+        digest.update(str(active).encode("utf-8"))
+        digest.update(b"\0")
+        for path in sorted(prepared.rglob("*")):
+            if path.is_file():
+                digest.update(path.relative_to(prepared).as_posix().encode("utf-8"))
+                digest.update(b"\0")
+                digest.update(path.read_bytes())
+                digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _source_identity(state) -> tuple[str, str]:
+    """Source root and checkout commit the candidate was materialized from."""
+    from revocompute_ctl import SERVER_ROOT
+
+    source_root = state.get("RUNNER_SOURCE_ROOT") or str(Path(SERVER_ROOT) / "docker" / "runners")
+    commit = ""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(SERVER_ROOT), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0:
+            commit = result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return source_root, commit
+
+
 def _write_prepared_marker(state) -> None:
+    """Record the candidate's provenance and content identity.
+
+    The identity is informational: freshness is enforced by re-running the
+    preflight before every stop and by invalidating the candidate whenever an
+    active materialization advances the tree.  A marker without a digest could
+    not be told apart from a candidate built from a different checkout.
+    """
+    source_root, source_commit = _source_identity(state)
+    payload = {
+        "version": 1,
+        "source_root": source_root,
+        "source_commit": source_commit,
+        "digest": _snapshot_digest(state),
+    }
     marker = _prepared_marker_path(state)
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(json.dumps({"version": 1}) + "\n", encoding="utf-8")
+    marker.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _clear_prepared_marker(state) -> None:
@@ -424,7 +493,13 @@ def promote_prepared_snapshot(state) -> list[tuple[Path, Path, bool]]:
         for prepared, active in prepared_snapshot_pairs(state):
             previous = active.with_name(f"{active.name}.previous")
             if previous.exists():
-                shutil.rmtree(previous)
+                if active.exists():
+                    shutil.rmtree(previous)
+                else:
+                    # A prior activation was interrupted after moving the old
+                    # tree aside.  Restore it before starting a new swap so the
+                    # only remaining old tree is never deleted.
+                    os.rename(previous, active)
             had_previous = active.exists()
             if had_previous:
                 os.rename(active, previous)
@@ -1012,6 +1087,12 @@ def validate_required_settings(state) -> None:
 
 
 def cmd_setup(state) -> None:
+    """Materialize the active trees for a fresh deployment.
+
+    Run only with the stack down: setup rewrites the active Runner/Tool/demo
+    trees a running worker reads, and any earlier prepared candidate is
+    discarded before the first write.
+    """
     from revocompute_ctl import ENV_EXAMPLE_FILE
     if not os.path.isfile(state.env_file):
         if not ENV_EXAMPLE_FILE.is_file():
@@ -1032,12 +1113,12 @@ def cmd_setup(state) -> None:
     state.ensure_redis_password()
     state.ensure_auth_secret_key()
     if state.server_dir():
+        # Discard any candidate before the first active write, so a partial
+        # setup cannot leave an activatable older tree over a half-new one.
+        invalidate_prepared_snapshot(state)
         materialize_runner_families(state)
         materialize_tool_families(state)
         materialize_demo_replays(state)
-        # Setup installs the active tree directly; any earlier candidate would
-        # be older than what setup just wrote, so it must not stay activatable.
-        _clear_prepared_marker(state)
         if not state.demo_mode():
             os.makedirs(runner_bundle_root(state), exist_ok=True)
             materialize_runner_bundles(state, load_instance_families(state))
@@ -1168,6 +1249,9 @@ def cmd_up(
     validate_required_settings(state)
     if not prevalidated:
         if state.demo_mode():
+            # Standalone `up` rewrites the active demo tree; the candidate it
+            # supersedes must not stay activatable.
+            invalidate_prepared_snapshot(state)
             materialize_demo_replays(state)
         families = validate_deployment_files(state)
         if state.use_slurm():
@@ -1294,6 +1378,9 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
     ) -> None:
         """Load one candidate revision without ever rewriting a running instance."""
         if materialize:
+            # Advancing the active trees supersedes any candidate prepared from
+            # the previous checkout; a later prepared restart must rebuild.
+            invalidate_prepared_snapshot(state)
             materialize_runner_families(state)
             materialize_tool_families(state)
             materialize_demo_replays(state)

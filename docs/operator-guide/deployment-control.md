@@ -348,18 +348,30 @@ environment file:
   backups), performs no build or pull, starts with `--no-build`, and waits for
   all five Compose services to report running. A failed `up` or readiness check
   restores the previous active trees so the old deployment can be restarted.
+  Activation is one-shot: a successful restart consumes the candidate, so run
+  `prepare` again before the next prepared restart. Runtime Bundle pins are not
+  re-materialized by the pre-stop preflight; activation materializes them after
+  promotion, as before (a known limitation).
 - `job_executor: slurm` in the selected registry automatically merges
   `docker-compose.slurm.yml`, bind-mounts SLURM client tools + MUNGE, and
   validates SIF images. The admin database controls whether submissions are
   enabled.
 - `prepare` materializes the candidate Runner/Tool/demo snapshot and never
-  rewrites the active trees the running worker reads. `prepare --build-sif`
-  stages each stale SIF as `<sif>.next` while the stack stays up; a later
-  `restart --mode=prepared` atomically replaces it after `down` (requires
-  Apptainer on PATH). A prepared restart refuses a candidate whose family set
-  differs from `ENABLED_TASKRUNNERS` (or, when that setting is empty, from the
-  full source family set) before stopping anything. Candidates
-  without a target-cluster smoke receipt are never promoted.
+  rewrites the active trees the running worker reads. A standalone `build` also
+  writes that candidate because it shares the materialization path. `prepare
+  --build-sif` stages each stale SIF as `<sif>.next` while the stack stays up;
+  a later `restart --mode=prepared` atomically replaces it after `down`
+  (requires Apptainer on PATH). A prepared restart refuses a candidate whose
+  family set differs from `ENABLED_TASKRUNNERS` (or, when that setting is empty,
+  from the full source family set) before stopping anything. Candidates
+  without a target-cluster smoke receipt are never promoted. The candidate
+  marker records the source root, checkout commit, and a prepared-tree content
+  digest for audit, but those fields are not re-verified against the checkout:
+  freshness comes from re-running validation before every stop, and any
+  dev/prod activation or `setup` deletes the candidate so an older tree cannot
+  be promoted over a newer active one.
+- `setup` rewrites the active trees directly. Run it only with the stack down;
+  it discards any prepared candidate before the first write.
 
 Provision production bind-mounted directories as writable by the configured
 service UID/GID. This identity contract provides non-root execution and

@@ -95,13 +95,14 @@ promotion alone completes activation:
    Do not pass `--enabled-runners` here. It overrides the deployment's
    configured set for the whole window: `prepare` replaces the candidate
    snapshot `SERVER_DIR/docker/runners.prepared` with only the listed families,
-   and an interrupted run leaves that candidate narrowed (the completion marker
-   is written last, so it cannot be activated). The running
+   and an interrupted run leaves that candidate narrowed. The completion marker
+   is written last and validation re-runs before every stop, so an interrupted
+   or narrowed candidate is refused before anything stops; only a bare
+   `prepare` restores the full configured set. The running
    `SERVER_DIR/docker/runners` tree is never touched. A prepared restart also
    refuses a candidate whose family set differs from `ENABLED_TASKRUNNERS` (or
    from the full source family set when that setting is empty) before it stops
-   anything; run a bare `prepare` to refresh the full
-   configured set. A bare `prepare`
+   anything. A bare `prepare`
    materializes every family configured by `ENABLED_TASKRUNNERS`, and
    `build_slurm_images` stages only the missing or stale candidates, so
    unrelated families stay in the deployment
