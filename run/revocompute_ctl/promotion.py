@@ -153,14 +153,24 @@ def commit_promoted_sifs(records: list[PromotedSif]) -> None:
 def restore_promoted_sifs(records: list[PromotedSif]) -> None:
     """Undo retained promotions: candidate back to ``.next``, old bytes active.
 
-    The staged-identity record and receipt are intentionally kept, so the same
-    candidate can be promoted again after the operator fixes the failure.
+    Every record is attempted even after a failure, so one unreadable artifact
+    cannot strand the rest of a multi-family rollback.  The first failure is
+    re-raised after the loop.  The staged-identity record and receipt are
+    intentionally kept, so the same candidate can be promoted again after the
+    operator fixes the failure.
     """
+    failure: Exception | None = None
     for record in reversed(records):
-        if os.path.isfile(record.sif):
-            os.replace(record.sif, record.staged)
-        if record.backup and os.path.isfile(record.backup):
-            os.replace(record.backup, record.sif)
+        try:
+            if os.path.isfile(record.sif):
+                os.replace(record.sif, record.staged)
+            if record.backup and os.path.isfile(record.backup):
+                os.replace(record.backup, record.sif)
+        except Exception as exc:  # keep restoring the other families
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
 
 
 def prune_dangling(state) -> None:

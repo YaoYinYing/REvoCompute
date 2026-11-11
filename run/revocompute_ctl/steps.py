@@ -1425,15 +1425,32 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
             load_revision(materialize=True)
 
     def rollback_revision() -> None:
-        """Undo a prepared activation as one transaction: SIFs and trees."""
+        """Undo a prepared activation as one transaction: SIFs and trees.
+
+        Both halves are attempted even when one fails, so a failed artifact
+        restore cannot leave the Runner tree on the candidate.  The first
+        failure is re-raised after both halves have had their chance.
+        """
         if snapshot_committed[0]:
             return
+        failure: BaseException | None = None
         if promoted_sif_records:
-            promotion.restore_promoted_sifs(promoted_sif_records)
-            promoted_sif_records.clear()
+            try:
+                promotion.restore_promoted_sifs(promoted_sif_records)
+            except BaseException as exc:
+                failure = exc
+            else:
+                promoted_sif_records.clear()
         if promoted_snapshots:
-            restore_previous_snapshot(promoted_snapshots)
-            promoted_snapshots.clear()
+            try:
+                restore_previous_snapshot(promoted_snapshots)
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+            else:
+                promoted_snapshots.clear()
+        if failure is not None:
+            raise failure
 
     def stop_current_instance() -> None:
         try:

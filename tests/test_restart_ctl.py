@@ -1070,6 +1070,37 @@ def test_prepared_activation_rolls_back_sifs_and_trees_together(monkeypatch, tmp
     assert not (Path(state.server_dir()) / "docker" / "runners.previous").exists()
 
 
+def test_prepared_rollback_restores_trees_even_when_sif_restore_fails(monkeypatch, tmp_path):
+    state, runner_root, old_tree, _active_sif, _staged, _family = _prepared_sif_state(monkeypatch, tmp_path)
+    _patch_prepared_activation(monkeypatch)
+    monkeypatch.setattr(steps_mod, "cmd_down", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "cmd_up", lambda *_args, **_kwargs: None)
+
+    real_replace = promotion.os.replace
+    failing: list[bool] = []
+
+    def replace(source, destination):
+        if failing:
+            raise OSError("sif restore failed")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(promotion.os, "replace", replace)
+
+    def readiness_failure(*_args, **_kwargs):
+        failing.append(True)
+        raise RuntimeError("readiness failed")
+
+    monkeypatch.setattr(steps_mod, "wait_for_services", readiness_failure)
+
+    plan = steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="prepared"))
+    # The SIF restore failure is the first rollback error; it must propagate
+    # after the tree half has also been attempted.
+    with pytest.raises(OSError, match="sif restore failed"):
+        run_walk(plan.steps)
+
+    assert _tree_bytes(runner_root) == old_tree
+
+
 def test_prepared_commit_makes_sif_and_tree_promotion_durable(monkeypatch, tmp_path):
     state, runner_root, _old_tree, active_sif, staged, family = _prepared_sif_state(monkeypatch, tmp_path)
     _patch_prepared_activation(monkeypatch)
