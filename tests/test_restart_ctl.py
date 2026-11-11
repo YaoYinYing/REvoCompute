@@ -712,6 +712,29 @@ def test_prepared_restart_without_a_snapshot_fails_before_stopping_anything(monk
     assert events == []
 
 
+def test_prepared_restart_refuses_an_unmarked_prepared_tree(monkeypatch, tmp_path):
+    """An interrupted prepare leaves a directory without the completion marker."""
+    server = tmp_path / "server" / "docker"
+    (server / "runners.prepared").mkdir(parents=True)
+    (server / "tools.prepared").mkdir(parents=True)
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"SERVER_DIR": str(tmp_path / "server"), "ADMIN_USERS": "admin"},
+    )
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "validate_required_settings", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
+    events: list[str] = []
+    monkeypatch.setattr(steps_mod, "cmd_down", lambda *_args, **_kwargs: events.append("stop"))
+
+    with pytest.raises(SystemExit):
+        steps_mod.build_restart_plan(
+            state, ("docker", "compose"), steps_mod.RestartFlags(mode="prepared")
+        )
+
+    assert events == []
+
+
 @pytest.mark.parametrize("configured", ["cpu_runner,gpu_runner", ""])
 def test_prepared_restart_refuses_a_narrowed_candidate_before_stopping(
     monkeypatch, tmp_path, capsys, configured
@@ -1043,7 +1066,7 @@ def test_prepared_activation_rolls_back_sifs_and_trees_together(monkeypatch, tmp
     assert staged.read_bytes() == b"new-sif"
     assert not list(tmp_path.rglob("*.promote-backup"))
     assert staged_identity_describes(family, sha256_file(staged))
-    assert steps_mod._prepared_marker_path(state).is_file()
+    assert steps_mod.prepared_snapshot_marker(state).is_file()
     assert not (Path(state.server_dir()) / "docker" / "runners.previous").exists()
 
 
@@ -1061,7 +1084,7 @@ def test_prepared_commit_makes_sif_and_tree_promotion_durable(monkeypatch, tmp_p
     assert not staged.exists()
     assert not list(tmp_path.rglob("*.promote-backup"))
     assert not Path(f"{family.slurm_image}.next.build.json").exists()
-    assert not steps_mod._prepared_marker_path(state).exists()
+    assert not steps_mod.prepared_snapshot_marker(state).exists()
     assert not (Path(state.server_dir()) / "docker" / "runners.previous").exists()
     assert "role: protein_sequence" in (
         runner_root / "cpu_runner" / "tasks" / "predict" / "task.yaml"
@@ -1138,7 +1161,7 @@ def test_setup_discards_a_candidate_before_rewriting_active(monkeypatch, tmp_pat
     state = _prepared_runner_state(tmp_path, source)
     Path(state.env_file).write_text("", encoding="utf-8")
     steps_mod.materialize_prepared_snapshot(state)
-    marker = steps_mod._prepared_marker_path(state)
+    marker = steps_mod.prepared_snapshot_marker(state)
     prepared_root = steps_mod.prepared_runner_root(state)
     assert marker.is_file() and prepared_root.is_dir()
     observed: list[tuple[bool, bool]] = []

@@ -50,14 +50,15 @@ Disabled families are listed because enabling them is part of the activation.
 Resolution order determines what each row describes. A family present in the
 prepared candidate snapshot resolves from that candidate, so a changed existing
 family is judged by the contracts and build identity a prepared restart would
-promote. A name absent from the candidate resolves from the active materialized
-snapshot, and only a name absent from both resolves from the checkout. Before
-`prepare` stages `<sif>.next`, both snapshots describe the active deployment
-artifact; after `.next` is staged, the candidate row describes the staged
-candidate. A family absent from both snapshots can report before `prepare`,
-because its row comes from the checkout. `runner-status` and submission
-readiness never use the candidate snapshot; they always describe the running
-deployment.
+promote. A prepared tree counts only when its completion marker is present; an
+interrupted `prepare` is ignored here and still refused by activation. A name
+absent from the candidate resolves from the active materialized snapshot, and
+only a name absent from both resolves from the checkout. Before `prepare` stages
+`<sif>.next`, both snapshots describe the active deployment artifact; after
+`.next` is staged, the candidate row describes the staged candidate. A family
+absent from both snapshots can report before `prepare`, because its row comes
+from the checkout. `runner-status` and submission readiness never use the
+candidate snapshot; they always describe the running deployment.
 
 ## What a source merge leaves behind
 

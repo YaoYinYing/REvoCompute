@@ -53,6 +53,7 @@ from revocompute.artifact_evidence import (  # noqa: E402
 from revocompute.runner_registry import RuntimeFamily  # noqa: E402
 from revocompute.runner_registry import RegistryError  # noqa: E402
 from revocompute.runner_registry import _build_provenance, load_plugin_families  # noqa: E402
+from revocompute.runner_registry import prepared_snapshot_marker  # noqa: E402
 from revocompute.runner_live_test import TaskResourceSnapshot, ValidationIdentity, load_validation_identity  # noqa: E402
 
 
@@ -592,6 +593,7 @@ def test_activation_preflight_resolves_a_declared_but_disabled_family(tmp_path, 
     # A prepared snapshot exists but contains neither the active nor the
     # requested family, so the checkout remains the only source for it.
     (state.root / "server" / "docker" / "runners.prepared").mkdir(parents=True)
+    prepared_snapshot_marker(state).write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         "revocompute.runner_readiness.load_instance_families",
         lambda _state, *, prepared=False: [],
@@ -611,6 +613,7 @@ def test_activation_preflight_prefers_the_prepared_snapshot(evidence, monkeypatc
     prepared_root = state.root / "server" / "docker" / "runners.prepared"
     candidate_root = prepared_root / "demo"
     candidate_root.mkdir(parents=True)
+    prepared_snapshot_marker(state).write_text("{}", encoding="utf-8")
     (candidate_root / "runner.yaml").write_text("candidate\n", encoding="utf-8")
     (active_family.root / "runner.yaml").write_text("active\n", encoding="utf-8")
     candidate = replace(active_family, root=candidate_root)
@@ -645,6 +648,7 @@ def test_activation_preflight_prefers_the_prepared_snapshot(evidence, monkeypatc
 def test_activation_preflight_falls_back_to_active_when_candidate_lacks_the_family(evidence, monkeypatch):
     state, active_family, _active = evidence
     (state.root / "server" / "docker" / "runners.prepared").mkdir(parents=True)
+    prepared_snapshot_marker(state).write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         readiness_mod,
         "load_instance_families",
@@ -664,9 +668,35 @@ def test_activation_preflight_falls_back_to_active_when_candidate_lacks_the_fami
     assert calls == [active_family.root]
 
 
+def test_activation_preflight_ignores_an_unmarked_prepared_tree(evidence, monkeypatch):
+    """An interrupted prepare leaves a directory activation will refuse."""
+    state, active_family, _active = evidence
+    candidate_root = state.root / "server" / "docker" / "runners.prepared" / "demo"
+    candidate_root.mkdir(parents=True)
+    candidate = replace(active_family, root=candidate_root)
+
+    def load(_state, *, prepared=False):
+        return [candidate] if prepared else [active_family]
+
+    monkeypatch.setattr(readiness_mod, "load_instance_families", load)
+    calls: list[Path] = []
+    real_resolve = readiness_mod.resolve_runner_readiness
+
+    def spy(_state, family):
+        calls.append(family.root)
+        return real_resolve(_state, family)
+
+    monkeypatch.setattr(readiness_mod, "resolve_runner_readiness", spy)
+
+    activation_preflight_snapshot(state, runners=("demo",))
+
+    assert calls == [active_family.root]
+
+
 def test_activation_preflight_unknown_family_with_a_prepared_snapshot_fails(evidence, monkeypatch):
     state, _family, _active = evidence
     (state.root / "server" / "docker" / "runners.prepared").mkdir(parents=True)
+    prepared_snapshot_marker(state).write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         readiness_mod,
         "load_instance_families",

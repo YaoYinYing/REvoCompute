@@ -33,6 +33,7 @@ from revocompute.runner_registry import (
     _build_provenance,
     deployment_plugin_root,
     load_plugin_families,
+    prepared_snapshot_marker,
     runner_enabled,
     sif_stale,
 )
@@ -808,8 +809,10 @@ def activation_preflight_snapshot(state, *, runners: tuple[str, ...] | list[str]
     sys.dont_write_bytecode = True
     try:
         families = {family.name: family for family in load_instance_families(state)}
-        prepared_root = Path(state.server_dir()) / "docker" / "runners.prepared"
-        if prepared_root.is_dir():
+        # Only a completed candidate is a candidate: activation refuses without
+        # this marker, and the advisory preflight must not describe a partial
+        # prepared tree it would refuse.
+        if prepared_snapshot_marker(state).is_file():
             families.update(
                 {family.name: family for family in load_instance_families(state, prepared=True)}
             )

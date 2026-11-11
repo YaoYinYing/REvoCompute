@@ -30,6 +30,16 @@ from revocompute.server_root import SERVER_ROOT
 
 _SAFE_FAMILY_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
+#: Completion marker written last by ``prepare``.  Activation and the advisory
+#: preflight must agree that only a marked snapshot is a candidate: an
+#: interrupted prepare can leave a partial prepared tree behind.
+PREPARED_SNAPSHOT_MARKER = Path("docker") / ".prepared-snapshot.json"
+
+
+def prepared_snapshot_marker(state) -> Path:
+    """Path of the completion marker for this deployment's candidate snapshot."""
+    return Path(state.server_dir()) / PREPARED_SNAPSHOT_MARKER
+
 
 @dataclass(frozen=True)
 class RuntimeFamily:

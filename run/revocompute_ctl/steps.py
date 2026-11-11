@@ -37,6 +37,7 @@ from revocompute.runner_registry import (
     deployment_plugin_root,
     load_plugin_families,
     migrate_legacy_sif_evidence,
+    prepared_snapshot_marker,
     validate_plugin_policies,
     runner_enabled,
     validate_compose_model,
@@ -286,10 +287,6 @@ def _demo_roots(state) -> tuple[Path, Path]:
     return active.with_name(f"{active.name}.prepared"), active
 
 
-def _prepared_marker_path(state) -> Path:
-    return Path(state.server_dir()) / "docker" / ".prepared-snapshot.json"
-
-
 def prepared_snapshot_pairs(state) -> list[tuple[Path, Path]]:
     """Return ``(prepared, active)`` tree pairs a prepared activation swaps."""
     server = Path(state.server_dir())
@@ -311,7 +308,7 @@ def require_prepared_snapshot(state) -> None:
     untouched.
     """
     missing = [str(prepared) for prepared, _active in prepared_snapshot_pairs(state) if not prepared.is_dir()]
-    marker = _prepared_marker_path(state)
+    marker = prepared_snapshot_marker(state)
     if not marker.is_file() or missing:
         detail = f"missing {', '.join(missing)}" if missing else f"missing {marker}"
         print(
@@ -454,13 +451,13 @@ def _write_prepared_marker(state) -> None:
         "source_commit": source_commit,
         "digest": _snapshot_digest(state),
     }
-    marker = _prepared_marker_path(state)
+    marker = prepared_snapshot_marker(state)
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _clear_prepared_marker(state) -> None:
-    marker = _prepared_marker_path(state)
+    marker = prepared_snapshot_marker(state)
     if marker.exists():
         marker.unlink()
 
