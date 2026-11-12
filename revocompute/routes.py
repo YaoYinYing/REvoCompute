@@ -69,6 +69,7 @@ from revocompute.app import (
     _revoke_celery_task,
     _task_access_allowed,
     _task_artifact_access_allowed,
+    _task_artifact_access_allowed_for_user,
     _task_full_results_allowed,
     _task_id_for_upload,
     _task_mutation_allowed,
@@ -79,6 +80,13 @@ from revocompute.app import (
     tool_calls,
     tool_registry,
     tool_workspace,
+)
+from revocompute import artifact_links
+from revocompute.artifact_links import (
+    SCOPE as ARTIFACT_DOWNLOAD_SCOPE,
+    issue_download_link,
+    token_id_hash,
+    validate_download_token,
 )
 from revocompute.auth import (
     _DUMMY_PASSWORD_HASH,
@@ -3714,7 +3722,7 @@ def _with_verified_artifact(resolved: dict[str, Any] | None, task: dict[str, Any
     return resolved
 
 
-def _verified_payload(stream: Any, size: int) -> Response:
+def _verified_payload(stream: Any, size: int, *, etag: str | None = None) -> Response:
     """Serve one verified artifact from the private snapshot its digest describes.
 
     Everything — full body, HEAD, and a single bounded ``Range`` — reads from the
@@ -3726,37 +3734,71 @@ def _verified_payload(stream: Any, size: int) -> Response:
     ``fstat`` of a file that may have changed since.  Range support lives here
     rather than in ``send_from_directory`` because that helper would reopen the
     pathname that was just verified.
+
+    ``etag`` is the verified content digest.  It is a strong validator: a client
+    that sends it back in ``If-Range`` and still matches gets the requested
+    range; a stale validator gets the complete current representation instead,
+    because the bytes it stored are not this publication.  Only single byte
+    ranges are implemented; a multi-range request gets the full representation
+    rather than an unclaimed ``multipart/byteranges`` response.
     """
-    raw_range = request.headers.get("Range", "")
-    if request.method == "HEAD":
-        stream.close()
-        response = Response(status=200)
-        response.headers["Content-Length"] = str(size)
+    headers: dict[str, str] = {"Accept-Ranges": "bytes"}
+    entity_tag = f'"{etag}"' if etag else None
+    if entity_tag:
+        headers["ETag"] = entity_tag
+
+    def finish(response: Response) -> Response:
+        for name, value in headers.items():
+            response.headers.setdefault(name, value)
         return response
-    if raw_range:
-        # ``parse_range_header`` takes no resource length: the length is applied
-        # by ``range_for_length``, which is what resolves a suffix range and
-        # reports an unsatisfiable one as ``None``.
-        parsed = parse_range_header(raw_range)
+
+    raw_range = request.headers.get("Range", "")
+    if_range = request.headers.get("If-Range", "").strip()
+    consider_range = bool(raw_range) and request.method in {"GET", "HEAD"}
+    if consider_range and if_range and if_range != entity_tag:
+        # A weak validator or a date cannot prove the stored bytes are this
+        # publication, so the range request becomes a normal full request.
+        consider_range = False
+    if consider_range:
+        unit, _, spec = raw_range.partition("=")
+        parsed = parse_range_header(raw_range) if unit.strip().lower() == "bytes" else None
+        if unit.strip().lower() == "bytes" and (parsed is None or re.fullmatch(r"-\s*0+\s*", spec)):
+            # A byte range that names no satisfiable interval is the one
+            # malformed/unusable case answered explicitly.
+            stream.close()
+            response = Response(status=416)
+            response.headers["Content-Range"] = f"bytes */{size}"
+            response.headers["Content-Length"] = "0"
+            return finish(response)
         if parsed is not None and len(parsed.ranges) == 1:
             resolved_range = parsed.range_for_length(size)
             if resolved_range is None:
                 stream.close()
                 response = Response(status=416)
                 response.headers["Content-Range"] = f"bytes */{size}"
-                return response
+                response.headers["Content-Length"] = "0"
+                return finish(response)
             start, end = resolved_range
-            stream.seek(start)
-            response = Response(_BoundedStream(stream, end - start), status=206, direct_passthrough=True)
+            if request.method == "HEAD":
+                stream.close()
+                response = Response(status=206)
+            else:
+                stream.seek(start)
+                response = Response(_BoundedStream(stream, end - start), status=206, direct_passthrough=True)
             response.headers["Content-Range"] = f"bytes {start}-{end - 1}/{size}"
             response.headers["Content-Length"] = str(end - start)
-            return response
+            return finish(response)
+    if request.method == "HEAD":
+        stream.close()
+        response = Response(status=200)
+        response.headers["Content-Length"] = str(size)
+        return finish(response)
     # The whole body is streamed through the same bounded reader: the read size
     # is a chunk constant, never the artifact size, so a large artifact is never
     # read with one artifact-sized request.
     response = Response(_BoundedStream(stream, size), direct_passthrough=True)
     response.headers["Content-Length"] = str(size)
-    return response
+    return finish(response)
 
 
 class _BoundedStream:
@@ -3807,7 +3849,7 @@ def get_result_artifact(md5sum: str, relative_path: str):
     # serve bytes that never satisfied the manifest identity.  Snapshot-bound
     # delivery therefore replaces the offload on the artifact and archive
     # endpoints.
-    response = _verified_payload(stream, int(resolved["size"]))
+    response = _verified_payload(stream, int(resolved["size"]), etag=str(resolved["sha256"]))
     # A manifest written before the server-owned projection carries the old
     # octet-stream fallback; re-project from the path rather than preserving a
     # type that made live structures ineligible for gateway compression.
@@ -3824,6 +3866,232 @@ def get_result_artifact(md5sum: str, relative_path: str):
     )
     response.headers["Cache-Control"] = "private, no-store"
     # Defense in depth: even an explicitly-inline artifact runs no scripts.
+    response.headers["Content-Security-Policy"] = "sandbox"
+    return response
+
+
+_LINK_ID = re.compile(r"[A-Za-z0-9_-]{16,64}\Z")
+_MAX_LINK_PATH_CHARS = 1024
+
+
+def _download_link_unavailable() -> tuple[Response, int]:
+    """The one refusal every invalid, expired, revoked or stale link receives.
+
+    A distinct answer per cause would confirm which Task, artifact or grant a
+    caller guessed, so an expired link, a revoked link and a link that never
+    existed are the same response.
+    """
+    response = jsonify({"error": "Download link is unavailable"})
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response, 404
+
+
+def _link_response(payload: dict[str, Any]) -> Response:
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@app.route("/compute/api/results/<md5sum>/download-links", methods=["POST"])
+@login_required
+@rate_limit(max_requests=30, window_seconds=60)
+def create_result_download_link(md5sum: str):
+    """Issue one revocable, expiring bearer link for one published artifact."""
+    if _blocked := require_bearer_auth():
+        return _blocked
+    if _blocked := _reject_guest():
+        return _blocked
+    md5sum = _normalize_task_id(md5sum)
+    if md5sum is None:
+        return jsonify({"error": "Invalid task id"}), 400
+    task = task_store.get_task(md5sum)
+    if (
+        task is None
+        or _is_deleted_status(task.get("status"))
+        or str(task.get("status")) in task_store.CLEANUP_CLAIM_STATUSES
+    ):
+        return jsonify({"status": "not_found", "md5sum": md5sum}), 404
+    if not _task_access_allowed(task):
+        return _task_not_found(md5sum)
+
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+    if set(payload) - {"path", "ttl_seconds"}:
+        return jsonify({"error": "Request body may contain only path and ttl_seconds"}), 400
+    path = payload.get("path")
+    if not isinstance(path, str) or not path or len(path) > _MAX_LINK_PATH_CHARS:
+        return jsonify({"error": "path must name one published artifact"}), 400
+    ttl = payload.get("ttl_seconds")
+    if ttl is not None and (isinstance(ttl, bool) or not isinstance(ttl, int)):
+        return jsonify({"error": "ttl_seconds must be an integer"}), 400
+
+    # Resolving here is what proves the artifact is published and visible to
+    # this requester before a capability is minted for it.  The verified
+    # snapshot, not a second manifest read, supplies the bound digest and size.
+    resolved = _with_verified_artifact(_result_artifact(task, path), task)
+    if resolved is None:
+        return jsonify({"error": "Artifact not found"}), 404
+    try:
+        try:
+            link = issue_download_link(
+                task_id=md5sum,
+                artifact=resolved,
+                owner_user_id=int(g.current_user["id"]),
+                ttl_seconds=ttl,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        task_store.create_artifact_download_link(
+            token_id_hash=link["token_id_hash"],
+            task_id=md5sum,
+            artifact_path=str(resolved["path"]),
+            artifact_sha256=str(resolved["sha256"]),
+            artifact_size=int(resolved["size"]),
+            owner_user_id=int(g.current_user["id"]),
+            scope=ARTIFACT_DOWNLOAD_SCOPE,
+            issued_at=float(link["issued_at_epoch"]),
+            expires_at=float(link["expires_at_epoch"]),
+        )
+    finally:
+        resolved["verified_stream"].close()
+
+    # The token appears in exactly one place: the URL this response returns.
+    return _link_response(
+        {
+            "id": link["id"],
+            "download_url": url_for("get_artifact_download", token=link["token"]),
+            "expires_at": link["expires_at"],
+            "scope": ARTIFACT_DOWNLOAD_SCOPE,
+            "path": resolved["path"],
+            "sha256": resolved["sha256"],
+            "size": resolved["size"],
+        }
+    ), 201
+
+
+@app.route("/compute/api/results/<md5sum>/download-links/<link_id>", methods=["DELETE"])
+@login_required
+def revoke_result_download_link(md5sum: str, link_id: str):
+    """Revoke one link the requester is authorized to manage for this Task."""
+    if _blocked := require_bearer_auth():
+        return _blocked
+    if _blocked := _reject_guest():
+        return _blocked
+    md5sum = _normalize_task_id(md5sum)
+    if md5sum is None or not _LINK_ID.fullmatch(link_id):
+        return jsonify({"error": "Download link not found"}), 404
+    task = task_store.get_task(md5sum)
+    if task is None or _is_deleted_status(task.get("status")) or not _task_access_allowed(task):
+        return _task_not_found(md5sum)
+    if not task_store.revoke_artifact_download_link(
+        md5sum, token_id_hash(link_id), revoked_by_user_id=int(g.current_user["id"]), at=time.time()
+    ):
+        return jsonify({"error": "Download link not found"}), 404
+    return _link_response({"status": "revoked", "md5sum": md5sum})
+
+
+@app.route("/compute/api/results/<md5sum>/download-links", methods=["DELETE"])
+@login_required
+def revoke_result_download_links(md5sum: str):
+    """Revoke every active link for one Task."""
+    if _blocked := require_bearer_auth():
+        return _blocked
+    if _blocked := _reject_guest():
+        return _blocked
+    md5sum = _normalize_task_id(md5sum)
+    if md5sum is None:
+        return jsonify({"error": "Invalid task id"}), 400
+    task = task_store.get_task(md5sum)
+    if task is None or _is_deleted_status(task.get("status")) or not _task_access_allowed(task):
+        return _task_not_found(md5sum)
+    revoked = task_store.revoke_task_artifact_download_links(
+        md5sum, revoked_by_user_id=int(g.current_user["id"]), at=time.time()
+    )
+    return _link_response({"status": "revoked", "md5sum": md5sum, "revoked": revoked})
+
+
+@app.route("/compute/api/artifact-downloads/<token>", methods=["GET", "HEAD"])
+# A download manager opens many independent single-range requests, so the
+# bearer budget is per-transfer-shaped rather than per-page-view.  A signature
+# cannot be guessed; this limit bounds resource use, not token discovery.
+@rate_limit(max_requests=3600, window_seconds=60)
+def get_artifact_download(token: str):
+    """Serve one artifact to a bearer link while the grant and publication hold.
+
+    This route accepts no session credential and authorizes no other surface: it
+    rechecks the stored grant, the canonical Task, the current publication and
+    the issuing owner's access on every request.  An in-flight response keeps
+    its already-open verified snapshot; every later request must present a link
+    that is still active.
+    """
+    payload = validate_download_token(token)
+    if payload is None:
+        return _download_link_unavailable()
+    grant = task_store.get_artifact_download_link(token_id_hash(payload["jti"]))
+    now = time.time()
+    grant_size = grant.get("artifact_size") if grant is not None else None
+    if (
+        grant is None
+        or grant.get("revoked_at") is not None
+        or float(grant.get("expires_at") or 0) <= now
+        or str(grant.get("scope")) != ARTIFACT_DOWNLOAD_SCOPE
+        or str(grant.get("task_id")) != payload["task"]
+        or str(grant.get("artifact_path")) != payload["path"]
+        or str(grant.get("artifact_sha256")) != payload["sha256"]
+        or not isinstance(grant_size, int)
+        or grant_size != payload["size"]
+        or int(grant.get("owner_user_id") or -1) != payload["uid"]
+    ):
+        return _download_link_unavailable()
+
+    task = task_store.get_task(str(grant["task_id"]))
+    if (
+        task is None
+        or _is_deleted_status(task.get("status"))
+        or str(task.get("status")) in task_store.CLEANUP_CLAIM_STATUSES
+    ):
+        return _download_link_unavailable()
+
+    # The publication, not the token, decides whether these bytes may be read:
+    # a republished artifact must match the digest the grant bound, and a
+    # withdrawn or renamed one resolves to nothing.
+    resolved = _result_artifact(task, str(grant["artifact_path"]))
+    if resolved is None:
+        return _download_link_unavailable()
+    if str(resolved["sha256"]) != str(grant["artifact_sha256"]) or int(resolved["size"]) != int(grant["artifact_size"]):
+        resolved["verified_stream"].close()
+        return _download_link_unavailable()
+
+    owner = current_app.config["user_db"].get_user(int(grant["owner_user_id"]))
+    if (
+        owner is None
+        or _is_account_blocked(owner) is not None
+        or not _task_artifact_access_allowed_for_user(task, resolved, owner)
+    ):
+        resolved["verified_stream"].close()
+        return _download_link_unavailable()
+
+    response = _verified_payload(
+        resolved["verified_stream"], int(resolved["size"]), etag=str(resolved["sha256"])
+    )
+    # A link's validator must stay strong across HEAD, full GET and Range GET
+    # even when #150's response compression is active.  A full representation is
+    # therefore declared already-encoded and untransformable, so a compressor
+    # has no transformed variant to give a weak ETag to.  A 206 is never
+    # compressed and keeps the same strong validator as the bytes it serves.
+    if response.status_code == 200:
+        response.headers["Content-Encoding"] = "identity"
+    response.mimetype = resolved.get("media_type") or "application/octet-stream"
+    response.headers.set(
+        "Content-Disposition",
+        "attachment",
+        filename=os.path.basename(str(resolved["path"])),
+    )
+    response.headers["Cache-Control"] = "private, no-store, no-transform"
+    response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = "sandbox"
     return response
 

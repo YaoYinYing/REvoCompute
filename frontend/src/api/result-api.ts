@@ -258,3 +258,45 @@ export function beginDownload(url: string, name = ''): void {
   link.click();
   window.setTimeout(() => link.remove(), 0);
 }
+
+/** One issued capability for a single published artifact. */
+export interface ArtifactDownloadLink {
+  id: string;
+  download_url: string;
+  expires_at: string;
+  scope: 'read-bytes';
+  path: string;
+  sha256: string;
+  size: number;
+}
+
+function artifactDownloadLink(value: unknown): ArtifactDownloadLink {
+  const item = record(value);
+  const scope = string(item.scope);
+  if (scope !== 'read-bytes') throw malformed();
+  const size = Number(item.size);
+  if (!Number.isInteger(size) || size < 0) throw malformed();
+  return {
+    id: string(item.id), download_url: string(item.download_url), expires_at: string(item.expires_at),
+    scope, path: string(item.path), sha256: string(item.sha256), size,
+  };
+}
+
+/** Issue a revocable, expiring link for one manifest-declared artifact. */
+export function createArtifactDownloadLink(taskId: string, path: string): Promise<ArtifactDownloadLink> {
+  return authorizedJson<unknown>(`/compute/api/results/${encodeURIComponent(taskId)}/download-links`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }),
+  }).then(artifactDownloadLink);
+}
+
+export function revokeArtifactDownloadLink(taskId: string, linkId: string): Promise<unknown> {
+  return authorizedJson<unknown>(
+    `/compute/api/results/${encodeURIComponent(taskId)}/download-links/${encodeURIComponent(linkId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+/** The absolute address a copied link must carry for an external download manager. */
+export function absoluteDownloadUrl(url: string): string {
+  return new URL(url, window.location.origin).href;
+}

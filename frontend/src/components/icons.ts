@@ -1,6 +1,6 @@
-import { createIcons, Download, Expand, FolderOpen, Minimize, RefreshCw } from 'lucide';
+import { createIcons, Download, Expand, FolderOpen, Link, Minimize, RefreshCw } from 'lucide';
 
-const resultIcons = { Download, Expand, FolderOpen, Minimize, RefreshCw };
+const resultIcons = { Download, Expand, FolderOpen, Link, Minimize, RefreshCw };
 
 export type ResultIcon = keyof typeof resultIcons;
 

@@ -33,7 +33,8 @@ The surface groups into a few concepts rather than one flat list:
 - **Execution** — status and execution trace, cancellation, and deletion for
   owned Tasks.
 - **Results** — the result manifest, authorized artifact and range responses,
-  asynchronous archive requests, and completed archive downloads.
+  asynchronous archive requests, completed archive downloads, and scoped
+  revocable expiring links for individual published artifacts.
 - **Administration** — GPU-credit adjustments, allowances and resets, Runner
   access policies and requests, and the operational log surface.
 

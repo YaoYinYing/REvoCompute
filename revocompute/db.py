@@ -852,6 +852,27 @@ class TaskDatabase:
             Column("charge_state", String, nullable=False, server_default="pending"),
             Column("charged_at", Float, nullable=True),
         )
+        # One row per issued artifact link.  The token's unique id is stored
+        # hashed, so the table can revoke a grant but cannot reconstruct the URL.
+        # The row is a capability's status, never a Task field: deleting it
+        # revokes, and every bearer request still rechecks the canonical Task and
+        # publication, so a stale row is refused rather than trusted.
+        self.artifact_download_links_table = Table(
+            "artifact_download_links",
+            self.metadata,
+            Column("token_id_hash", String(64), primary_key=True),
+            Column("task_id", String(32), nullable=False),
+            Column("artifact_path", String, nullable=False),
+            Column("artifact_sha256", String(64), nullable=False),
+            Column("artifact_size", Integer, nullable=False),
+            Column("owner_user_id", Integer, nullable=False),
+            Column("scope", String, nullable=False, server_default="read-bytes"),
+            Column("issued_at", Float, nullable=False),
+            Column("expires_at", Float, nullable=False),
+            Column("revoked_at", Float, nullable=True),
+            Column("revoked_by_user_id", Integer, nullable=True),
+        )
+        Index("idx_artifact_download_links_task", self.artifact_download_links_table.c.task_id)
         self._initialize()
 
     def _initialize(self) -> None:
@@ -1849,6 +1870,11 @@ class TaskDatabase:
             conn.execute(
                 self.result_publications_table.delete().where(
                     self.result_publications_table.c.task_id == md5sum
+                )
+            )
+            conn.execute(
+                self.artifact_download_links_table.delete().where(
+                    self.artifact_download_links_table.c.task_id == md5sum
                 )
             )
             conn.execute(
@@ -3372,6 +3398,84 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             row = conn.execute(stmt).mappings().first()
         return dict(row) if row else None
+
+    def create_artifact_download_link(
+        self,
+        *,
+        token_id_hash: str,
+        task_id: str,
+        artifact_path: str,
+        artifact_sha256: str,
+        artifact_size: int,
+        owner_user_id: int,
+        scope: str,
+        issued_at: float,
+        expires_at: float,
+    ) -> None:
+        """Record one issued capability's status; the token itself is never stored."""
+        with self.engine.begin() as conn:
+            conn.execute(
+                self.artifact_download_links_table.insert().values(
+                    token_id_hash=token_id_hash,
+                    task_id=task_id,
+                    artifact_path=artifact_path,
+                    artifact_sha256=artifact_sha256,
+                    artifact_size=artifact_size,
+                    owner_user_id=owner_user_id,
+                    scope=scope,
+                    issued_at=issued_at,
+                    expires_at=expires_at,
+                    revoked_at=None,
+                    revoked_by_user_id=None,
+                )
+            )
+
+    def get_artifact_download_link(self, token_id_hash: str) -> dict[str, Any] | None:
+        """Return the stored grant identity for one hashed token id, if any."""
+        stmt = select(self.artifact_download_links_table).where(
+            self.artifact_download_links_table.c.token_id_hash == token_id_hash
+        )
+        with self.engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return dict(row) if row else None
+
+    def revoke_artifact_download_link(
+        self, task_id: str, token_id_hash: str, *, revoked_by_user_id: int, at: float
+    ) -> bool:
+        """Revoke one grant for *task_id*; ``False`` means it was already revoked or absent."""
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(self.artifact_download_links_table)
+                .where(
+                    self.artifact_download_links_table.c.token_id_hash == token_id_hash,
+                    self.artifact_download_links_table.c.task_id == task_id,
+                    self.artifact_download_links_table.c.revoked_at.is_(None),
+                )
+                .values(revoked_at=at, revoked_by_user_id=revoked_by_user_id)
+            )
+            return result.rowcount == 1
+
+    def revoke_task_artifact_download_links(self, task_id: str, *, revoked_by_user_id: int, at: float) -> int:
+        """Revoke every active grant for one Task and return how many changed."""
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(self.artifact_download_links_table)
+                .where(
+                    self.artifact_download_links_table.c.task_id == task_id,
+                    self.artifact_download_links_table.c.revoked_at.is_(None),
+                )
+                .values(revoked_at=at, revoked_by_user_id=revoked_by_user_id)
+            )
+            return int(result.rowcount or 0)
+
+    def delete_task_artifact_download_links(self, task_id: str) -> None:
+        """Drop a Task's grants with the Task, so a reused id starts with none."""
+        with self.engine.begin() as conn:
+            conn.execute(
+                self.artifact_download_links_table.delete().where(
+                    self.artifact_download_links_table.c.task_id == task_id
+                )
+            )
 
     def charge_data_ownership(
         self, task_id: str, *, user_id: int, logical_bytes: int = 0, at: float | None = None

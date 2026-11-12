@@ -20,6 +20,32 @@ their roles, the scientific views the server resolved, and the run provenance.
   download-only. Runner-produced HTML is never embedded or executed as an active
   result page; opening one shows a short message and a download link.
 
+## Expiring download links
+
+**Files & diagnostics** can mint a short-lived, copyable URL for one published
+artifact. Choose the link control beside a file, confirm the warning, and the
+absolute URL is copied for use in an external download manager.
+
+- A link grants **only that artifact's bytes** until it expires or is revoked.
+  It is not a login: it authorizes no Task list, API, or other file.
+- The link's expiry is shown, and **Revoke link** or **Renew link** act on it.
+  Revoking a Task or publishing a replacement with a different digest invalidates
+  the link; deletion of the Task removes it.
+- Anyone who obtains the URL can download the file while the link is active. It
+  may remain in the clipboard, a download manager, or browser history, so treat
+  it as a secret.
+- The server accepts `GET` and `HEAD` with one byte range and rechecks the grant,
+  the Task, the current publication and the owner's access on every request.
+  Independent range reads (as a download manager issues them) work; an already
+  started transfer may finish from its open snapshot, but each later request
+  needs an unexpired link. Revoking or deleting does not retract bytes already
+  sent.
+- Links are signed with their own salt and secret. Rotating
+  `ARTIFACT_LINK_SECRET` (or `AUTH_SECRET_KEY` when it is unset) invalidates every
+  outstanding link immediately.
+- A local result folder and a demo replay have no Server Task to authorize, so
+  they do not offer expiring links.
+
 ## Structure viewing
 
 Structures open in a single viewer that stays mounted while you move between the

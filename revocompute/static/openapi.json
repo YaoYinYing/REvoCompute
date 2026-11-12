@@ -1238,6 +1238,80 @@
         }
       }
     },
+    "/compute/api/results/{task_id}/download-links": {
+      "post": {
+        "tags": ["Results"],
+        "summary": "Issue an expiring download link for one published artifact",
+        "description": "Creates a revocable bearer link scoped to one artifact of an accessible Task. The link URL is a capability for that artifact's bytes only; it authenticates no other API. The response returns the token once.",
+        "operationId": "createResultDownloadLink",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TaskId"}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ArtifactDownloadLinkRequest"}}}},
+        "responses": {
+          "201": {"description": "Link issued", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ArtifactDownloadLink"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "429": {"description": "Issuance rate limit exceeded", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        }
+      },
+      "delete": {
+        "tags": ["Results"],
+        "summary": "Revoke every active download link for a Task",
+        "operationId": "revokeResultDownloadLinks",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TaskId"}
+        ],
+        "responses": {
+          "200": {"description": "Links revoked", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ArtifactDownloadRevocation"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/compute/api/results/{task_id}/download-links/{link_id}": {
+      "delete": {
+        "tags": ["Results"],
+        "summary": "Revoke one download link",
+        "operationId": "revokeResultDownloadLink",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TaskId"},
+          {"name": "link_id", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[A-Za-z0-9_-]{16,64}$"}}
+        ],
+        "responses": {
+          "200": {"description": "Link revoked", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ArtifactDownloadRevocation"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/compute/api/artifact-downloads/{token}": {
+      "get": {
+        "tags": ["Results"],
+        "summary": "Read one artifact through a bearer download link",
+        "description": "Accepts no session credential. Supports GET and HEAD with a single byte Range and If-Range. Every request rechecks the grant, the canonical Task, the current publication and the issuing owner's access; an invalid, expired, revoked or stale link receives the same 404.",
+        "operationId": "getArtifactDownload",
+        "security": [],
+        "parameters": [
+          {"name": "token", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "Range", "in": "header", "required": false, "schema": {"type": "string"}},
+          {"name": "If-Range", "in": "header", "required": false, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Complete artifact bytes or its headers for HEAD", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}},
+          "206": {"description": "One byte range of the artifact"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "416": {"description": "Requested byte range is not satisfiable"}
+        }
+      }
+    },
     "/compute/api/results/{task_id}/files/{file_id}": {
       "get": {
         "tags": ["Results"],
@@ -1662,6 +1736,39 @@
       "Unavailable": {"description": "Server, queue, or task policy unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
     },
     "schemas": {
+      "ArtifactDownloadLinkRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path"],
+        "properties": {
+          "path": {"type": "string", "description": "Manifest-declared artifact path"},
+          "ttl_seconds": {"type": ["integer", "null"], "minimum": 1, "description": "Requested lifetime, bounded by the server maximum"}
+        }
+      },
+      "ArtifactDownloadLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "download_url", "expires_at", "scope", "path", "sha256", "size"],
+        "properties": {
+          "id": {"type": "string"},
+          "download_url": {"type": "string", "description": "Same-origin bearer URL for the artifact's bytes"},
+          "expires_at": {"type": "string", "format": "date-time"},
+          "scope": {"type": "string", "enum": ["read-bytes"]},
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+          "size": {"type": "integer", "minimum": 0}
+        }
+      },
+      "ArtifactDownloadRevocation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "md5sum"],
+        "properties": {
+          "status": {"type": "string", "enum": ["revoked"]},
+          "md5sum": {"type": "string"},
+          "revoked": {"type": "integer", "minimum": 0}
+        }
+      },
       "TaskDiagnostics": {
         "type": "object",
         "additionalProperties": false,
