@@ -243,5 +243,10 @@ class ToolWorkspace:
 
     def delete(self, tool_call_id: str) -> None:
         call_root = self.call_root(tool_call_id)
-        if call_root.exists() and not call_root.is_symlink():
+        if call_root.is_symlink():
+            return
+        try:
             shutil.rmtree(call_root)
+        except FileNotFoundError:
+            # A concurrent reclaimer already removed the workspace.
+            return

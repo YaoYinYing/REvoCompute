@@ -167,9 +167,21 @@ invented release numbers or dates.
   - Reclaim a submitting user's terminal workspaces when only the per-user
     storage share is exhausted, while leaving running calls and other tenants'
     terminal workspaces untouched.
+  - Make workspace deletion idempotent when a concurrent reclaimer already
+    removed the same call directory.
+  - Translate the documented comma-separated `resid` selection form into the
+    pinned parser's accepted expression grammar.
+- Input validation:
+  - Stop deriving the minimum XTC size from uncompressed atom coordinates;
+    compressed XTC frames are now admitted under the byte cap and the pinned
+    parser remains responsible for frame decompression and truncation.
+- Task inputs:
+  - Refuse expired Tool-output references instead of accepting them until the
+    call row is physically removed.
 - Documentation:
   - Retire the PR campaign DESIGN/TODO notes into the canonical Tool runtime,
-    operator Tool and Task-contract pages.
+    operator Tool and Task-contract pages, and point operators at the Tool API
+    for the manifest-owned byte limits instead of restating them.
 
 ## [0.1.0+2890609] - 2026-11-12
 

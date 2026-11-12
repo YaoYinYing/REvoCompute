@@ -1787,6 +1787,16 @@ def _resolve_tool_outputs(
                 role=role_name,
             )
         try:
+            expires_at = float(call.get("expires_at"))
+        except (TypeError, ValueError):
+            expires_at = 0.0
+        if expires_at <= time.time():
+            return [], _input_contract_error(
+                "tool_output_reference_unavailable",
+                "Tool output reference has expired",
+                role=role_name,
+            )
+        try:
             outputs = json.loads(str(call["result_manifest_json"])).get("outputs", {})
         except (TypeError, json.JSONDecodeError):
             outputs = {}

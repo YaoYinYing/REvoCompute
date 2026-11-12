@@ -32,15 +32,16 @@ metadata before any output bytes are hashed.
 
 The `mdconvert` family is an opt-in large-input Tool: it turns one GROMACS GRO
 topology and one XTC trajectory into CAVER PDB snapshots. Enabling it requires
-`ENABLED_TOOL_FAMILIES=...,mdconvert`, `TOOL_REQUEST_MAX_BYTES=108000000` (the
-family's own `limits.request_bytes`), `TOOL_STORAGE_MAX_BYTES=268435456`
-(256 MiB, above one call's input plus output headroom), and a gateway
-`TOOL_CLIENT_MAX_BODY_SIZE` of at least `TOOL_REQUEST_MAX_BYTES` plus the 1 MiB
-multipart headroom. Its decoded limits are 100,000,000 bytes for the trajectory,
-8,000,000 bytes for the topology and 108,000,000 bytes in aggregate; these are
-decimal bytes, not MiB. Ordinary Tools keep their 16 MiB budget; a family whose
-declared tier exceeds `TOOL_REQUEST_MAX_BYTES` fails discovery rather than
-starting with a silently smaller budget. Amber,
+`ENABLED_TOOL_FAMILIES=...,mdconvert`, a `TOOL_REQUEST_MAX_BYTES` at least the
+family's projected `limits.request_bytes`, a `TOOL_STORAGE_MAX_BYTES` above one
+call's input plus output headroom, and a gateway `TOOL_CLIENT_MAX_BODY_SIZE` of
+at least `TOOL_REQUEST_MAX_BYTES` plus the 1 MiB multipart headroom. Read the
+family's per-role and aggregate decoded limits from
+`GET /compute/api/tools/md_trajectory_convert`; they are the manifest-owned
+`limits.input_bytes`/`limits.request_bytes` values, expressed in decimal bytes,
+not MiB, and this page does not restate them. Ordinary Tools keep their 16 MiB
+budget; a family whose declared tier exceeds `TOOL_REQUEST_MAX_BYTES` fails
+discovery rather than starting with a silently smaller budget. Amber,
 CHARMM/NAMD, LAMMPS and OpenMM pairs are not enabled until their unit, atom-order
 and periodic-box contracts have an audited proof, and are refused rather than
 guessed. The family's `requirements.lock` pins the parser and every wheel hash;

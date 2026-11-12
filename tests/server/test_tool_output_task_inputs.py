@@ -241,6 +241,20 @@ def test_server_owned_reference_uses_its_own_snapshot_quota(monkeypatch, tmp_pat
     assert response.status_code == 302, response.get_data(as_text=True)[:500]
 
 
+def test_expired_tool_output_is_refused_after_a_live_reference(monkeypatch, tmp_path):
+    module = _app(monkeypatch, tmp_path)
+    headers = _test_client_auth(module)
+    call_id = _finished_tool_call(module)
+
+    live = _submit(module, headers, call_id, endpoint="/compute/api/preflight/structure_runner")
+    assert live.status_code == 200, live.get_data(as_text=True)[:500]
+    assert module.tool_calls.update(call_id, expires_at=time.time() - 1)
+
+    expired = _submit(module, headers, call_id, endpoint="/compute/api/preflight/structure_runner")
+    assert expired.status_code == 400
+    assert expired.get_json()["errors"][0]["code"] == "tool_output_reference_unavailable"
+
+
 def test_another_user_cannot_bind_a_tool_output(monkeypatch, tmp_path):
     module = _app(monkeypatch, tmp_path)
     call_id = _finished_tool_call(module, "tester")

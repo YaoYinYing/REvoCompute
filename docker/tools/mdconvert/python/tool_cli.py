@@ -146,7 +146,9 @@ def _selection_expression(value: Any) -> str:
                 if match.group("last") is not None and int(match.group("first")) > int(match.group("last")):
                     break
             else:
-                return f"resid {','.join(terms)}"
+                # MDAnalysis does not parse the enumerated comma form, so the
+                # documented list is rebuilt as the equivalent OR expression.
+                return " or ".join(f"resid {term}" for term in terms)
     raise ToolInputError("selection_invalid", "Selection is outside the documented selection syntax")
 
 

@@ -184,6 +184,42 @@ def test_mixed_periodic_box_frames_fail_closed(tmp_path):
     assert error.value.code == "missing_pbc_box"
 
 
+def test_short_compressed_xtc_with_more_than_nine_atoms_converts(tmp_path):
+    _response, output, manifest = _run(
+        tmp_path,
+        {},
+        topology="short_compressed.gro",
+        trajectory="short_compressed.xtc",
+    )
+
+    assert manifest["sources"]["trajectory"]["size"] == (FIXTURES / "short_compressed.xtc").stat().st_size
+    assert manifest["sources"]["trajectory"]["frame_count"] == 2
+    assert manifest["atoms"]["topology_atom_count"] == 100
+    assert manifest["frame_count"] == 2
+    assert len(_pdb_identity(output / "reference.pdb")) == 100
+
+
+@pytest.mark.parametrize(
+    ("selection", "expected_selection", "atom_count"),
+    [
+        ("resid 1", "resid 1", 4),
+        ("resid 1-2", "resid 1-2", 8),
+        ("resid 1,2", "resid 1 or resid 2", 8),
+        ("resid 1-2,5", "resid 1-2 or resid 5", 12),
+    ],
+)
+def test_documented_resid_selection_grammar_is_accepted(tmp_path, selection, expected_selection, atom_count):
+    _response, _output, manifest = _run(
+        tmp_path,
+        {"selection": selection},
+        topology="short_compressed.gro",
+        trajectory="short_compressed.xtc",
+    )
+
+    assert manifest["atoms"]["selection"] == expected_selection
+    assert manifest["atoms"]["selected_atom_count"] == atom_count
+
+
 def test_duplicate_pdb_identity_is_refused(tmp_path):
     module = _module()
     request, output = _request(

@@ -22,6 +22,10 @@ MAX_MD_ATOMS = 99_999
 MAX_GRO_BYTES = 8_000_000
 MAX_XTC_BYTES = 100_000_000
 _XTC_MAGIC = 1995
+# One XTC frame begins with a 16-byte header and an uncompressed 36-byte unit
+# cell. Coordinates are compressed per axis, so the encoded size is not a
+# function of the atom count and must not be guessed from ``12 * n_atoms``.
+_XTC_FRAME_PREFIX_BYTES = 16 + 36
 
 
 def validate_gro(path: str) -> str | None:
@@ -89,9 +93,10 @@ def validate_xtc(path: str) -> str | None:
         return "XTC trajectory does not carry the XTC magic number"
     if not 1 <= atom_count <= MAX_MD_ATOMS:
         return f"XTC trajectory atom count must be between 1 and {MAX_MD_ATOMS}"
-    # 16 header bytes, a 36-byte unit cell and one 12-byte coordinate per atom
-    # are the minimum first-frame payload.  Full frame decoding stays with the
-    # pinned Tool parser, which refuses a truncated or corrupt later frame.
-    if size < 16 + 36 + 12 * atom_count:
-        return "XTC trajectory is truncated before its first frame coordinates"
+    # XTC coordinate blocks are compressed, so atom count does not determine
+    # the minimum encoded size. Require the frame header and uncompressed unit
+    # cell; the pinned Tool parser proves the compressed frame and refuses a
+    # truncated or corrupt payload under its byte caps.
+    if size < _XTC_FRAME_PREFIX_BYTES:
+        return "XTC trajectory is truncated before its first frame unit cell"
     return None

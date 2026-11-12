@@ -164,6 +164,34 @@ def test_compressed_trajectory_cannot_expand_past_the_cap(monkeypatch, tmp_path)
     assert response.get_json()["code"] in {"input_encoding_limit", "input_file_size_limit"}
 
 
+def test_short_compressed_xtc_is_admitted_by_the_core_validator(monkeypatch, tmp_path):
+    module = _app(monkeypatch, tmp_path)
+    monkeypatch.setattr(module.celery, "send_task", lambda *_args, **_kwargs: SimpleNamespace(id="queued"))
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+
+    response = _submit(
+        client,
+        headers,
+        topology=(FIXTURES / "short_compressed.gro").read_bytes(),
+        trajectory=(FIXTURES / "short_compressed.xtc").read_bytes(),
+    )
+
+    assert response.status_code == 202, response.get_json()
+
+
+def test_header_only_xtc_is_refused_by_the_core_validator(monkeypatch, tmp_path):
+    module = _app(monkeypatch, tmp_path)
+    monkeypatch.setattr(module.celery, "send_task", lambda *_args, **_kwargs: SimpleNamespace(id="never"))
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+
+    response = _submit(client, headers, trajectory=(FIXTURES / "header_only.xtc").read_bytes())
+
+    assert response.status_code == 400, response.get_json()
+    assert response.get_json()["error_class"] == "invalid_input"
+
+
 def test_core_validators_refuse_malformed_or_unsupported_formats(monkeypatch, tmp_path):
     module = _app(monkeypatch, tmp_path)
     monkeypatch.setattr(module.celery, "send_task", lambda *args, **kwargs: SimpleNamespace(id="never"))
