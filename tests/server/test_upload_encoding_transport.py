@@ -16,6 +16,7 @@ import gzip
 import hashlib
 import io
 import json
+import random
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,6 +33,16 @@ FASTA = (REPO / "tests/data/msa/2KL8.fasta").read_bytes()
 # Server's advertised 200:1 decoded/encoded bound, so the browser must keep it
 # identity while the Server must still refuse the compressed wire form.
 REPETITIVE_FASTA = b">sample\n" + b"ACDEFGHIKLMNPQRSTVWY" * 4000 + b"\n"
+_FASTA_ALPHABET = b"ACDEFGHIKLMNPQRSTVWY"
+
+
+def _mixed_fasta() -> bytes:
+    """A valid ~16 MiB FASTA with a highly compressible prefix and noisy tail."""
+    random_bytes = random.Random(20261113).randbytes(2 * 1024 * 1024 - 4096)
+    suffix = bytes(_FASTA_ALPHABET[value % len(_FASTA_ALPHABET)] for value in random_bytes)
+    sequence = b"A" * (14 * 1024 * 1024) + suffix
+    lines = [sequence[index : index + 1_000_000] for index in range(0, len(sequence), 1_000_000)]
+    return b">mixed\n" + b"\n".join(lines) + b"\n"
 
 
 def _module(monkeypatch, tmp_path, *, extra_env=None):
@@ -104,6 +115,23 @@ def test_the_same_repetitive_fasta_is_accepted_as_identity(monkeypatch, tmp_path
     queued = _recording_dispatch(module)
 
     response = _submit(module, payload=REPETITIVE_FASTA, filename="sample.fasta")
+
+    assert response.status_code == 302, response.get_data(as_text=True)[:300]
+    assert len(module.task_store.list_tasks()) == 1
+    assert len(queued) == 1
+
+
+def test_a_mixed_compressible_gzip_fasta_is_accepted_end_to_end(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    queued = _recording_dispatch(module)
+    payload = _mixed_fasta()
+    compressed = gzip.compress(payload, mtime=0)
+    # The completed part is within the Server ratio; only prefix progress looked
+    # over-ratio when the compressible 14 MiB prefix decoded first.
+    assert len(payload) < 16 * 1024 * 1024
+    assert len(payload) <= len(compressed) * 200
+
+    response = _submit(module, payload=compressed, filename="mixed.fasta", encodings="gzip")
 
     assert response.status_code == 302, response.get_data(as_text=True)[:300]
     assert len(module.task_store.list_tasks()) == 1

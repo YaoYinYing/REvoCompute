@@ -468,9 +468,10 @@ A client may gzip an individual file part on the wire by adding one
 byte-compatible (identity). The Task Type projection advertises the supported
 contract as
 `file_encodings: {"version": 1, "supported": ["identity", "gzip"], "max_expansion_ratio": 200}`;
-the ratio is the same decoded/encoded bound the Server enforces, so a client
-must send identity when a compressed part would exceed it instead of submitting
-a representation the Server necessarily refuses. The Server decodes declared
+the ratio is the same decoded/encoded bound the Server enforces on a completed
+part's final sizes, so a client must send identity when a compressed part would
+exceed it instead of submitting a representation the Server necessarily
+refuses. The Server decodes declared
 parts before format validation and hashes the
 decoded original, so the admitted snapshot and its SHA-256 are the scientific
 file the client holds, not the compressed wire form. `max_request_bytes` remains

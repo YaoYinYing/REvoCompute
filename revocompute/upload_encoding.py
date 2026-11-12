@@ -13,10 +13,11 @@ call boundary both wrap an uploaded part through :class:`DecodedStream` before
 they hash, validate or admit it.
 
 The limits are independent by design.  The request body cap bounds the encoded
-wire body, the decoded caps bound the original bytes a part may claim, and the
-expansion ratio bounds how much work one small encoded part may cause.  A
-compressed part is never interpreted as a ZIP archive or as a different
-scientific format: only its decoded bytes reach the format validator.
+wire body, the decoded caps and deadline bound the work a part may cause while
+it streams, and the expansion ratio bounds the completed part's final
+decoded/encoded size.  A compressed part is never interpreted as a ZIP archive
+or as a different scientific format: only its decoded bytes reach the format
+validator.
 """
 
 from __future__ import annotations
@@ -84,6 +85,23 @@ class DecodeLimits:
     decoded_total_max_bytes: int
     max_expansion_ratio: int = MAX_EXPANSION_RATIO
     deadline_seconds: float = DECODE_DEADLINE_SECONDS
+
+
+def _check_final_expansion(encoded_bytes: int, decoded_bytes: int, limits: DecodeLimits) -> None:
+    """Apply the whole-part ratio to a complete gzip member.
+
+    The ratio is intentionally evaluated once the part is fully read.  Comparing
+    decoded bytes against only the encoded bytes read so far measures decoding
+    lag, not the part's expansion: a legitimate file whose compressible prefix
+    decodes before the rest of its encoded bytes arrive would be refused.  The
+    absolute decoded cap and the shared budget bound the work while the part
+    streams.
+    """
+    if encoded_bytes and decoded_bytes > encoded_bytes * limits.max_expansion_ratio:
+        raise UploadEncodingError(
+            "input_encoding_limit",
+            "Compressed input expands beyond the permitted ratio.",
+        )
 
 
 @dataclass(slots=True)
@@ -200,11 +218,6 @@ def _gzip_chunks(stream: BinaryIO, limits: DecodeLimits, budget: DecodeBudget) -
                         "input_file_size_limit",
                         f"Decoded input exceeds the {limits.decoded_max_bytes} byte limit.",
                     )
-                if encoded_bytes and decoded_bytes > encoded_bytes * limits.max_expansion_ratio:
-                    raise UploadEncodingError(
-                        "input_encoding_limit",
-                        "Compressed input expands beyond the permitted ratio.",
-                    )
                 if len(head) < 2:
                     head = (head + output)[:2]
                     if head == _GZIP_MAGIC:
@@ -228,15 +241,18 @@ def _gzip_chunks(stream: BinaryIO, limits: DecodeLimits, budget: DecodeBudget) -
                         "input_encoding_invalid",
                         "Compressed input has trailing data after the gzip member.",
                     )
+                _check_final_expansion(encoded_bytes, decoded_bytes, limits)
                 return
         if decompressor.eof:
             if decompressor.unused_data or stream.read(1):
                 raise UploadEncodingError(
                     "input_encoding_invalid", "Compressed input has trailing data after the gzip member."
                 )
+            _check_final_expansion(encoded_bytes, decoded_bytes, limits)
             return
     if not decompressor.eof:
         raise UploadEncodingError("input_encoding_invalid", "Compressed input is truncated.")
+    _check_final_expansion(encoded_bytes, decoded_bytes, limits)
     # An empty decoded payload is left for the format validator to refuse; the
     # transport contract only proves the gzip member was complete and exact.
 

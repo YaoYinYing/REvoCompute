@@ -8,11 +8,14 @@ import gzip
 import io
 import math
 import os
+import random
 import time
+import zlib
 
 import pytest
 
 from revocompute.upload_encoding import (
+    MAX_EXPANSION_RATIO,
     DecodeBudget,
     DecodeLimits,
     DecodedStream,
@@ -27,7 +30,13 @@ LIMITS = DecodeLimits(
     decoded_max_bytes=1024 * 1024,
     decoded_total_max_bytes=1024 * 1024,
 )
+MIXED_LIMITS = DecodeLimits(
+    encoded_max_bytes=16 * 1024 * 1024,
+    decoded_max_bytes=16 * 1024 * 1024,
+    decoded_total_max_bytes=16 * 1024 * 1024,
+)
 PAYLOAD = b"ATOM      1  CA  ALA A   1\n" * 100
+_READ_SIZE = 64 * 1024
 
 
 def _read(data: bytes, encoding: str = "gzip", limits: DecodeLimits = LIMITS) -> bytes:
@@ -85,6 +94,46 @@ def test_encoded_and_decoded_caps_are_independent():
 def test_an_implausible_expansion_ratio_is_refused():
     with pytest.raises(UploadEncodingError) as caught:
         _read(gzip.compress(b"A" * 200_000))
+    assert caught.value.code == "input_encoding_limit"
+
+
+def _mixed_payload() -> bytes:
+    """14 MiB of one residue followed by 2 MiB of incompressible bytes."""
+    suffix = random.Random(20261113).randbytes(2 * 1024 * 1024)
+    return b"A" * (14 * 1024 * 1024) + suffix
+
+
+def _prefix_progress_exceeds_ratio(compressed: bytes) -> bool:
+    """Would a bytes-read-so-far check refuse this part before its final ratio?"""
+    decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    pending = compressed[:_READ_SIZE]
+    decoded = 0
+    while pending and decoded <= _READ_SIZE * MAX_EXPANSION_RATIO:
+        output = decompressor.decompress(pending, _READ_SIZE)
+        decoded += len(output)
+        pending = decompressor.unconsumed_tail
+    return decoded > _READ_SIZE * MAX_EXPANSION_RATIO
+
+
+def test_a_mixed_part_is_judged_by_its_final_ratio_not_decoding_lag():
+    payload = _mixed_payload()
+    compressed = gzip.compress(payload, mtime=0)
+    assert len(payload) == 16 * 1024 * 1024
+    # The completed part is well inside the ratio bound, but a prefix-progress
+    # check would have refused it after the first wire chunk decoded.
+    assert len(payload) <= len(compressed) * MAX_EXPANSION_RATIO
+    assert _prefix_progress_exceeds_ratio(compressed)
+
+    assert _read(compressed, limits=MIXED_LIMITS) == payload
+
+
+def test_a_zero_filled_bomb_is_still_refused_by_its_final_ratio():
+    payload = b"\0" * (2 * 1024 * 1024)
+    compressed = gzip.compress(payload, mtime=0)
+    assert len(payload) > len(compressed) * MAX_EXPANSION_RATIO
+
+    with pytest.raises(UploadEncodingError) as caught:
+        _read(compressed, limits=MIXED_LIMITS)
     assert caught.value.code == "input_encoding_limit"
 
 
