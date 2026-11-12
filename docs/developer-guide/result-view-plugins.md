@@ -113,12 +113,12 @@ claiming native fullscreen it no longer has.
 ### Scene ownership and non-goals
 
 The browser presentation plane owns the Mol* lifecycle, overlays, layout,
-selection, and asynchronous cancellation. The Server transmits only the stable
-topology identity and authorized structure bytes; this contract adds no
-scene-processing service and no process-global browser state. CAVER-specific
-controls, trajectory Kabsch fitting, new file-format writers, and a heavyweight
-molecular conversion service remain out of scope and follow in their own
-changes (#153 and #157).
+selection, asynchronous cancellation, and the preview-only trajectory fit. The
+Server transmits only the stable topology identity and authorized structure
+bytes; this contract adds no scene-processing service and no process-global
+browser state. CAVER-specific controls, new file-format writers, and a
+heavyweight molecular conversion service remain out of scope and follow in
+their own changes.
 
 Structure artifacts carry a server-declared `confidence_encoding` when their
 B-factor column holds per-residue pLDDT. The `Confidence` colouring is offered
@@ -152,6 +152,63 @@ matching coordinate states that instead of showing another design's frames. The
 mapping's `topology_format` declares how the topology is parsed (`pdb` when
 absent, or `mmcif`); it does not infer a format from the file name. The frame
 axis is labelled with the mapping's own `frame_unit`.
+
+### Trajectory preview fitting
+
+A trajectory view may offer a preview-only recenter/fit of the parsed frames.
+It never rewrites the source coordinate artifact or the published result; the
+fit is a display transform over coordinates Mol* already holds.
+
+The numerical contract is a weighted rigid-body least-squares fit of a selected
+atom subset of each frame to an explicitly selected reference frame:
+`argmin_{R,t} sum_i w_i ||R x_i(f) + t - x_i(ref)||^2` with `R^T R = I` and
+`det(R) = +1`. Kabsch's SVD formulation is solved in Float64 with
+proper-rotation correction, weighted centroids, and uniform weights by default.
+A selection needs at least three finite, uniquely mapped, non-collinear atoms;
+a collinear, duplicated, non-finite, or otherwise rank-deficient selection is
+rejected instead of producing an arbitrary rotation. Center-only (identity
+rotation plus a centroid translation) and rotate+translate are explicit modes.
+The fit atom subset is distinct from the atoms the transform is applied to: the
+fit uses the selection, while the reversible display transform covers the
+previewed frame. The reported RMSD is computed on the fit selection and labelled
+a preview metric; it is not simulation dynamics, stability, or a published
+result. Reference frame 0 is the default, and a reader-selected frame is
+explicit.
+
+Periodic boundaries are shown as the source declares them. A declared box is
+reported together with the fit selection of every fitted frame and the whole
+topology at the reference frame; a spanning warning carries no scientific
+claim. The browser never unwraps coordinates, reconstructs chains, reorders
+frames, changes box vectors, or alters atom identity; unwrapping for analysis
+belongs to a validated server Tool.
+
+The fit runs in a dedicated Web Worker with transfer-safe coordinate chunks,
+progress, `AbortSignal` cancellation, a generation token that drops stale
+results, and disposal with the view. The bounded envelope is 3-20,000 selected
+atoms, 1-50,000 frames, and 128 MiB of transferred Float64 coordinates; larger
+inputs stop with a stated reason and point to server-side conversion. Only the
+compact per-frame transform and RMSD cross back, so the browser does not retain
+every frame's atoms.
+
+The display transform is a tagged Mol* conformation decorator inserted below
+the structure; switching to the raw view writes the identity matrix, which
+`Structure.transform` short-circuits to the exact original display. A topology
+revision or digest change clears the cache and the accepted result; a cached
+transform is never applied to a different source. While a fit runs, the
+reference, scope, and selection controls stay locked, and a completed preview
+and its sidecar describe the reference and scope that were captured at start.
+
+Export writes only formats backed by an implemented writer and topology
+mapping. The trajectory release writes a single-model PDB of the displayed
+aligned frame plus a JSON sidecar with the source task, artifact paths and
+digests, frame/reference, fit parameters and transform, periodic-boundary
+policy, and lattice-angle units. Atom names, chain IDs, insertion codes,
+alternate locations, elements, and Angstrom units are written from the source
+identity; a topology the fixed PDB columns cannot represent is refused rather
+than truncated. The export is a new local derived artifact: it is not a
+server-published scientific output and no authenticated Tool validated it. No
+text PDB is named `.xtc`, `.dcd`, or `.trr`, and a browser writer for a binary
+trajectory format would require its own audited codec and tests.
 
 ## Matrix view
 
