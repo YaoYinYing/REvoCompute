@@ -1,4 +1,4 @@
-# Original Design — REvoCompute Experience Feedback (2026-11-12)
+# Experience Intent — REvoCompute Feedback (2026-11-12)
 
 This is a durable intent record translated and consolidated from the user's feedback. It documents **what was requested**, while the linked developer guides describe **how the implementation should satisfy it**. Do not treat this as a new authority over Task scientific schemas.
 

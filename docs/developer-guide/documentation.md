@@ -54,6 +54,10 @@ Only these root files are maintained alongside the published site:
   `CLAUDE.md`; edit the target only.
   [Architecture Invariants](../agents/architecture-invariants.md) explains the
   rationale behind those rules instead of restating them.
+- `CHANGELOG.md` — the canonical human-readable changelog. It is a root file
+  because every release tool and contributor expects that path; the version page
+  reads it server-side. Keep it in Keep a Changelog 1.0.0 format; it is not a
+  guide and does not restate another page.
 - `LONG_TASK_HANDLING.md` — a symlink to
   [Long-task Handling](../agents/long-task-handling.md), kept so existing agent
   references to the root path keep working.

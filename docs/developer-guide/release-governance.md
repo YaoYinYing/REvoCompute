@@ -1,8 +1,9 @@
 # Release Governance — Version, Changelog and Authenticated Version Page
 
-Status: **proposed PR-0 implementation contract**. This document and the historical
-changelog backfill are planning artifacts until their APIs, UI, build metadata,
-tests and release gates have been implemented and independently reviewed.
+Status: **implemented**. The version module, the signed-in API and page, the
+build identity, the release commands and the tag gate exist in this repository.
+Creating a tag, publishing a GitHub Release and deploying remain separate
+maintainer decisions; this page describes the gates, not an authorization.
 
 ## Verified inputs and precedents
 
@@ -55,19 +56,34 @@ metadata only; it never replaces these identities.
 
 1. The only **editable** base application SemVer source is
    `[project].version` in `pyproject.toml`. Current baseline remains `0.1.0`.
-2. `frontend/package.json` and package-lock root/package entries mirror
-   the canonical base version; deterministic sync/check and negative CI tests
-   must reject drift. Do not edit them as independent version sources.
-3. The build captures the **full immutable source SHA** once. Generate the
-   display version from base version and that SHA, never from a live
-   mutable `main` ref, current browser cache, wall clock or runtime `git log`.
-   Bake the same fields into frontend and server assets to detect mismatches.
+   At request time the server resolves the base version from
+   `REVOCOMPUTE_BASE_VERSION` (set by the builder from `pyproject.toml`), then
+   the source `pyproject.toml`, then installed package metadata. Source wins over
+   metadata so a stale editable install cannot report the wrong version.
+2. `frontend/package.json`, both version entries in
+   `frontend/package-lock.json`, `uv.lock`'s `revocompute` package entry and the
+   OpenAPI `info.version` mirror the canonical base version. They are written only
+   by `revocompute-release sync` and rejected on drift by `revocompute-release
+   check`; none is an independent source. `uv.lock` is edited textually in its
+   existing package block; `uv lock` is never run by the release command.
+3. The build captures the **full immutable source SHA** once, and only when the
+   working tree is clean. A dirty tree or an unavailable Git records no SHA, so
+   the API reports `revision_status: "unknown"` and
+   `app_version: "<base>+unknown"`; it never claims the commit of a checkout that
+   contains uncommitted code. A build with `REVOCOMPUTE_RELEASE_CHANNEL=release`
+   refuses to start unless it is clean and has an exact commit.
+   Generate the display version from the base version and that SHA, never from a
+   live mutable `main` ref, current browser cache, wall clock or runtime
+   `git log`. Bake the same fields into frontend and server assets to detect
+   mismatches.
 4. Use OCI image labels for source revision and base version where feasible;
    image digest, `built_at`, deployment/environment and release channel
-   remain separate fields. For a development build with no trustworthy SHA,
-   report `revision_status: "unknown"` and do not synthesize a false
-   seven-character commit. A qualified release fails if build identity is
-   unavailable.
+   remain separate fields. The builder records an opaque
+   `build_id` (`<sha7>-<UTC compact>`) only beside a verified commit; the image
+   digest stays deployment-stamp evidence and is never put in the API. For a
+   development build with no trustworthy SHA, report `revision_status:
+   "unknown"` and do not synthesize a false seven-character commit. A qualified
+   release fails if build identity is unavailable.
 5. `app_version` may be the public display string `0.1.0+<sha7>` for
    development snapshots, while Python/NPM package metadata retains `0.1.0`.
    Expose `base_version` separately to avoid confusing package management,
@@ -82,11 +98,12 @@ This is **not** a public about page.
 ### Server
 
 - Introduce `GET /compute/api/version` in the curated OpenAPI contract.
-  Require existing authenticated-user policy (`login_required` or
-  equivalent existing session/bearer behavior); no anonymous API response,
-  no admin-only requirement. A signed-out request must receive the standard
-  non-disclosing API authentication response, never a redirect that returns
-  protected data.
+  It uses the existing `login_required` boundary; there is no separate
+  decorator. A request without a `text/html` `Accept` header (the API client
+  case) receives the standard generic 401 JSON and no protected data. A request
+  whose `Accept` header contains `text/html` inherits the standard 302 redirect
+  to the login page, with `return_to` naming the requested path; the redirect
+  body carries no version data. There is no admin-only requirement.
 - Return bounded, server-owned version information with at least:
   `base_version`, `app_version` (display),
   `git_sha` (full SHA when verified), `revision_status`,
@@ -94,7 +111,12 @@ This is **not** a public about page.
   and immutable `build_id`/image digest when known. Include a bounded,
   safely represented historical changelog payload (or a typed summary list
   built from the checked-in CHANGELOG.md) sufficient to render the version
-  page without an unauthenticated second endpoint.
+  page without an unauthenticated second endpoint. The parser reads the
+  repository-root `CHANGELOG.md` (`/app/server` in the image) first and the
+  installed `share/revocompute/CHANGELOG.md` data-file second. A missing
+  changelog is a bounded empty payload with `source_sha256: null`,
+  `truncated: false` and `sections: []`, never a 500. The response includes the
+  SHA-256 of the bytes it parsed.
 - Do not expose paths, credentials, internal environment, private git
   remotes, host details or arbitrary files. Bound changelog length and
   sanitize/untrust rendered Markdown. Use `Cache-Control: private, no-store`,
@@ -156,27 +178,67 @@ Explain breaking compatibility within `Changed`/`Removed` entries.
 - If a historic claim cannot be supported by merged code or the resulting
   documented product contract, leave it out rather than guessing.
 
-## Release cut — adapted from REvoDesign
+## Release commands
+
+`revocompute-release` (or `python -m revocompute.release_governance`) is the one
+release tool. It never commits, tags, pushes, publishes or deploys.
+
+```bash
+# Validate the editable version and every mirror (CI runs this always).
+revocompute-release check
+
+# Write every mirror from pyproject.toml deterministically.
+revocompute-release sync
+```
+
+### Release cut
 
 1. Maintainer selects a SemVer version and explicitly approves release scope.
-2. Update `pyproject.toml`; synchronize frontend metadata/lockfile via one
-   command. Prepare a dated section from Unreleased notes.
+2. Move the `[Unreleased]` notes to one dated
+   `## [X.Y.Z] - YYYY-MM-DD` section and recreate `[Unreleased]` with valid
+   comparison links.
 3. Update any architecture, developer, operator or agent docs describing
    changed behavior **in the same PR**.
-4. Validate exact-head source SHA, package version parity, changelog section,
-   tag collision and compatibility; run relevant API, frontend, server, Runner
-   contract and deployment safety tests.
-5. Assemble annotated `vX.Y.Z` tag and notes from the validated changelog.
-   Never auto-`git push --tags` or publish merely because `make tag` was run.
-   Require an explicit maintainer release action and separate deployment action.
-6. Publish the GitHub Release when independently approved; preserve Runner
+4. Commit the changelog and docs, then run the release cut against the exact
+   tested commit:
+
+   ```bash
+   revocompute-release prepare-release --version X.Y.Z --sha <tested-commit>
+   ```
+
+   It refuses a dirty tree, a HEAD that is not the supplied commit, an existing
+   `vX.Y.Z` tag, an invalid SemVer and a missing dated section for today. On
+   success it updates `pyproject.toml`, `frontend/package.json`, the frontend
+   lockfile, `uv.lock` and OpenAPI `info.version`, and commits nothing.
+5. Commit the version bump and run the relevant API, frontend, server, Runner
+   contract and deployment safety tests at that exact head.
+6. Build with `REVOCOMPUTE_RELEASE_CHANNEL=release`. The build refuses a dirty
+   tree or an unavailable exact commit, and the resulting `app_version` is the
+   base version with no development suffix.
+7. Validate the prospective tag **before creating it**:
+
+   ```bash
+   revocompute-release verify-tag --tag vX.Y.Z --sha <tested-commit>
+   ```
+
+   The command reads `pyproject.toml` and `CHANGELOG.md` from the commit's own
+   Git tree, not the working tree, so local edits cannot make a tag look valid.
+   It accepts only `vMAJOR.MINOR.PATCH` with an optional prerelease; evidence
+   tags such as `pr-*-evidence` are rejected.
+8. Create the annotated `vX.Y.Z` tag and push it explicitly. Never auto-push
+   tags or publish merely because a version command ran. The `Release Tag Gate`
+   workflow re-runs the same validation on the tagged commit as an audit.
+9. Publish the GitHub Release when independently approved; preserve Runner
    readiness and source/asset evidence for the deployed build. Document a
-   rollback target and any schema/data migration constraints.
+   rollback target and any schema/data migration constraints. Deployment remains
+   a separate maintainer decision.
 
 ## Acceptance criteria
 
-- `pyproject.toml`, frontend package metadata and lockfile remain consistent
-  under drift tests.
+- `pyproject.toml`, frontend package metadata, both lockfile entries,
+  `uv.lock` and OpenAPI `info.version` remain consistent under drift tests.
+- A dirty or unversioned build reports `revision_status: "unknown"` and never a
+  commit it does not contain; a release-channel build refuses a dirty tree.
 - Historic development snapshots render `0.1.0+<correct SHA7>` and never
   impersonate real releases; full SHA remains available for audit.
 - One signed-in-only version API and one signed-in-only version page work for

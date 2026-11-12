@@ -89,10 +89,10 @@ page.
 
 - Agent guidance lives in [`CLAUDE.md`](CLAUDE.md); [`AGENTS.md`](AGENTS.md) is a
   symlink to it.
-- The maintainer backlog and PR working notes live in `TODO.md`, `TODO_*.md`,
-  and `IMPLEMENTATION_STATE.md` at the repository root while the work is active.
-  They are working notes, not published guidance, and are retired before the
-  change they describe merges.
+- Durable campaign backlogs live in their owning page under `docs/`. PR working
+  notes may live in `TODO_*.md` and `IMPLEMENTATION_STATE.md` at the repository
+  root while the work is active; they are working notes, not published guidance,
+  and are retired before the change they describe merges.
 - Long refactors follow the [long-task protocol](docs/agents/long-task-handling.md).
 - Do not restate server-owned values in code, configuration, or documentation.
   See [Architecture Invariants](docs/agents/architecture-invariants.md).

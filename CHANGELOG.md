@@ -16,7 +16,27 @@ invented release numbers or dates.
 
 ### Added
 - Release governance:
-  - Specify single-source versioning, authenticated version information, and a controlled release procedure.
+  - Server:
+    - Add the signed-in `GET /compute/api/version` projection and the
+      `/compute/version` page, both behind the existing login boundary, with the
+      canonical changelog parsed into bounded structured plain text.
+    - Report a missing or dirty build commit as `revision_status: "unknown"`
+      instead of inventing a revision, and expose the full forty-character SHA
+      when one is verified.
+  - Frontend:
+    - Add the Version destination to the signed-in Account navigation, showing
+      the display version, short and full revision, build time, release state and
+      the changelog, and diagnosing mixed or stale frontend/server assets.
+  - Workflow:
+    - Make `pyproject.toml` the one editable version source, with deterministic
+      `check`/`sync` for the frontend manifest and lockfile, `uv.lock` and the
+      OpenAPI version, and a CI drift gate that always runs.
+    - Add the `revocompute-release` release commands and a `v*` tag gate that
+      reads the tagged Git tree; they never commit, tag, push, publish or deploy.
+  - Build:
+    - Bake the immutable commit, build time and opaque build identifier into the
+      server image labels/runtime environment and the frontend bundle; a release
+      build refuses a dirty tree.
 
 ## [0.1.0+2890609] - 2026-11-12
 
