@@ -233,6 +233,40 @@ revocompute-release sync
    rollback target and any schema/data migration constraints. Deployment remains
    a separate maintainer decision.
 
+## Rollback
+
+The canonical deployment record already exists: `CONFIG_DIR/.deploy-stamp`,
+written by `run/revocompute_ctl/stamp.py` on every successful restart. It holds
+the deployed commit and dirty flag, mode, image digests, changed-family SIF
+SHA-256s, materialized Runner/plugin contract digests and the config-backup
+path. No separate version registry is introduced.
+
+To roll back, an operator:
+
+1. Reads the last known-good stamp and selects its `commit` and image digest.
+   If the preceding deploy changed configuration, its `config_backup` path is
+   the matching configuration snapshot.
+2. Rebuilds and redeploys that exact source, passing the
+   `REVOCOMPUTE_RELEASE_CHANNEL` appropriate to the build (`release` for a
+   formal release, `development` for a source snapshot). A `release` build
+   refuses a dirty tree.
+3. Verifies the deployed `GET /compute/api/version` reports the intended
+   `git_sha` (or an honest `unknown` if the record has no verified commit) and
+   `base_version`, and that the page and API agree on the frontend/server
+   revision.
+4. Confirms Runner scientific provenance is unchanged: a platform image
+   rollback does not rewrite Runner SIFs, model weights, receipts, Task schemas
+   or published evidence. If a Runner family was intentionally changed in the
+   bad deploy, restore its recorded SIF SHA-256 and acceptance receipt from the
+   stamp and Runner evidence rather than assuming the platform rollback did it.
+
+The version API exposes build identity only. Image digests, SIF hashes and
+contract digests remain deployment-stamp and Runner-evidence facts, and a
+rollback does not change release, tag or deployment authority: those remain
+separate maintainer decisions. Any incompatible schema or data migration must
+be documented with a compatible rollback or forward-fix before the release cut;
+a platform rollback alone does not undo a data migration.
+
 ## Acceptance criteria
 
 - `pyproject.toml`, frontend package metadata, both lockfile entries,

@@ -106,7 +106,7 @@ not that a design was approved.
 
 - [x] Read existing main and verify repository baseline; do not equate static 0.1.0 package metadata with a released product version.
 - [x] Record complete user intent and versioning proposal.
-- [ ] Commander loads current branch and PR discussion, delegates bounded implementation and keeps the independent Adviser active.
+- [x] Commander loads current branch and PR discussion, delegates bounded implementation and keeps the independent Adviser active.
 - [ ] All subsequent PRs start from an explicitly checked base and have one owning workstream. Avoid a single monolithic feature PR.
 - [ ] Every technical finding lives in its owning PR thread. The commander summarizes merge/no-merge, blocker category, owner, independent review state and exact head evidence.
 - [ ] Maintainer performs final squash-merge decision for every PR. Merge, tag, release and production deployment are four separate decisions.
@@ -130,7 +130,7 @@ not that a design was approved.
 - [x] Preserve original user-facing `Unreleased` workflow; use an explicit, stage-safe release-cut process adapted from REvoDesign without silently pushing tags.
 - [x] Do not invent historical **formal releases**; source-derived `0.1.0+<SHA7>` snapshots and their curated baseline are not official release tags.
 - [x] Introduce a release tag gate for vX.Y.Z (optional prerelease), exact metadata equality and changelog section existence; evidence tags remain separate.
-- [ ] Document explicit manual release and rollback procedure, including deployment SHA, image digest and existing Runner provenance separation.
+- [x] Document explicit manual release and rollback procedure, including deployment SHA, image digest and existing Runner provenance separation.
 - [x] Run API contract, server unit and frontend build tests at exact head. Document failed checks truthfully.
 - [ ] Obtain independent architecture review and maintainer approval before merging. No automatic tag/release/deploy.
 
