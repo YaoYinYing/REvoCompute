@@ -349,15 +349,23 @@ def prefetch_ccd(
                 break
 
 
-def configure_steering_cache(scratch: Path, source: str | None = None) -> Path | None:
+def configure_steering_cache(
+    scratch: Path, source: str | None = None, *, required: bool = False
+) -> Path | None:
     """Expose the mounted steering dictionary to upstream's offline HF lookup.
 
     ``huggingface_hub`` resolves a cached file under ``HF_HOME`` before it
     attempts a network request. A task-local cache entry made from the verified
     read-only asset keeps the lookup offline and leaves no mutable shared state.
+    Propagation requires the dictionary: without it the CLI fails only after
+    loading the model, with an offline cache error from upstream.
     """
     source = source if source is not None else os.environ.get("BIOEMU2_STEERING_CCD")
     if not source:
+        if required:
+            raise RuntimeError(
+                "BioEmu2 steering CCD dictionary is not configured; set BIOEMU2_STEERING_CCD"
+            )
         return None
     asset = Path(source)
     if not asset.is_file():
@@ -452,7 +460,7 @@ def main() -> int:
     scratch = Path(tempfile.mkdtemp(prefix="revodesign-bioemu2."))
     os.environ["BIOEMU2_MSA_CACHE"] = str(scratch / "colabfold_msa")
     try:
-        configure_steering_cache(scratch)
+        configure_steering_cache(scratch, required=args.mode == "propagate")
         if args.mode == "propagate":
             propagate(manifest, args.output_dir, checkpoint)
         else:

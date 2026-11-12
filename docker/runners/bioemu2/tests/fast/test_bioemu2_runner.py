@@ -206,12 +206,20 @@ def _run(
 
     output_dir = tmp_path / "outputs"
     capture = tmp_path / "calls.json"
+    steering = tmp_path / "steering.pkl"
+    steering.write_bytes(b"steering dictionary")
+    steering_manifest = tmp_path / "steering.sha256"
+    steering_manifest.write_text(
+        f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  {steering}\n", encoding="utf-8"
+    )
     env = os.environ.copy()
     env.update(
         {
             "BIOEMU2_PYTHON": sys.executable,
             "BIOEMU2_ASSET_ROOT": str(asset_root),
             "BIOEMU2_ASSET_MANIFEST": str(manifest),
+            "BIOEMU2_STEERING_CCD": str(steering),
+            "BIOEMU2_STEERING_CCD_MANIFEST": str(steering_manifest),
             "BIOEMU2_CALL": str(capture),
             "RUNNER_RUNTIME_ROOT": str(ROOT / "docker" / "runners"),
             "PYTHONPATH": str(modules),
@@ -875,6 +883,8 @@ def test_configure_steering_cache_is_optional_and_rejects_a_missing_asset(tmp_pa
     adapter = _adapter()
     monkeypatch.delenv("BIOEMU2_STEERING_CCD", raising=False)
     assert adapter.configure_steering_cache(tmp_path / "unused") is None
+    with pytest.raises(RuntimeError, match="steering CCD dictionary is not configured"):
+        adapter.configure_steering_cache(tmp_path / "scratch", required=True)
 
     with pytest.raises(RuntimeError, match="steering CCD dictionary not found"):
         adapter.configure_steering_cache(tmp_path / "scratch", str(tmp_path / "missing.pkl"))
@@ -904,3 +914,19 @@ def test_bioemu2_runner_verifies_the_steering_ccd_identity(tmp_path):
     )
     assert completed.returncode != 0
     assert "steering CCD integrity verification failed" in completed.stderr
+
+
+def test_bioemu2_propagation_requires_a_configured_steering_dictionary(tmp_path):
+    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "protein.cif"
+    starting.write_text("data_protein\n_atom_site.id\n1\n", encoding="utf-8")
+    env["BIOEMU2_STEERING_CCD"] = ""
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
+    )
+
+    assert completed.returncode != 0
+    assert "steering CCD dictionary is not configured" in completed.stderr
+    assert not (output_dir / "task_finished").exists()
