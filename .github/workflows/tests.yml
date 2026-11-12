@@ -166,6 +166,29 @@ jobs:
       - name: Exercise shipped fleet projections outside Server coverage
         run: make test-fleet
 
+  ToolMdconvertContracts:
+    needs: ClassifyChanges
+    if: ${{ !cancelled() && needs.ClassifyChanges.outputs.server != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install the mdconvert Tool's exact hashed stack
+        run: pip install --require-hashes -r docker/tools/mdconvert/requirements.lock
+      - name: Install the test runner
+        run: pip install pytest
+      - name: Run mdconvert scientific and CAVER compatibility contracts
+        env:
+          MPLCONFIGDIR: /tmp/matplotlib
+        run: python -m pytest tests/tools/test_mdconvert.py tests/fleet/test_mdconvert_caver_compatibility.py -q -p no:cacheprovider
+
   RunnerScientificAcceptance:
     needs: ClassifyChanges
     if: ${{ !cancelled() && needs.ClassifyChanges.outputs.runner_scientific != 'false' }}

@@ -2980,6 +2980,16 @@ export interface components {
                 role: string;
                 format: string;
                 path: string;
+                source?: {
+                    /** @enum {string} */
+                    kind: "task_artifact" | "tool_output";
+                    task_id?: string;
+                    tool_call_id?: string;
+                    tool_type?: string;
+                    artifact_path: string;
+                    sha256: string;
+                    size?: number;
+                };
             }[];
             warnings: components["schemas"]["PreflightFinding"][];
             errors: components["schemas"]["PreflightFinding"][];

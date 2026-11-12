@@ -3052,7 +3052,7 @@
           "contract": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "enum": ["passed", "failed", "not_checked"]}}, "additionalProperties": false},
           "admission": {"$ref": "#/components/schemas/PreflightAdmission"},
           "normalized_params": {"type": "object"},
-          "inputs": {"type": "array", "items": {"type": "object", "required": ["role", "format", "path"], "properties": {"role": {"type": "string"}, "format": {"type": "string"}, "path": {"type": "string"}}, "additionalProperties": false}},
+          "inputs": {"type": "array", "items": {"type": "object", "required": ["role", "format", "path"], "properties": {"role": {"type": "string"}, "format": {"type": "string"}, "path": {"type": "string"}, "source": {"type": "object", "required": ["kind", "artifact_path", "sha256"], "properties": {"kind": {"type": "string", "enum": ["task_artifact", "tool_output"]}, "task_id": {"type": "string"}, "tool_call_id": {"type": "string"}, "tool_type": {"type": "string"}, "artifact_path": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "size": {"type": "integer", "minimum": 0}}, "additionalProperties": false}}, "additionalProperties": false}},
           "warnings": {"type": "array", "items": {"$ref": "#/components/schemas/PreflightFinding"}},
           "errors": {"type": "array", "items": {"$ref": "#/components/schemas/PreflightFinding"}}
         },

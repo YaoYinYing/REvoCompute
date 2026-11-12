@@ -23,6 +23,13 @@ Decoded uploads and verified Task-artifact references are charged to the
 selected Tool's aggregate budget during admission. A Tool that declares
 `limits.input_bytes` also bounds each role separately.
 
+A Task that binds a finished Tool output receives the bytes under a separate
+server-owned quota equal to `TOOL_OUTPUT_MAX_BYTES` (32 MiB by default) per file
+and in aggregate. This is deliberately independent of the 16 MiB browser-upload
+budget, because the Tool already bounded its complete output under the same
+ceiling. The reference count, role cardinality and file count are checked from
+metadata before any output bytes are hashed.
+
 The `mdconvert` family is an opt-in large-input Tool: it turns one GROMACS GRO
 topology and one XTC trajectory into CAVER PDB snapshots. Enabling it requires
 `ENABLED_TOOL_FAMILIES=...,mdconvert`, `TOOL_REQUEST_MAX_BYTES=108000000` (the

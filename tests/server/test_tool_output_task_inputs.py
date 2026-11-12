@@ -73,9 +73,9 @@ def _finished_tool_call(module, username: str = "tester") -> str:
     return call_id
 
 
-def _submit(module, headers, call_id: str, name: str = "reference.pdb"):
+def _submit(module, headers, call_id: str, name: str = "reference.pdb", *, endpoint: str = "/compute/api/post"):
     return module.app.test_client().post(
-        "/compute/api/post",
+        endpoint,
         headers=headers,
         data={
             "task_type": "structure_runner",
@@ -116,6 +116,129 @@ def test_finished_tool_output_is_bound_as_a_task_input_with_provenance(monkeypat
     }
     copied = manifest_path.parent / "structure" / "reference.pdb"
     assert copied.read_bytes() == (REPO_ROOT / "tests" / "data" / "3fap_hf3_A_short.pdb").read_bytes()
+
+
+def test_preflight_projects_tool_output_source_as_structured_provenance(monkeypatch, tmp_path):
+    module = _app(monkeypatch, tmp_path)
+    headers = _test_client_auth(module)
+    call_id = _finished_tool_call(module)
+
+    response = _submit(module, headers, call_id, endpoint="/compute/api/preflight/structure_runner")
+
+    assert response.status_code == 200, response.get_data(as_text=True)[:500]
+    payload = response.get_json()
+    assert payload["valid"] is True
+    source_bytes = (REPO_ROOT / "tests" / "data" / "3fap_hf3_A_short.pdb").read_bytes()
+    assert payload["inputs"] == [
+        {
+            "role": "structure",
+            "format": "pdb",
+            "path": "reference.pdb",
+            "source": {
+                "kind": "tool_output",
+                "tool_call_id": call_id,
+                "tool_type": "md_trajectory_convert",
+                "artifact_path": "reference.pdb",
+                "sha256": hashlib.sha256(source_bytes).hexdigest(),
+                "size": len(source_bytes),
+            },
+        }
+    ]
+
+
+def _count_tool_output_opens(monkeypatch, module, call_id: str) -> list[Path]:
+    target = module.tool_workspace.call_root(call_id) / "output" / "reference.pdb"
+    opened: list[Path] = []
+    original = Path.open
+
+    def counting_open(path, *args, **kwargs):
+        if path == target:
+            opened.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    return opened
+
+
+def test_repeated_tool_output_references_fail_before_reading_bytes(monkeypatch, tmp_path):
+    module = _app(monkeypatch, tmp_path)
+    headers = _test_client_auth(module)
+    call_id = _finished_tool_call(module)
+    reference = f"@{call_id}/reference.pdb"
+    opened = _count_tool_output_opens(monkeypatch, module, call_id)
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=headers,
+        data={
+            "task_type": "structure_runner",
+            "params[iter]": "100",
+            "tool_output_references": [reference, reference],
+            "tool_output_roles": ["structure", "structure"],
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["details"][0]["code"] == "input_role_cardinality"
+    assert opened == []
+
+
+def test_tool_output_reference_count_is_capped_before_reading_bytes(monkeypatch, tmp_path):
+    module = _app(monkeypatch, tmp_path)
+    headers = _test_client_auth(module)
+    call_id = _finished_tool_call(module)
+    reference = f"@{call_id}/reference.pdb"
+    opened = _count_tool_output_opens(monkeypatch, module, call_id)
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=headers,
+        data={
+            "task_type": "structure_runner",
+            "params[iter]": "100",
+            "tool_output_references": [reference] * 200,
+            "tool_output_roles": ["structure"] * 200,
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["details"][0]["code"] == "input_file_count_limit"
+    assert opened == []
+
+
+def test_tool_output_over_the_server_owned_quota_fails_before_reading_bytes(monkeypatch, tmp_path):
+    module = _app(monkeypatch, tmp_path)
+    headers = _test_client_auth(module)
+    call_id = _finished_tool_call(module)
+    opened = _count_tool_output_opens(monkeypatch, module, call_id)
+    module.app.config["MAX_TOOL_OUTPUT_INPUT_BYTES"] = 10
+
+    response = _submit(module, headers, call_id)
+
+    assert response.status_code == 400
+    assert response.get_json()["details"][0]["code"] == "input_total_size_limit"
+    assert opened == []
+
+
+def test_server_owned_reference_uses_its_own_snapshot_quota(monkeypatch, tmp_path):
+    module = _app(monkeypatch, tmp_path)
+    headers = _test_client_auth(module)
+    call_id = _finished_tool_call(module)
+    # The browser-upload quota cannot be raised by a reference, and the
+    # reference does not consume it either: the Tool output has its own
+    # server-owned quota.
+    module.app.config["MAX_INPUT_FILE_BYTES"] = 1
+    module.app.config["MAX_INPUT_TOTAL_BYTES"] = 1
+
+    class _DummyAsyncResult:
+        id = "celery-test-id"
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *a, **kw: _DummyAsyncResult())
+    response = _submit(module, headers, call_id)
+
+    assert response.status_code == 302, response.get_data(as_text=True)[:500]
 
 
 def test_another_user_cannot_bind_a_tool_output(monkeypatch, tmp_path):

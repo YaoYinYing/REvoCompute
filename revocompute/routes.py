@@ -1711,12 +1711,24 @@ def _resolve_tool_outputs(
     Tool workspace into the same quarantine an upload uses, so the immutable
     role snapshot preserves them with the Tool call's provenance; the browser
     never downloads and re-uploads them.
+
+    Structural checks and the declared-size budget run before any byte is read:
+    a repeated or oversized reference is refused from cheap metadata, so a
+    request cannot force unbounded reads in the web worker.
     """
     if len(expressions) != len(role_names):
         return [], _input_contract_error(
             "input_role_binding", "Every Tool output reference must be bound to an input role."
         )
+    max_references = int(current_app.config["MAX_INPUT_FILES"])
+    if len(expressions) > max_references:
+        return [], _input_contract_error(
+            "input_file_count_limit",
+            f"Submission contains more than the {max_references} input file limit.",
+        )
+    budget = DecodeBudget(int(current_app.config["MAX_TOOL_OUTPUT_INPUT_BYTES"]))
     resolved = []
+    seen: set[tuple[str, str]] = set()
     for expression, role_name in zip(expressions, role_names, strict=True):
         match = _TOOL_OUTPUT_REFERENCE.fullmatch(expression.strip())
         if match is None:
@@ -1727,6 +1739,22 @@ def _resolve_tool_outputs(
         if role is None:
             return [], _input_contract_error("input_role_unknown", f"Unknown input role: {role_name}", role=role_name)
         call_id, name = match.groups()
+        key = (role_name, name)
+        if key in seen:
+            return [], _input_contract_error(
+                "input_namespace_collision",
+                "Two inputs resolve to the same path within one role.",
+                role=role_name,
+            )
+        seen.add(key)
+        format_name = os.path.splitext(name)[1].lower().removeprefix(".")
+        if format_name not in role.formats:
+            return [], _input_contract_error(
+                "input_role_format",
+                f"Input role {role_name!r} does not accept {format_name or 'files without a format extension'}.",
+                role=role_name,
+                format_name=format_name or None,
+            )
         call = tool_calls.get_owned(call_id, int(g.current_user["id"]))
         if call is None or call["status"] != "finished":
             return [], _input_contract_error(
@@ -1750,30 +1778,51 @@ def _resolve_tool_outputs(
             return [], _input_contract_error(
                 "tool_output_reference_invalid", "Tool output is not declared by its result manifest", role=role_name
             )
+        declared_sha256 = declared.get("sha256")
+        declared_size = declared.get("size")
+        if (
+            not isinstance(declared_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", declared_sha256) is None
+            or not isinstance(declared_size, int)
+            or isinstance(declared_size, bool)
+            or declared_size < 0
+        ):
+            return [], _input_contract_error(
+                "tool_output_reference_invalid", "Tool output manifest identity is invalid", role=role_name
+            )
+        try:
+            budget.consume(declared_size)
+        except UploadEncodingError as exc:
+            return [], _input_contract_error(exc.code, str(exc), role=role_name)
         physical = tool_workspace.call_root(call_id) / "output" / name
         if physical.is_symlink() or not physical.is_file():
             return [], _input_contract_error(
                 "tool_output_reference_unavailable", "Tool output is no longer available", role=role_name
             )
-        digest = hashlib.sha256()
-        size = 0
-        with physical.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                size += len(chunk)
-                digest.update(chunk)
-        if digest.hexdigest() != declared.get("sha256") or size != declared.get("size"):
+        if physical.stat().st_size != declared_size:
             return [], _input_contract_error(
                 "tool_output_reference_mismatch",
                 "Tool output no longer matches its result manifest",
                 role=role_name,
             )
-        format_name = os.path.splitext(name)[1].lower().removeprefix(".")
-        if format_name not in role.formats:
+        digest = hashlib.sha256()
+        size = 0
+        with physical.open("rb") as stream:
+            # Read no more than the declared size: a grown file is a mismatch,
+            # not another full read of attacker-chosen bytes.
+            remaining = declared_size
+            while remaining:
+                chunk = stream.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                size += len(chunk)
+                remaining -= len(chunk)
+                digest.update(chunk)
+        if digest.hexdigest() != declared_sha256 or size != declared_size:
             return [], _input_contract_error(
-                "input_role_format",
-                f"Input role {role_name!r} does not accept {format_name or 'files without a format extension'}.",
+                "tool_output_reference_mismatch",
+                "Tool output no longer matches its result manifest",
                 role=role_name,
-                format_name=format_name or None,
             )
         resolved.append(
             {
@@ -1827,16 +1876,28 @@ def _validate_input_uploads(task_type: str | None = None):
         )
     tool_references = request.form.getlist("tool_output_references")
     tool_roles = request.form.getlist("tool_output_roles")
-    tool_inputs, tool_error = _resolve_tool_outputs(tt, tool_references, tool_roles)
-    if tool_error is not None:
-        return None, tool_error
-    all_roles = [*submitted_roles, *[item["role"] for item in tool_inputs]]
-    if error := _validate_role_counts(tt, all_roles):
-        return None, error
-    if len(uploads) + len(tool_inputs) > max_input_files:
+    if len(tool_references) != len(tool_roles):
+        return None, _input_contract_error(
+            "input_role_binding", "Every Tool output reference must be bound to an input role."
+        )
+    # Every structural refusal runs before the resolver reads any referenced
+    # output: unknown roles, cardinality, and the file-count cap are cheap
+    # metadata checks, so a repeated or oversized request cannot force the web
+    # worker to hash the same server-owned bytes many times.
+    declared_roles = [*submitted_roles, *tool_roles]
+    if len(uploads) + len(tool_references) > max_input_files:
         return None, _input_contract_error(
             "input_file_count_limit",
             f"Submission contains more than the {max_input_files} input file limit.",
+        )
+    if error := _validate_role_counts(tt, declared_roles):
+        return None, error
+    tool_inputs, tool_error = _resolve_tool_outputs(tt, tool_references, tool_roles)
+    if tool_error is not None:
+        return None, tool_error
+    if len(tool_inputs) != len(tool_references):
+        return None, _input_contract_error(
+            "input_role_binding", "Every Tool output reference must resolve to one input."
         )
     submitted_paths = request.form.getlist("input_paths")
     validated: list[tuple[Any, str, str, str, str]] = []
@@ -1919,12 +1980,18 @@ def _quarantine_uploaded_inputs(
     metadata = _request_metadata()
     saved: list[dict[str, Any]] = []
     quarantined: list[str] = []
-    limits = DecodeLimits(
+    upload_limits = DecodeLimits(
         encoded_max_bytes=int(current_app.config["MAX_CONTENT_LENGTH"]),
         decoded_max_bytes=int(current_app.config["MAX_INPUT_FILE_BYTES"]),
         decoded_total_max_bytes=int(current_app.config["MAX_INPUT_TOTAL_BYTES"]),
     )
-    budget = DecodeBudget(limits.decoded_total_max_bytes)
+    upload_budget = DecodeBudget(upload_limits.decoded_total_max_bytes)
+    tool_output_limits = DecodeLimits(
+        encoded_max_bytes=int(current_app.config["MAX_TOOL_OUTPUT_INPUT_BYTES"]),
+        decoded_max_bytes=int(current_app.config["MAX_TOOL_OUTPUT_INPUT_BYTES"]),
+        decoded_total_max_bytes=int(current_app.config["MAX_TOOL_OUTPUT_INPUT_BYTES"]),
+    )
+    tool_output_budget = DecodeBudget(tool_output_limits.decoded_total_max_bytes)
     try:
         for uploaded, relative_path, role, format_name, encoding in uploads:
             temp_name = f".tmp_{os.urandom(8).hex()}_{os.path.basename(relative_path)}"
@@ -1940,11 +2007,16 @@ def _quarantine_uploaded_inputs(
             }
             file_bytes = 0
             # An uploaded part owns its Flask stream; a server-owned Tool output
-            # is opened here and closed once its bytes are quarantined.
+            # is opened here and closed once its bytes are quarantined. The two
+            # sources have separate quotas: a Tool output was already bounded by
+            # the Tool's own output ceiling, while an upload stays under the
+            # browser-facing Task cap.
             source_path = getattr(uploaded, "source_path", None)
             if source_path is None:
                 stream = uploaded.stream
+                limits, budget = upload_limits, upload_budget
             else:
+                stream, limits, budget = None, tool_output_limits, tool_output_budget
                 try:
                     # Do not follow a link swapped in after reference
                     # verification; the digest check below is the second guard.

@@ -128,6 +128,9 @@ def test_gro_xtc_conversion_preserves_known_units_identity_and_times(tmp_path):
     assert manifest["units"]["output_coordinate_unit"] == "angstrom"
     assert manifest["pbc"]["treatment"] == "none"
     assert manifest["atoms"]["selected_atom_count"] == 4
+    assert {"elements_not_representable", "chain_identity_synthetic"} <= {
+        item["code"] for item in manifest["warnings"]
+    }
     assert manifest["atoms"]["selection"] == "all"
     assert len(manifest["atoms"]["atom_map_sha256"]) == 64
     assert manifest["sources"]["topology"]["sha256"] == hashlib.sha256(
@@ -179,6 +182,17 @@ def test_mixed_periodic_box_frames_fail_closed(tmp_path):
     with pytest.raises(module.ToolInputError) as error:
         module.md_trajectory_convert(request, output)
     assert error.value.code == "missing_pbc_box"
+
+
+def test_duplicate_pdb_identity_is_refused(tmp_path):
+    module = _module()
+    request, output = _request(
+        tmp_path, {}, topology="duplicate_identity.gro", trajectory="three_atoms.xtc"
+    )
+
+    with pytest.raises(module.ToolInputError) as error:
+        module.md_trajectory_convert(request, output)
+    assert error.value.code == "pdb_identity_unrepresentable"
 
 
 @pytest.mark.parametrize(

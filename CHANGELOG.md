@@ -25,7 +25,9 @@ invented release numbers or dates.
   - Record source digests, parser identity, the GRO nm-to-Angstrom unit
     contract, atom map, selection, original frame times, unit cells, periodic
     treatment, warnings and output hashes. Unsupported format pairs and
-    unwrapping without bond evidence are refused with typed diagnostics.
+    unwrapping without bond evidence are refused with typed diagnostics. GRO's
+    missing chain and element identity is recorded as a warning; atoms whose
+    chain/residue/atom identity would collide under PDB chain `X` are refused.
   - Add a Tool-scoped input tier: `limits.request_bytes` cannot exceed the
     deployment `TOOL_REQUEST_MAX_BYTES`, and `limits.input_bytes` bounds each
     role separately. `mdconvert` admits 100,000,000 decoded trajectory bytes,
@@ -35,11 +37,20 @@ invented release numbers or dates.
     decoded budget as uploads.
   - Publish a child-declared typed failure as the Tool call's `error_class` and
     `error`.
+  - Gate the mdconvert scientific and CAVER compatibility tests in CI with the
+    exact hashed Tool stack.
 - Task inputs:
   - Bind a finished, same-user Tool output to a declared input role through
-    `tool_output_references`/`tool_output_roles`; submission verifies it against
-    the Tool result manifest and preserves the Tool call provenance in the
-    immutable input snapshot.
+    `tool_output_references`/`tool_output_roles`; submission checks role names,
+    cardinality, file count and the server-owned declared-size quota before it
+    reads any output bytes, verifies the bytes against the Tool result
+    manifest, and preserves the Tool call provenance in the immutable input
+    snapshot.
+  - Admit server-owned Tool-output references under a separate
+    `MAX_TOOL_OUTPUT_INPUT_BYTES` quota equal to `TOOL_OUTPUT_MAX_BYTES`, so a
+    complete 32 MiB Tool output can reach a Task without raising the 16 MiB
+    browser-upload budget. Preflight projects structured provenance instead of
+    rejecting it as a string map.
 - Input validation:
   - Add Core transport validators for GRO and XTC containers; scientific frame
     decoding remains in the pinned Tool parser. Deploy note: the validator

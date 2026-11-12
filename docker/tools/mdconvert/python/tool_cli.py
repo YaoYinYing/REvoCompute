@@ -279,6 +279,18 @@ def _check_representable(atom_group: Any) -> None:
     resids = np.asarray(atom_group.resids)
     if np.any(resids < 0) or np.any(resids > 9999):
         raise ToolInputError("pdb_identity_unrepresentable", "A residue number cannot be represented in a PDB record")
+    identities = {
+        (str(chain), int(resid), str(icode), str(name))
+        for chain, resid, icode, name in zip(
+            atom_group.chainIDs, resids, atom_group.icodes, atom_group.names, strict=True
+        )
+    }
+    if len(identities) != atom_group.n_atoms:
+        raise ToolInputError(
+            "pdb_identity_unrepresentable",
+            "Two selected atoms share a PDB chain, residue and atom identity; "
+            "the CAVER snapshot map cannot distinguish them",
+        )
 
 
 def _guard_resources() -> None:
@@ -463,7 +475,12 @@ def md_trajectory_convert(request_path: Path, output_dir: Path) -> dict[str, Any
         {
             "code": "elements_not_representable",
             "message": "The GRO topology carries no element identity; PDB element columns are left blank",
-        }
+        },
+        {
+            "code": "chain_identity_synthetic",
+            "message": "The GRO topology carries no chain identifier; every atom is written to PDB chain X, "
+                       "and duplicate chain/residue/atom identities are refused",
+        },
     ]
     absent = [False]
     source_boxes: dict[int, list[float] | None] = {}

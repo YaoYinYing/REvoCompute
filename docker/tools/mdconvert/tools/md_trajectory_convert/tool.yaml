@@ -7,7 +7,11 @@ guidance: >-
   exactly once, atom order and identity come from the topology, and periodic wrapping is
   never reconstructed. The reference structure is the first selected frame unless reference_frame
   names another selected frame; the remaining selected frames follow in source order as
-  snapshot_001.pdb and so on; at most 51 frames are written.
+  snapshot_001.pdb and so on; at most 51 frames are written. GRO carries no chain or element
+  identity, so every atom is written to PDB chain X with a blank element column; selected atoms
+  whose chain/residue/atom identity would collide are refused rather than merged. CAVER
+  start-point and radius inference on this representation requires the deferred CAVER JAR
+  acceptance and is not claimed by this release.
   Amber, CHARMM/NAMD, LAMMPS and OpenMM pairs are not enabled until an audited
   unit, atom-order and periodic-box proof exists, and are refused rather than guessed.
 version: "1"

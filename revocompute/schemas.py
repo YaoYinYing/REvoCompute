@@ -511,7 +511,7 @@ class TaskPreflightResult(BaseModel):
     contract: PreflightPhase
     admission: PreflightAdmission
     normalized_params: dict[str, Any] = Field(default_factory=dict)
-    inputs: list[dict[str, str]] = Field(default_factory=list)
+    inputs: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[PreflightFinding] = Field(default_factory=list)
     errors: list[PreflightFinding] = Field(default_factory=list)
 

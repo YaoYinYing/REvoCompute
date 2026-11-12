@@ -269,6 +269,11 @@ app.config.update(
     tool_calls=tool_calls,
     tool_workspace=tool_workspace,
 )
+# A Task may bind a finished Tool output without a browser upload. The Tool
+# already bounded its complete output under TOOL_OUTPUT_MAX_BYTES, so the
+# server-owned snapshot quota follows that ceiling rather than the 16 MiB
+# browser-upload cap; ordinary uploads keep their separate budget.
+app.config["MAX_TOOL_OUTPUT_INPUT_BYTES"] = TOOL_CONFIG.output_max_bytes
 
 app.config["infrastructure_readiness"] = build_default_service(
     CONFIG,

@@ -16,7 +16,7 @@ from typing import Any, BinaryIO
 from werkzeug.utils import secure_filename
 
 from revocompute.tool_calls import normalize_tool_call_id
-from revocompute.tool_types import ToolType
+from revocompute.tool_types import DEFAULT_TOOL_REQUEST_BYTES, ToolType
 
 
 class ToolWorkspaceError(ValueError):
@@ -92,7 +92,7 @@ class ToolWorkspace:
             raise ToolWorkspaceError("Tool input filenames must be unique within a role")
         digest = hashlib.sha256()
         size = 0
-        limit = self.request_max_bytes if max_bytes is None else max_bytes
+        limit = DEFAULT_TOOL_REQUEST_BYTES if max_bytes is None else max_bytes
         with target.open("xb") as output:
             while chunk := stream.read(65536):
                 size += len(chunk)

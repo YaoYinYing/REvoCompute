@@ -93,15 +93,20 @@ normalizes them itself — see [Persistent Execution](persistent-execution.md).
 
 A Task may bind a finished, same-user Tool output to a declared input role with
 `tool_output_references` (`@tool_call_<id>/<output path>`) and
-`tool_output_roles`. Submission verifies the reference against the Tool result
-manifest and quarantines the bytes through the same decoded budget and Core
-validators as an upload; the immutable snapshot and `task.json` record the Tool
-call, output path and digest as the input source. A reference to another user's
-call, a missing or expired output, a path outside the declared result manifest,
-or bytes that no longer match their recorded digest is refused. The consuming
-`task.yaml` still decides which formats and cardinality an input role accepts.
-This is how an `mdconvert` reference/snapshot output reaches a downstream
-structure consumer without a browser download and re-upload.
+`tool_output_roles`. Submission checks role names, cardinality and the input
+file count before it reads any referenced file, then verifies each output
+against the Tool result manifest and charges its declared size to a separate
+server-owned quota equal to `TOOL_OUTPUT_MAX_BYTES` before hashing it. That
+quota never raises the 16 MiB browser-upload budget: ordinary uploads and
+server-owned references are accounted independently. The bytes are quarantined
+through the same Core validators as an upload; the immutable snapshot and
+`task.json` record the Tool call, output path and digest as the input source. A
+reference to another user's call, a missing or expired output, a path outside
+the declared result manifest, or bytes that no longer match their recorded
+digest is refused. The consuming `task.yaml` still decides which formats and
+cardinality an input role accepts. This is how an `mdconvert` reference/snapshot
+output reaches a downstream structure consumer without a browser download and
+re-upload.
 
 ## Demo inputs
 
