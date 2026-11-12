@@ -462,6 +462,18 @@ endpoint. A successful preflight therefore proves that no Runner-owned Python
 entrypoint ran. Uploaded files and the `workspace` document both pass the same
 bounded Core JSON policy before any Runner code can inspect them.
 
+A client may gzip an individual file part on the wire by adding one
+`file_encodings` value per uploaded file (`identity` or `gzip`, aligned 1:1 with
+`files`). Omitting the field keeps every existing API and agent client
+byte-compatible (identity). The Task Type projection advertises the supported
+contract as `file_encodings: {"version": 1, "supported": ["identity", "gzip"]}`.
+The Server decodes declared parts before format validation and hashes the
+decoded original, so the admitted snapshot and its SHA-256 are the scientific
+file the client holds, not the compressed wire form. `max_request_bytes` remains
+the encoded multipart body cap; the decoded per-file and aggregate limits are
+unchanged. A compressed part is never interpreted as an archive or a different
+scientific format.
+
 ## Runner Access
 
 Authenticated clients can inspect effective runner access at
