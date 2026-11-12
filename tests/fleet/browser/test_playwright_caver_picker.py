@@ -162,6 +162,9 @@ def test_a_residue_pick_writes_the_owning_tasks_canonical_parameters(page: Page,
     """A canvas pick becomes CAVER parameters, and a control edit re-places it."""
     monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", PRODUCTION_DIST)
     requests = _open_picker(page, PDB)
+    # The mode is explicit in the contract; a residue pick is tested in residue
+    # mode rather than relying on the first option of a required select.
+    _control(page, "start_point_mode").select_option("residue")
 
     _click_canvas_until(page, lambda: bool(_control(page, "start_residue_number").input_value()))
 
@@ -189,7 +192,7 @@ def test_a_residue_pick_writes_the_owning_tasks_canonical_parameters(page: Page,
     assert params["start_point_mode"] == "residue"
     assert params["start_chain"] == "A"
     assert params["start_residue_number"] == str(target)
-    assert params["start_residue_name"] == ""
+    assert "start_residue_name" not in params
 
 
 def test_an_insertion_coded_pick_is_refused_and_writes_nothing(
@@ -198,6 +201,7 @@ def test_an_insertion_coded_pick_is_refused_and_writes_nothing(
     """A pick CAVER cannot address leaves the canonical controls untouched."""
     monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", PRODUCTION_DIST)
     _open_picker(page, _insertion_coded_pdb())
+    _control(page, "start_point_mode").select_option("residue")
     run = _run(page)
     expect(run).to_be_enabled()
 
