@@ -54,3 +54,14 @@ The user observed there was no root CHANGELOG.md and no coherent application ver
 - Keep platform release versions independent of Runner scientific image/model hashes and deployment identities.
 - Keep maintainer squash-merge, product release and production deployment decisions explicit and separate.
 - Require isolated PRs with validation rather than implementing all features inside one campaign branch.
+
+## Release governance amendments (2026-11-12)
+
+The user added four concrete requirements after the Campaign PR was drafted:
+
+1. Provide a dedicated **version page** and **version API** that are **visible only after login**. Ordinary authenticated users, not only administrators, should be allowed to see them.
+2. Follow exactly [Keep a Changelog 1.0.0](https://keepachangelog.com/en/1.0.0/), including Unreleased and the standard change categories. Correct earlier drafts that referred to version 1.1.0.
+3. Name previous development versions exclusively as `0.1.0+<commit[:7]>` rather than assigning invented SemVer releases; summarize and backfill only high-information historical changes from verifiable merged PRs/commits.
+4. Follow the concise, module-scoped Changelog and release-process style documented by [REvoDesign docs/agents/RELEASE.md](https://github.com/YaoYinYing/REvoDesign/blob/main/docs/agents/RELEASE.md). Adapt its explicit version bump/changelog/tag workflow to the REvoCompute layout without copying the unstaged-diff assumption or bypassing maintainer release approval.
+
+The user's fifth numbered line did not contain a requirement; no additional requirement was inferred.
