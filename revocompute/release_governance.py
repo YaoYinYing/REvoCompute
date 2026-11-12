@@ -19,7 +19,7 @@ import re
 import subprocess
 import sys
 import tomllib
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 SEMVER = re.compile(
@@ -231,6 +231,22 @@ def changelog_section_exists(root: Path, version: str, day: str | None = None) -
     return path.is_file() and changelog_section_in_text(path.read_text(encoding="utf-8"), version, day)
 
 
+def changelog_section_days(root: Path, version: str) -> list[str]:
+    """Every valid dated section for one version, in file order."""
+    path = root / CHANGELOG
+    if not path.is_file():
+        return []
+    pattern = re.compile(rf"(?m)^##\s+\[{re.escape(version)}\]\s+-\s+(\d{{4}}-\d{{2}}-\d{{2}})\s*$")
+    days: list[str] = []
+    for candidate in pattern.findall(path.read_text(encoding="utf-8")):
+        try:
+            date.fromisoformat(candidate)
+        except ValueError:
+            continue
+        days.append(candidate)
+    return days
+
+
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=False)
 
@@ -262,8 +278,8 @@ def prepare_release(root: Path, version: str, sha: str | None = None) -> list[st
     if _git(root, "tag", "--list", tag).stdout.strip():
         raise ReleaseError(f"Tag {tag} already exists")
     today = datetime.now(timezone.utc).date().isoformat()
-    if not changelog_section_exists(root, version, today):
-        raise ReleaseError(f"{CHANGELOG}: no dated '## [{version}] - {today}' section")
+    if not any(day <= today for day in changelog_section_days(root, version)):
+        raise ReleaseError(f"{CHANGELOG}: no dated section for {version} on or before {today}")
     changed = [PYPROJECT] if _write_pyproject_version(root, version) else []
     return changed + sync(root)
 
@@ -281,30 +297,45 @@ def _version_from_pyproject(text: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _resolve_commit(root: Path, value: str) -> str | None:
+    """Resolve a revision (including an annotated tag object) to its commit."""
+    result = _git(root, "rev-parse", f"{value}^{{commit}}")
+    resolved = result.stdout.strip().lower()
+    if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", resolved):
+        return resolved
+    fallback = value.strip().lower()
+    return fallback if re.fullmatch(r"[0-9a-f]{40}", fallback) else None
+
+
 def verify_tag(root: Path, tag: str, sha: str | None = None) -> list[str]:
     """Validate a product tag against the exact commit's own tree.
 
     The tag's commit, ``pyproject.toml`` and ``CHANGELOG.md`` are read from Git
     objects, never from the working tree, so a dirty checkout cannot make an
-    invalid release look valid. A prospective tag that does not exist yet may be
-    checked by supplying ``--sha``; the local release step does that before the
-    tag is created.
+    invalid release look valid. Without ``--sha`` an existing tag validates
+    itself, so running the gate from a later HEAD is not a mismatch. A
+    prospective tag that does not exist yet may be checked by supplying
+    ``--sha``; the local release step does that before the tag is created.
     """
     errors: list[str] = []
     match = PRODUCT_TAG.fullmatch(tag)
     if match is None:
         return [f"{tag!r} is not a product version tag vMAJOR.MINOR.PATCH (optional prerelease)"]
     version = match.group("version")
-    target = (sha or _head(root)).lower()
-    if not re.fullmatch(r"[0-9a-f]{40}", target):
-        return ["--sha must be a full 40-character commit SHA"]
     existing = _git(root, "rev-list", "-n1", tag)
-    tag_commit = existing.stdout.strip()
+    tag_commit = existing.stdout.strip().lower()
     tag_exists = existing.returncode == 0 and bool(tag_commit)
-    if tag_exists and tag_commit != target:
-        errors.append(f"Tag {tag} points at {tag_commit}, not the supplied commit {target}")
-    elif not tag_exists and not sha:
-        errors.append(f"Tag {tag} does not exist; supply --sha to validate the prospective commit")
+    supplied = _resolve_commit(root, sha) if sha else None
+    if sha and supplied is None:
+        return ["--sha must resolve to a full 40-character commit SHA"]
+    if tag_exists:
+        target = tag_commit
+        if supplied and supplied != tag_commit:
+            errors.append(f"Tag {tag} points at {tag_commit}, not the supplied commit {supplied}")
+    elif supplied:
+        target = supplied
+    else:
+        return [f"Tag {tag} does not exist; supply --sha to validate the prospective commit"]
     pyproject_text = _tagged_text(root, target, PYPROJECT)
     if pyproject_text is None:
         errors.append(f"{PYPROJECT}: not readable at commit {target}")

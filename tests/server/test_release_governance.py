@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -400,3 +400,51 @@ def test_build_identity_without_git_records_no_revision(tmp_path, monkeypatch):
     assert identity["REVOCOMPUTE_BUILD_ID"] == ""
     with pytest.raises(RuntimeError, match="release build requires a clean working tree"):
         collect_build_identity(str(root), "release")
+
+
+def test_tag_gate_validates_an_existing_tag_from_a_later_head(tmp_path):
+    root = _write_repo(tmp_path, "1.2.3", changelog_date="2026-11-12")
+    first = _commit_repo(root)
+    assert _git(root, "tag", "v1.2.3").returncode == 0
+    (root / "README.md").write_text("later work\n", encoding="utf-8")
+    assert _git(root, "add", "-A").returncode == 0
+    assert _git(root, "commit", "-qm", "later").returncode == 0
+
+    assert _git(root, "rev-parse", "HEAD").stdout.strip() != first
+    assert governance.verify_tag(root, "v1.2.3") == []
+
+    errors = governance.verify_tag(root, "v1.2.3", _git(root, "rev-parse", "HEAD").stdout.strip())
+    assert errors and "not the supplied commit" in errors[0]
+
+
+def test_tag_gate_resolves_an_annotated_tag_object_sha(tmp_path):
+    root = _write_repo(tmp_path, "1.2.3", changelog_date="2026-11-12")
+    sha = _commit_repo(root)
+    assert _git(root, "tag", "-a", "v1.2.3", "-m", "release").returncode == 0
+    tag_object = _git(root, "rev-parse", "v1.2.3").stdout.strip()
+    assert tag_object != sha
+
+    assert governance.verify_tag(root, "v1.2.3", tag_object) == []
+
+
+def test_prepare_release_accepts_a_past_dated_section(tmp_path):
+    yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    root = _write_repo(tmp_path, "1.2.3", changelog_date=yesterday)
+    (root / "CHANGELOG.md").write_text(
+        (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        + f"\n## [1.3.0] - {yesterday}\n\n### Added\n- Cut across midnight.\n",
+        encoding="utf-8",
+    )
+    sha = _commit_repo(root)
+
+    changed = governance.prepare_release(root, "1.3.0", sha)
+
+    assert "pyproject.toml" in changed
+    assert governance.check(root) == []
+
+
+def test_changelog_parser_caps_section_version_and_category_name():
+    payload = parse_changelog("## [" + "v" * 300 + "]\n### " + "c" * 300 + "\n- item\n")
+    section = payload["sections"][0]
+    assert len(section["version"]) == 200
+    assert len(section["categories"][0]["name"]) == 200

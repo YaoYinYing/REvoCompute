@@ -134,3 +134,15 @@ def test_an_unverified_server_revision_is_stated_honestly(page: Page) -> None:
     expect(page.locator(".version-display")).to_have_text("0.1.0+unknown")
     expect(page.get_by_text("Not recorded").first).to_be_visible()
     expect(page.locator(".version-build-note")).to_contain_text("cannot be confirmed as equal")
+
+
+def test_the_version_page_renders_under_the_dark_theme(page: Page) -> None:
+    """The page follows the deployment's dark theme, not only the light one."""
+    page.emulate_media(color_scheme="dark")
+    mount_scenario(page, controlled_scenario())
+
+    page.goto(f"{ORIGIN}/compute/version")
+    expect(page.get_by_role("heading", name="Version", exact=True)).to_be_visible()
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    expect(page.locator(".version-display")).to_be_visible()
+    expect(page.locator(".version-changelog")).to_be_visible()

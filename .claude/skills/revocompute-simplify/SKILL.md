@@ -108,8 +108,10 @@ means paying interest on it: the comment ages, and the cleanup may never happen.
 - In scope and proven: delete it now, with the owning tests.
 - Out of scope or unproven: leave it alone. Do not annotate it.
 - Needs a design decision, a compatibility call, or a migration: write a durable
-  proposal in the maintainer backlog — `TODO.md` or a focused `TODO_*.md` — never
-  a new root-level guide, which the documentation workflow rejects.
+  proposal in the maintainer backlog — the owning page under `docs/` (for
+  example the experience modernization campaign page), or a focused
+  `TODO_*.md` while the work is active — never a new root-level guide, which the
+  documentation workflow rejects.
 
 Write the proposal as: the current API and its files, the consumer evidence
 separating production from tests and docs, exactly what to remove or fold

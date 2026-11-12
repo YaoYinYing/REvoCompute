@@ -8,8 +8,10 @@ maintainer decisions; this page describes the gates, not an authorization.
 ## Verified inputs and precedents
 
 - REvoCompute `main` at `2890609942680e29ce17b3d83f546569434c5247`
-  (2026-11-12) declares `0.1.0` in both `pyproject.toml` and
-  `frontend/package.json`; no formal application release tags were found.
+  (2026-11-12) declares `0.1.0` in `pyproject.toml`, mirrored by
+  `frontend/package.json`, both version entries in `frontend/package-lock.json`,
+  the `revocompute` package entry in `uv.lock` and OpenAPI `info.version`; no
+  formal application release tags were found.
   Existing `pr-*-evidence` tags/releases are test evidence, not app versions.
 - Required changelog specification:
   [Keep a Changelog **1.0.0**](https://keepachangelog.com/en/1.0.0/).
@@ -115,8 +117,9 @@ This is **not** a public about page.
   repository-root `CHANGELOG.md` (`/app/server` in the image) first and the
   installed `share/revocompute/CHANGELOG.md` data-file second. A missing
   changelog is a bounded empty payload with `source_sha256: null`,
-  `truncated: false` and `sections: []`, never a 500. The response includes the
-  SHA-256 of the bytes it parsed.
+  `truncated: false` and `sections: []`, never a 500. `source_sha256` is the
+  SHA-256 of the bounded bytes actually parsed (the first 64 KiB when the file
+  is larger), not of an unbounded file read.
 - Do not expose paths, credentials, internal environment, private git
   remotes, host details or arbitrary files. Bound changelog length and
   sanitize/untrust rendered Markdown. Use `Cache-Control: private, no-store`,
@@ -207,7 +210,8 @@ revocompute-release sync
    ```
 
    It refuses a dirty tree, a HEAD that is not the supplied commit, an existing
-   `vX.Y.Z` tag, an invalid SemVer and a missing dated section for today. On
+   `vX.Y.Z` tag, an invalid SemVer and a missing dated section on or before
+   today. On
    success it updates `pyproject.toml`, `frontend/package.json`, the frontend
    lockfile, `uv.lock` and OpenAPI `info.version`, and commits nothing.
 5. Commit the version bump and run the relevant API, frontend, server, Runner

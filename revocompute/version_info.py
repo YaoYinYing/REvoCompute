@@ -28,12 +28,15 @@ from importlib.metadata import PackageNotFoundError, version as distribution_ver
 from pathlib import Path
 from typing import Any
 
+from revocompute.release_governance import SEMVER
+
 MAX_CHANGELOG_BYTES = 64 * 1024
 MAX_SECTIONS = 50
 MAX_CATEGORIES_PER_SECTION = 12
 MAX_ITEMS_PER_CATEGORY = 200
 MAX_ITEMS_TOTAL = 1000
 MAX_ITEM_CHARS = 500
+MAX_LABEL_CHARS = 200
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _CHANNEL = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
@@ -58,7 +61,6 @@ def _changelog_candidates() -> tuple[Path, ...]:
         # Installed data-files fallback for a wheel that is not beside its
         # source tree.
         Path(sys.prefix) / "share" / "revocompute" / "CHANGELOG.md",
-        package.parent.parent / "CHANGELOG.md",
     )
 
 
@@ -68,29 +70,29 @@ def _pyproject_candidates() -> tuple[Path, ...]:
 
 
 def base_version() -> str:
-    """The application's editable base SemVer.
+    """The application's editable base SemVer, or an honest ``unknown``.
 
     The builder's ``REVOCOMPUTE_BASE_VERSION`` (taken from pyproject at build
     time) wins, then the source ``pyproject.toml``, then installed package
     metadata. An editable development install can leave stale metadata behind,
-    so the source tree is preferred over it.
+    so the source tree is preferred over it. A value that is not valid SemVer is
+    ignored rather than served, and an exhausted resolution reports ``unknown``
+    so the version API never fails on missing or malformed packaging metadata.
     """
     configured = (os.environ.get("REVOCOMPUTE_BASE_VERSION") or "").strip()
-    if configured:
+    if configured and SEMVER.fullmatch(configured):
         return configured
-    source = _pyproject_version(required=False)
-    if source:
+    source = _pyproject_version()
+    if source and SEMVER.fullmatch(source):
         return source
     try:
-        return distribution_version("revocompute")
+        installed = distribution_version("revocompute")
     except PackageNotFoundError:
-        raise RuntimeError(
-            "The application base version is unavailable: "
-            "REVOCOMPUTE_BASE_VERSION, pyproject.toml and package metadata are all missing"
-        ) from None
+        installed = ""
+    return installed if installed and SEMVER.fullmatch(installed) else "unknown"
 
 
-def _pyproject_version(required: bool = True) -> str:
+def _pyproject_version() -> str:
     """Read ``[project].version`` from the nearest source ``pyproject.toml``."""
     import tomllib
 
@@ -104,11 +106,7 @@ def _pyproject_version(required: bool = True) -> str:
         value = data.get("project", {}).get("version")
         if isinstance(value, str) and value:
             return value
-    if not required:
-        return ""
-    raise RuntimeError(
-        "The application base version is unavailable: revocompute metadata and pyproject.toml are missing"
-    )
+    return ""
 
 
 def _utc_timestamp(value: str | None) -> str | None:
@@ -140,11 +138,18 @@ def build_identity() -> dict[str, Any]:
     git_sha = raw_sha if _FULL_SHA.fullmatch(raw_sha) else None
     release_channel = _release_channel(os.environ.get("REVOCOMPUTE_RELEASE_CHANNEL"))
     base = base_version()
+    if base == "unknown":
+        app_version = "unknown"
+        git_sha = None
+        revision_status = "unknown"
+    else:
+        app_version = base if release_channel == "release" else f"{base}+{git_sha[:7] if git_sha else 'unknown'}"
+        revision_status = "verified" if git_sha else "unknown"
     return {
         "base_version": base,
-        "app_version": base if release_channel == "release" else f"{base}+{git_sha[:7] if git_sha else 'unknown'}",
+        "app_version": app_version,
         "git_sha": git_sha,
-        "revision_status": "verified" if git_sha else "unknown",
+        "revision_status": revision_status,
         "release_channel": release_channel,
         "built_at": _utc_timestamp(os.environ.get("REVOCOMPUTE_BUILD_TIME")),
         # The opaque builder identifier is meaningful only beside a verified
@@ -208,7 +213,7 @@ def parse_changelog(text: str) -> dict[str, Any]:
             if len(sections) >= MAX_SECTIONS:
                 truncated = True
                 continue
-            version = match.group(1).strip()
+            version = match.group(1).strip()[:MAX_LABEL_CHARS]
             section = {
                 "version": version,
                 "date": _valid_date(match.group(2)),
@@ -224,7 +229,7 @@ def parse_changelog(text: str) -> dict[str, Any]:
                 truncated = True
                 category = None
                 continue
-            category = {"name": category_heading.group(1).strip(), "items": []}
+            category = {"name": category_heading.group(1).strip()[:MAX_LABEL_CHARS], "items": []}
             section["categories"].append(category)
             continue
         if category is None:

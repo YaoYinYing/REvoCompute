@@ -257,3 +257,23 @@ def test_a_path_like_build_identifier_is_not_served(monkeypatch, tmp_path):
 
     assert payload["git_sha"] == SHA
     assert payload["build_id"] is None
+
+
+def test_invalid_base_metadata_degrades_without_failing_the_api(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    import revocompute.version_info as version_information
+
+    monkeypatch.setattr(version_information, "_pyproject_candidates", lambda: (tmp_path / "absent.toml",))
+    monkeypatch.setattr(version_information, "distribution_version", lambda name: "not-semver")
+    monkeypatch.setenv("REVOCOMPUTE_BUILD_GIT_SHA", SHA)
+    response = module.app.test_client().get(
+        "/compute/api/version", headers=_test_client_auth(module)
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["base_version"] == "unknown"
+    assert payload["app_version"] == "unknown"
+    assert payload["git_sha"] is None
+    assert payload["revision_status"] == "unknown"
+    validate_openapi_payload("VersionInfo", payload)

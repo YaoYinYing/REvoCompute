@@ -96,6 +96,7 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         "/compute/api/auth/token": {"get"},
         "/compute/api/legal/terms": {"get"},
         "/compute/api/system/notices": {"get"},
+        "/compute/api/version": {"get"},
         "/openapi.json": {"get"},
         "/skills.md": {"get"},
         "/compute/api/types": {"get"},

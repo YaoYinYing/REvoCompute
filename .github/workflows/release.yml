@@ -33,10 +33,10 @@ jobs:
       - name: Install the repository
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install --no-deps -e .
 
       - name: Validate the product tag
         run: >-
           python -m revocompute.release_governance verify-tag
           --tag "$GITHUB_REF_NAME"
-          --sha "$GITHUB_SHA"
+          --sha "$(git rev-list -n1 "$GITHUB_REF_NAME")"
