@@ -57,7 +57,19 @@ http {
         default 0;   # token present — do not log this request line
         ""      1;
     }
-    access_log /dev/stdout combined if=$loggable;
+
+    # Artifact-scoped download links carry their bearer token as a path
+    # segment.  These requests stay in the access log for operational
+    # visibility, but the request line is rewritten for the log only: ``$uri``
+    # is the normalized path, so an encoded or dot-segment spelling of the
+    # route is redacted as well, and every other request keeps its original
+    # line.
+    map $uri $log_request {
+        default $request;
+        ~*^/compute/api/artifact-downloads/ "$request_method /compute/api/artifact-downloads/[redacted] $server_protocol";
+    }
+    log_format revocompute_combined '$remote_addr - $remote_user [$time_local] "$log_request" $status $body_bytes_sent "$http_referer" "$http_user_agent"';
+    access_log /dev/stdout revocompute_combined if=$loggable;
 
     map $http_x_forwarded_proto $origin_proto {
         default $http_x_forwarded_proto;
@@ -71,6 +83,23 @@ http {
 
         location / {
             if (-f /srv/deployment/.maintenance) { return 503; }
+            proxy_pass http://web:${UPSTREAM_PORT};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $origin_proto;
+        }
+
+        # Bearer download links are the one route whose URL names a secret.
+        # The access log redacts it, but nginx error messages (an upstream
+        # timeout, for example) embed the raw request line and there is no
+        # error-log redaction hook.  Silence gateway error messages for this
+        # one route; the application's own redacted log still records failures.
+        location ~* ^/compute/api/artifact-downloads/ {
+            if (-f /srv/deployment/.maintenance) { return 503; }
+            error_log /dev/null emerg;
             proxy_pass http://web:${UPSTREAM_PORT};
             proxy_http_version 1.1;
             proxy_set_header Connection "";

@@ -9,7 +9,9 @@ upstream whose content types come from the Server's own
 ``media_type_for_path`` projection, so the allowlist is exercised against the
 types live artifacts actually carry. gzip is offered only for the projected
 text-like types, identity responses keep their ETag, and a 206 range is never
-compressed and stays byte-exact.
+compressed and stays byte-exact. Bearer download paths are logged with their
+token segment redacted, and that one route's gateway error messages are
+suppressed because the error log has no redaction hook.
 
 Caveat: this runs the host's nginx binary, not the pinned
 ``nginx:1.28-alpine`` image used by Compose. The Docker/Compose gate exercises
@@ -66,6 +68,13 @@ SCIENCE = {
 COMPRESSIBLE = ("/pdb", "/cif", "/mmcif", "/gro", "/fasta", "/csv")
 INCOMPRESSIBLE = ("/xtc", "/dcd", "/zip", "/png")
 
+BEARER_VALID = "dummy-valid-token-000000000001"
+BEARER_EXPIRED = "dummy-expired-token-00000000001"
+BEARER_TAMPERED = "dummy-tampered-token-0000000001"
+BEARER_PATHS = tuple(
+    f"/compute/api/artifact-downloads/{token}" for token in (BEARER_VALID, BEARER_EXPIRED, BEARER_TAMPERED)
+)
+
 pytestmark = pytest.mark.skipif(
     not (TEMPLATE.is_file() and NGINX),
     reason="requires the nginx binary and the deployed template",
@@ -106,6 +115,9 @@ class _Upstream(BaseHTTPRequestHandler):
                 media_type_for_path("model.pdb"),
                 {"Content-Range": f"bytes {start}-{end - 1}/{len(RANGE_BODY)}"},
             )
+        elif self.path.startswith("/compute/api/artifact-downloads/"):
+            token = self.path.rsplit("/", 1)[-1]
+            self._send(200 if token == BEARER_VALID else 404, b"artifact bytes\n", "text/plain")
         else:
             self._send(500, b"<html>error</html>", "text/html")
 
@@ -152,9 +164,11 @@ def gateway(tmp_path):
     )
     config = tmp_path / "nginx.conf"
     config.write_text(rendered, encoding="utf-8")
+    access_log = tmp_path / "access.log"
+    access_handle = access_log.open("wb")
     process = subprocess.Popen(
         [nginx, "-c", str(config), "-p", str(tmp_path), "-g", "daemon off;"],
-        stdout=subprocess.DEVNULL,
+        stdout=access_handle,
         stderr=subprocess.PIPE,
     )
     try:
@@ -169,13 +183,20 @@ def gateway(tmp_path):
                 time.sleep(0.05)
         else:  # pragma: no cover - startup failure
             raise AssertionError(process.stderr.read().decode(errors="replace"))
-        yield SimpleNamespace(port=gateway_port, root=tmp_path)
+        yield SimpleNamespace(
+            port=gateway_port,
+            root=tmp_path,
+            access_log=access_log,
+            error_log=tmp_path / "error.log",
+            upstream=upstream,
+        )
     finally:
         process.terminate()
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:  # pragma: no cover
             process.kill()
+        access_handle.close()
         upstream.shutdown()
         upstream.server_close()
 
@@ -191,6 +212,46 @@ def _get(gateway, path: str, *, accept_encoding: str | None = None, method: str 
     result = (response.status, {key.lower(): value for key, value in response.getheaders()}, body)
     connection.close()
     return result
+
+
+def _wait_for_text(path: Path, needle: str, *, timeout: float = 5) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        if needle in text:
+            return text
+        time.sleep(0.05)
+    return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+
+
+def test_bearer_tokens_are_redacted_from_the_access_log(gateway):
+    for path in BEARER_PATHS:
+        _get(gateway, path)
+    # A differently-cased spelling is not the bearer route, but it must not be
+    # able to smuggle the token into the log either.
+    _get(gateway, f"/Compute/api/artifact-downloads/{BEARER_VALID}")
+    _get(gateway, "/normal-log-line")
+
+    log = _wait_for_text(gateway.access_log, "GET /normal-log-line")
+
+    for token in (BEARER_VALID, BEARER_EXPIRED, BEARER_TAMPERED):
+        assert token not in log
+    assert '"GET /compute/api/artifact-downloads/[redacted] HTTP/1.1"' in log
+    # Ordinary requests are still logged with their real request line.
+    assert '"GET /normal-log-line HTTP/1.1"' in log
+
+
+def test_bearer_tokens_are_absent_from_the_gateway_error_log(gateway):
+    gateway.upstream.shutdown()
+    gateway.upstream.server_close()
+
+    _get(gateway, BEARER_PATHS[0])
+    _get(gateway, "/normal-after-upstream-failure")
+
+    log = _wait_for_text(gateway.error_log, "/normal-after-upstream-failure")
+
+    assert BEARER_VALID not in log
+    assert "/normal-after-upstream-failure" in log
 
 
 def test_gzip_is_negotiated_for_json_and_identity_keeps_its_etag(gateway):

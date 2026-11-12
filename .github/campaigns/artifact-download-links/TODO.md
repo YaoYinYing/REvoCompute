@@ -4,8 +4,10 @@ Landing order: #150 (response compression, Nginx template) → #151. The bearer
 route declares a full representation `Content-Encoding: identity` with
 `Cache-Control: no-transform` so #150's compression cannot weaken the strong
 artifact ETag; 206 responses were already excluded from compression by #150.
-The Nginx token-log map remains #150-owned; #151 supplies the Flask-level
-redacted log path (`x-log-path`) that the gateway format can consume.
+#151 merges #150 and adds the gateway token-log map on top of its template: the
+access log redacts the bearer path segment, and the one bearer location silences
+nginx error messages, whose request line has no redaction hook. The Flask-level
+redacted log path (`x-log-path`) remains the gunicorn-side control.
 
 - [x] Audit existing GET/HEAD/Range/If-Range, publication resolver and access-control behavior with byte-exact fixtures.
 - [x] Design per-artifact issuance, TTL/signature, hashed revocable grants, key rotation, token/redaction/logging and API schema.

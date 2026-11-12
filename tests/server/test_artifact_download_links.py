@@ -380,6 +380,92 @@ def test_if_range_serves_the_full_representation_for_a_stale_validator(monkeypat
         assert response.headers["ETag"] == etag
 
 
+def test_if_range_requires_the_strong_published_validator(monkeypatch, tmp_path) -> None:
+    module = _load(monkeypatch, tmp_path)
+    content = bytes(range(256))
+    task_id, _root = _published_task(module, tmp_path, {"result.bin": content})
+    url = _issue(module.app.test_client(), _test_client_auth(module), task_id, "result.bin").get_json()[
+        "download_url"
+    ]
+    client = module.app.test_client()
+
+    full = client.get(url, headers={"Accept-Encoding": "gzip"})
+    assert full.status_code == 200
+    # The identity declaration keeps the full representation untransformable, so
+    # a gateway compressor cannot replace the strong validator with a weak one.
+    assert full.headers["Content-Encoding"] == "identity"
+    strong = full.headers["ETag"]
+    assert strong.startswith('"') and not strong.startswith("W/")
+    assert full.data == content
+    assert full.headers["Content-Length"] == str(len(content))
+
+    matched = client.get(
+        url, headers={"Accept-Encoding": "gzip", "Range": "bytes=32-47", "If-Range": strong}
+    )
+    assert matched.status_code == 206
+    assert matched.data == content[32:48]
+    assert matched.headers["Content-Range"] == "bytes 32-47/256"
+    assert matched.headers["Content-Length"] == "16"
+    assert matched.headers["ETag"] == strong
+
+    # Only an exact strong match may resume a range.  A weak validator (the
+    # form a compressor emits), a different publication and an HTTP date all
+    # return the complete representation instead.
+    stale = (
+        f"W/{strong}",
+        '"' + hashlib.sha256(b"another publication").hexdigest() + '"',
+        "Wed, 21 Oct 2015 07:28:00 GMT",
+    )
+    for validator in stale:
+        response = client.get(
+            url,
+            headers={"Accept-Encoding": "gzip", "Range": "bytes=32-47", "If-Range": validator},
+        )
+        assert response.status_code == 200, validator
+        assert response.data == content, validator
+        assert response.headers["Content-Encoding"] == "identity", validator
+        assert response.headers["ETag"] == strong, validator
+
+
+def test_a_wrong_scope_token_or_grant_is_refused(monkeypatch, tmp_path) -> None:
+    module = _load(monkeypatch, tmp_path)
+    task_id, _root = _published_task(module, tmp_path)
+    owner = _owner_user_id(module)
+    artifact = {
+        "path": "result.txt",
+        "sha256": hashlib.sha256(_CONTENT).hexdigest(),
+        "size": len(_CONTENT),
+    }
+    link = artifact_links.issue_download_link(
+        task_id=task_id, artifact=artifact, owner_user_id=owner, ttl_seconds=60
+    )
+    module.task_store.create_artifact_download_link(
+        token_id_hash=link["token_id_hash"],
+        task_id=task_id,
+        artifact_path=artifact["path"],
+        artifact_sha256=artifact["sha256"],
+        artifact_size=artifact["size"],
+        owner_user_id=owner,
+        scope="write",
+        issued_at=link["issued_at_epoch"],
+        expires_at=link["expires_at_epoch"],
+    )
+    client = module.app.test_client()
+    url = f"/compute/api/artifact-downloads/{link['token']}"
+
+    # The stored grant's scope decides, whatever the signed claim says.
+    assert client.get(url).status_code == 404
+
+    with module.task_store.engine.begin() as conn:
+        conn.execute(
+            sa.update(module.task_store.artifact_download_links_table).values(
+                scope=artifact_links.SCOPE
+            )
+        )
+    wrong_scope = artifact_links._serializer().dumps({**link["payload"], "scope": "write"})
+    assert client.get(f"/compute/api/artifact-downloads/{wrong_scope}").status_code == 404
+
+
 def test_malformed_and_multipart_ranges_never_claim_what_is_not_served(monkeypatch, tmp_path) -> None:
     module = _load(monkeypatch, tmp_path)
     task_id, _root = _published_task(module, tmp_path, {"result.txt": _CONTENT})
