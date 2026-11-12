@@ -754,6 +754,9 @@ export class ResultWorkspace {
   }
   /** Open a new draft seeded from this authorized Task; never rerun it. */
   private async cloneAction(control: HTMLButtonElement): Promise<void> {
+    // Disabling the focused control blurs it to the document, so remember
+    // whether the reader was operating it by keyboard before the request.
+    const restoreFocus = document.activeElement === control;
     control.disabled = true;
     try {
       const plan = await createClonePlan(this.taskId);
@@ -761,9 +764,11 @@ export class ResultWorkspace {
       // download URL. The Create Task route resolves the plan itself.
       window.location.assign(`/compute/create_task?clone=${encodeURIComponent(plan.plan_id)}`);
     } catch {
+      // Re-enable before focusing: a disabled control cannot take focus.
       control.disabled = false;
       this.nodes.status.hidden = false;
       this.nodes.status.replaceChildren(element('strong', '', t('results.cloneFailed')));
+      if (restoreFocus) control.focus();
     }
   }
   private async archiveAction(): Promise<void> {

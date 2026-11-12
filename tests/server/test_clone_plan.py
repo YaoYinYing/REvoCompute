@@ -484,6 +484,12 @@ def test_current_constraints_block_recorded_values_but_compatible_arrays_are_kep
         "label", "too long", {"type": "string", "maxLength": 4, "__recorded_type__": "str"}
     )
     assert oversized is not None and oversized["code"] == "parameter_format_invalid"
+    # A calendar date's shape can pass the explicit pre-check while the date
+    # itself is impossible; the schema's format checker is what rejects it.
+    _, impossible_date = clone_plan._compatible_parameter(
+        "start", "2026-02-30", {"type": "string", "format": "date", "__recorded_type__": "str"}
+    )
+    assert impossible_date is not None and impossible_date["code"] == "parameter_format_invalid"
 
     # Array values are a list at the verified-value layer even though the form
     # recorded them through a text control; unchanged constraints are accepted

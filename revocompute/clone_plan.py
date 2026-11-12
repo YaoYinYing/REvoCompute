@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 
 #: How long a clone-plan reference stays resolvable. A draft is opened
 #: immediately after the button click; the window only needs to cover that hop.
@@ -322,7 +322,7 @@ def _compatible_parameter(
     # rather than prefill it silently.
     contract = {key: item for key, item in property_schema.items() if key != "__recorded_type__"}
     try:
-        errors = list(Draft202012Validator(contract).iter_errors(value))
+        errors = list(Draft202012Validator(contract, format_checker=FormatChecker()).iter_errors(value))
     except Exception:
         return None, _blocked(
             name,

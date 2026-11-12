@@ -1110,7 +1110,7 @@
         "summary": "Create a read-only Clone & Reuse plan for an existing Task",
         "description": "Resolves one visible source Task's recorded parameter values and immutable input metadata against the Task's *current* schema, and returns a bounded typed plan with every incompatible value reported by field. It never mutates the source, derives a Task ID, reserves resources, or reads file bytes. The returned plan_id is an opaque, owner-scoped, short-lived reference: GET /compute/api/clone-plans/{plan_id} re-resolves the plan against the current contract, so a schema change between the click and the draft is observed.",
         "operationId": "createClonePlan",
-        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
         "parameters": [{"$ref": "#/components/parameters/TaskId"}],
         "responses": {
           "201": {"description": "Plan resolved and its short-lived reference created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ClonePlanResponse"}}}},

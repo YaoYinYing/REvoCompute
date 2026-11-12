@@ -618,14 +618,19 @@ export class Dashboard {
     if (action === 'select') { (target as HTMLInputElement).checked ? this.selected.add(task.task_id) : this.selected.delete(task.task_id); this.syncSelectionState(); return; }
     if (action === 'clone') {
       const control = target as HTMLButtonElement;
+      // Disabling the focused control blurs it to the document, so remember
+      // whether the reader was operating it by keyboard before the request.
+      const restoreFocus = document.activeElement === control;
       control.disabled = true;
       try {
         const plan = await createClonePlan(task.task_id);
         // Only the opaque reference travels; the draft re-resolves the plan.
         window.location.assign(`/compute/create_task?clone=${encodeURIComponent(plan.plan_id)}`);
       } catch {
+        // Re-enable before focusing: a disabled control cannot take focus.
         control.disabled = false;
         this.shell.notify(t('dashboard.cloneFailed'), 'error');
+        if (restoreFocus) control.focus();
       }
       return;
     }

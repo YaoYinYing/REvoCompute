@@ -185,6 +185,18 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         {"bearerAuth": []},
         {"apiKeyAuth": []},
     ]
+    # The POST refuses cookie-only callers (``require_bearer_auth``), so the
+    # contract must not advertise session auth for it. The plan's GET is a
+    # read-only document and keeps the cookie option.
+    assert spec["paths"]["/compute/api/tasks/{task_id}/clone-plan"]["post"]["security"] == [
+        {"bearerAuth": []},
+        {"apiKeyAuth": []},
+    ]
+    assert spec["paths"]["/compute/api/clone-plans/{plan_id}"]["get"]["security"] == [
+        {"cookieAuth": []},
+        {"bearerAuth": []},
+        {"apiKeyAuth": []},
+    ]
 
 
 def test_served_openapi_declares_only_live_api_routes(monkeypatch, tmp_path):
