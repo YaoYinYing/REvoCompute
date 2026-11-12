@@ -616,6 +616,10 @@ def test_bearer_requests_log_a_redacted_path(monkeypatch, tmp_path) -> None:
         f"/compute/api/artifact-downloads/{token}%00",
         f"/compute/api/%61rtifact-downloads/{token}",
         f"/compute/api/%2561rtifact-downloads/{token}",
+        f"/compute/api/artifact-downloads/{token}/../../other",
+        f"/compute/api/artifact-downloads/{token}/%2e%2e/%2e%2e/other",
+        f"//compute/api/artifact-downloads/{token}",
+        f"//compute/api/%61rtifact-downloads/{token}/../../other",
     )
     for spelling in spellings:
         assert artifact_links.redacted_request_path(spelling) == redacted, spelling

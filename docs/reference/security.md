@@ -279,9 +279,14 @@ never a login credential: it authorizes no Task list, API, or other artifact.
   content `ETag` with a weak one; `If-Range` is honored only for an exact strong
   validator, and 206 responses stay byte-exact and uncompressed.
 - The gateway and application access logs redact the token-bearing request
-  path. Redaction normalizes case, separators, dot segments and percent
-  encodings (including double-encoded bytes and an encoded NUL), so a malformed
-  spelling that fails the route cannot persist a token. Gateway error messages
-  for that route are suppressed because nginx error logs embed the raw request
-  line and have no redaction hook; the application still records its own
-  redacted error.
+  path. The application checks the raw and repeatedly unquoted path for the
+  marker before resolving anything, and folds duplicate and `.` separators
+  without ever resolving `..`; a leading `//` is treated as a path, not a URL.
+  The gateway matches the marker in the raw request line and normalized URI
+  (including `%25` and `%00`) and rejects a request URI containing a parent-dot
+  segment with `400` before proxying, because a resolved `..` can remove the
+  marker from `$uri` while the raw request line still names the token. Gateway
+  error messages for the bearer route are suppressed; the application still
+  records its own redacted error. Tradeoff: a request URI with a parent-dot
+  segment is rejected, and a URI containing `%25` or a decoded bare `%` is
+  access-log-redacted even when it is not a bearer request.

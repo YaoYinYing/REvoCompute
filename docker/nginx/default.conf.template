@@ -93,6 +93,15 @@ http {
         server_name _;
         error_page 503 =503 /maintenance.html;
 
+        # A parent-dot segment can normalize the bearer marker out of ``$uri``
+        # while the raw request line still names the token.  Locations and
+        # ``error_log`` cannot match the raw line, so reject such a URI before
+        # any upstream can log it.  No legitimate request needs a ``..``
+        # segment; separators may be raw or percent-encoded.
+        if ($request_uri ~* "(^|/|%2f)(\.|%2e){2}(/|%2f|$)") {
+            return 400;
+        }
+
         location / {
             if (-f /srv/deployment/.maintenance) { return 503; }
             proxy_pass http://web:${UPSTREAM_PORT};

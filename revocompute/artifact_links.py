@@ -26,7 +26,7 @@ import secrets
 import time
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
@@ -37,8 +37,10 @@ PURPOSE = "artifact-download"
 
 #: The bearer route marker.  Its token segment is the only secret this module
 #: ever puts in a URL, and a path carrying this marker is redacted from logs.
+#: The marker alone (not the full prefix) is matched so a dot segment before it
+#: cannot hide it, while a dot segment after it is never resolved.
 _REDACTED_DOWNLOAD_PATH = "/compute/api/artifact-downloads/[redacted]"
-_DOWNLOAD_MARKER = "/compute/api/artifact-downloads"
+_DOWNLOAD_MARKER = "artifact-downloads"
 
 _DEFAULT_TTL_SECONDS = 60 * 60
 _MAX_TTL_SECONDS = 24 * 60 * 60
@@ -165,36 +167,38 @@ def token_id_hash(jti: str) -> str:
     return _jti_hash(jti)
 
 
-def _normalized_log_path(path: str) -> str:
-    """Collapse encodings, separators and dot segments for a log-only match."""
-    value = path
-    # A malformed spelling may carry a doubly encoded separator (``%252F``) or
-    # encoded marker letters (``%2561``); decode until stable, bounded.
-    for _ in range(3):
-        decoded = unquote(value, errors="replace")
-        if decoded == value:
-            break
-        value = decoded
-    segments: list[str] = []
-    for segment in value.replace("\\", "/").split("/"):
-        if segment in {"", "."}:
-            continue
-        if segment == "..":
-            if segments:
-                segments.pop()
-            continue
-        segments.append(segment)
+def _collapse_separators(value: str) -> str:
+    """Fold repeated separators and harmless ``.`` segments.
+
+    ``..`` segments are deliberately kept: resolving them would remove the
+    marker from ``.../<token>/../../other`` and let the token through.
+    """
+    segments = [segment for segment in value.replace("\\", "/").split("/") if segment not in {"", "."}]
     return "/" + "/".join(segments)
 
 
 def redacted_request_path(path: str) -> str:
     """A log-safe form of a request path that may carry a bearer token.
 
-    The bearer route is matched on a normalized, case-insensitive form so a
-    request that fails because of a malformed spelling -- case variation,
-    duplicate slashes, dot segments, encoded or double-encoded separators, or a
-    trailing encoded NUL -- still cannot persist the token in a log.
+    The marker is checked on the path itself before any normalization.  A
+    trailing ``/../../`` segment removes the marker when a path is resolved, so
+    normalizing first would let the token through; deleting the marker is
+    exactly the case that must still be redacted.  The input is treated as a
+    path, not a URL, because ``//host/path`` must not turn ``host`` into an
+    authority and hide the marker.  Repeated bounded unquoting covers encoded
+    and doubly encoded marker letters, separators and NULs.
     """
-    if _DOWNLOAD_MARKER in _normalized_log_path(urlsplit(path).path).lower():
+    value = path
+    for _ in range(4):
+        # Collapse duplicate separators only.  Resolving dot segments here would
+        # remove the marker from ``.../<token>/../../other`` and let the token
+        # through; the marker must be found before that removal.
+        if _DOWNLOAD_MARKER in _collapse_separators(value).lower():
+            return _REDACTED_DOWNLOAD_PATH
+        decoded = unquote(value, errors="replace")
+        if decoded == value:
+            break
+        value = decoded
+    if _DOWNLOAD_MARKER in _collapse_separators(value).lower():
         return _REDACTED_DOWNLOAD_PATH
     return path

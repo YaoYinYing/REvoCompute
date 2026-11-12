@@ -87,6 +87,9 @@ def _bearer_spellings(token: str) -> tuple[str, ...]:
         f"/compute/api/artifact-downloads/{token}%00",
         f"/compute/api/%61rtifact-downloads/{token}",
         f"/compute/api/%2561rtifact-downloads/{token}",
+        f"/compute/api/artifact-downloads/{token}/../../other",
+        f"/compute/api/artifact-downloads/{token}/%2e%2e/%2e%2e/other",
+        f"//compute/api/artifact-downloads/{token}",
     )
 
 
@@ -259,22 +262,32 @@ def test_bearer_tokens_are_absent_from_the_gateway_error_log(gateway):
     gateway.upstream.shutdown()
     gateway.upstream.server_close()
 
-    # Include the double-encoded, NUL and hidden-marker forms that the
-    # access-log map has to recognize in the raw or normalized URI.
+    # Include the double-encoded, NUL, hidden-marker and dot-segment forms that
+    # the access-log map has to recognize in the raw or normalized URI.
     for token in BEARER_TOKENS:
+        for spelling in (
+            f"/compute/api/artifact-downloads/{token}/../../other",
+            f"/compute/api/artifact-downloads/{token}/%2e%2e/%2e%2e/other",
+        ):
+            # The raw-line guard rejects these before any upstream can log them.
+            assert _get(gateway, spelling)[0] == 400, spelling
         for spelling in (
             f"/compute/api/artifact-downloads%252F{token}",
             f"/compute/api/artifact-downloads/{token}%00",
             f"/compute/api/%2561rtifact-downloads/{token}",
         ):
             _get(gateway, spelling)
-    _get(gateway, "/normal-after-upstream-failure")
+    # A dot-free bearer request still reaches the closed upstream, and a normal
+    # path still produces an unredacted error line.
+    assert _get(gateway, f"/compute/api/artifact-downloads/{BEARER_VALID}")[0] == 502
+    assert _get(gateway, "/normal-after-upstream-failure")[0] == 502
 
     log = _wait_for_text(gateway.error_log, "/normal-after-upstream-failure")
 
     for token in BEARER_TOKENS:
         assert token not in log
     assert "/normal-after-upstream-failure" in log
+    assert "/artifact-downloads/" not in log
 
 
 def test_gzip_is_negotiated_for_json_and_identity_keeps_its_etag(gateway):
