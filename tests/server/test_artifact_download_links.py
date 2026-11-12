@@ -592,12 +592,19 @@ def test_bearer_requests_log_a_redacted_path(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(module, "emit_event", capture)
     monkeypatch.setattr(module, "redacted_request_path", capture_redaction)
 
-    module.app.test_client().get(f"/compute/api/artifact-downloads/{token}")
+    redacted = "/compute/api/artifact-downloads/[redacted]"
+    client = module.app.test_client()
+    for path in (
+        f"/compute/api/artifact-downloads/{token}",
+        f"/Compute/api/artifact-downloads/{token}",
+        f"/compute/api//artifact-downloads/{token}",
+        f"/compute/api/artifact-downloads%252F{token}",
+    ):
+        client.get(path)
 
     assert token not in json.dumps(captured)
-    assert logged_paths == ["/compute/api/artifact-downloads/[redacted]"]
-    assert token not in logged_paths[0]
-    redacted = "/compute/api/artifact-downloads/[redacted]"
+    assert logged_paths and set(logged_paths) == {redacted}
+    assert all(token not in path for path in logged_paths)
     spellings = (
         f"/compute/api/artifact-downloads/{token}",
         f"/Compute/api/artifact-downloads/{token}",
