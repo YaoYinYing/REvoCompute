@@ -57,7 +57,7 @@ _PROFILE_FIELDS = frozenset({"full_name", "affiliation", "position", "pi_name"})
 
 _APP_PAGE = re.compile(
     r"/(?:api-docs|runners|runners/[^/]+|compute/terms"
-    r"|compute/(?:login|register|reset_password|user_verify|profile|quota|account/[^/]+|user_control|configuration|logs"
+    r"|compute/(?:login|register|reset_password|user_verify|profile|quota|version|account/[^/]+|user_control|configuration|logs"
     r"|runner_fleet|create_task|dashboard|demo|demo/replays/[^/]+|results/[0-9a-fA-F]{32}))"
 )
 
@@ -402,6 +402,12 @@ class FrontendFixtureRouter:
 
     def _system_notices(self, route: Any, query: Any) -> None:
         return route.fulfill(json={"notices": []})
+
+    def _version_info(self, route: Any, query: Any) -> None:
+        """The deployment's own build identity, exactly as the route serves it."""
+        if self.scenario.session.role in {"anonymous", "expired"}:
+            return route.fulfill(status=401, json={"error": "Authentication required"})
+        return route.fulfill(json=builders.build_version_info())
 
     def _environment_capability(self, route: Any, query: Any) -> None:
         """The deployment profile, exactly as the Server's public route states it."""
@@ -773,6 +779,7 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
     (re.compile(r"/compute/api/auth/register"), FrontendFixtureRouter._auth_register),
     (re.compile(r"/compute/api/legal/terms"), FrontendFixtureRouter._legal_terms),
     (re.compile(r"/compute/api/system/notices"), FrontendFixtureRouter._system_notices),
+    (re.compile(r"/compute/api/version"), FrontendFixtureRouter._version_info),
     (re.compile(r"/compute/api/environment"), FrontendFixtureRouter._environment_capability),
     (re.compile(r"/compute/api/demo/replays/(?P<scenario_id>[^/]+)/archive"), FrontendFixtureRouter._demo_replay_archive),
     (re.compile(r"/compute/api/demo/replays/(?P<scenario_id>[^/]+)/artifacts/(?P<path>.+)"), FrontendFixtureRouter._demo_replay_artifact),
