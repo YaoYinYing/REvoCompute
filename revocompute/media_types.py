@@ -13,8 +13,9 @@ is delivered, and when a Task structure input is served.
 
 Entries that are already compressed or non-textual stay
 ``application/octet-stream`` (or their existing binary type) so a gateway
-allowlist can never recompress them.  The table is explicit rather than
-environment-dependent: the same path yields the same type on every deployment.
+allowlist can never recompress them.  The explicit scientific and text entries
+are identical on every deployment; an unmapped suffix falls back to the host
+``mimetypes`` table and then ``application/octet-stream``.
 """
 
 from __future__ import annotations

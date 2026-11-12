@@ -130,10 +130,10 @@ def test_submission_snapshots_the_decoded_original_and_reuses_its_receipt(monkey
     ("payload", "encodings", "code"),
     [
         (b"not-gzip", "gzip", "input_encoding_invalid"),
-        (gzip.compress(FASTA)[:-4], "gzip", "input_encoding_invalid"),
-        (gzip.compress(FASTA) + b"trailing", "gzip", "input_encoding_invalid"),
-        (gzip.compress(gzip.compress(FASTA)), "gzip", "input_encoding_invalid"),
-        (gzip.compress(FASTA), "identity", "input_encoding_conflict"),
+        (gzip.compress(FASTA, mtime=0)[:-4], "gzip", "input_encoding_invalid"),
+        (gzip.compress(FASTA, mtime=0) + b"trailing", "gzip", "input_encoding_invalid"),
+        (gzip.compress(gzip.compress(FASTA, mtime=0), mtime=0), "gzip", "input_encoding_invalid"),
+        (gzip.compress(FASTA, mtime=0), "identity", "input_encoding_conflict"),
         (b"plain", "brotli", "input_encoding_unsupported"),
     ],
 )

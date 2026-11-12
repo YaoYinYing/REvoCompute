@@ -854,6 +854,12 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
         raise ToolWorkspaceError("Task artifact reference is unavailable")
     stream = resolved.pop("verified_stream")
     try:
+        # #156 gate: verified artifact bytes are materialized outside the decoded
+        # upload budget, so a request's total input is uploads + artifact bytes.
+        # Every shipped Tool has one {min: 1, max: 1} role, which keeps the
+        # total equal to one per-file-bounded input. A Tool that accepts more
+        # than one input must charge this stream to the same per-request budget
+        # before materializing it.
         # Materialize from the verified snapshot, not from the resolved name:
         # the bytes copied into the Tool workspace are exactly the bytes whose
         # manifest identity was checked, so a replacement between resolution and

@@ -60,9 +60,9 @@ def test_a_corrupt_crc_is_refused():
     ("payload", "code"),
     [
         (b"not gzip", "input_encoding_invalid"),
-        (gzip.compress(PAYLOAD)[:-4], "input_encoding_invalid"),
-        (gzip.compress(PAYLOAD) + b"x", "input_encoding_invalid"),
-        (gzip.compress(gzip.compress(PAYLOAD)), "input_encoding_invalid"),
+        (gzip.compress(PAYLOAD, mtime=0)[:-4], "input_encoding_invalid"),
+        (gzip.compress(PAYLOAD, mtime=0) + b"x", "input_encoding_invalid"),
+        (gzip.compress(gzip.compress(PAYLOAD, mtime=0), mtime=0), "input_encoding_invalid"),
     ],
 )
 def test_invalid_gzip_forms_are_refused(payload, code):
