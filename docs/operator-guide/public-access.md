@@ -17,9 +17,12 @@ SVG, text and PDB/mmCIF/GRO structure media types) and adds
 scientific media-type projection, so live artifact and structure-input
 downloads carry them even though the runtime image has no host MIME database.
 Binary containers, images, archives and `application/octet-stream` are never
-compressed, and nginx does not compress a 206 ranged response, so byte-exact
-range delivery is preserved. Upload bodies are not compressed at the gateway:
-clients may gzip individual file parts under the API's per-file-part contract.
+compressed. A compressed 200 response carries a weak ETag while the identity
+representation keeps the upstream strong validator, and nginx does not compress
+a 206 partial response or a 416 range error, so byte-exact range delivery and
+range-error semantics are preserved. Upload bodies are not compressed at the
+gateway: clients may gzip individual file parts under the API's per-file-part
+contract.
 The Tool call location carries its own `TOOL_CLIENT_MAX_BODY_SIZE` (default
 `17m`) so a larger Tool tier can raise it without changing the 16 MiB cap for
 ordinary Task submissions.
