@@ -452,8 +452,10 @@ def test_user_storage_pressure_reclaims_only_that_users_terminal_workspace(monke
         other_id,
         expected=("queued",),
         status="finished",
-        finished_at=now + 1,
-        expires_at=now + 86401,
+        # Older than the owner's terminal row, so a reclaimer that does not
+        # skip other tenants would evict this row first.
+        finished_at=now - 1,
+        expires_at=now + 86399,
         result_manifest_json='{"outputs":{}}',
     )
 
