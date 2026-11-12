@@ -128,6 +128,18 @@ def test_focused_last_parameter_is_visible_above_the_sticky_rail(
         # one extra row is the fixture's own required sequence input.
         expect(page.locator(".ct-validation-row.error")).to_have_count(required + 1)
 
+    # The reservation follows the rail's measured height, so wait for it to
+    # catch up with the rows before positioning a field: measuring a stale
+    # reservation would test the observation's timing, not the layout.
+    page.wait_for_function(
+        """() => {
+            const rail = document.querySelector('.ct-snapshot-panel');
+            const field = document.querySelector('[data-ct-parameter="p1"]');
+            return parseFloat(getComputedStyle(field).scrollMarginBottom) >= rail.getBoundingClientRect().height;
+        }""",
+        timeout=15_000,
+    )
+
     # Put the last field just under the rail's lower edge while it is still fully
     # inside the viewport. This is the state that used to be left un-scrolled:
     # the browser sees a visible field and only moves it when the control itself
