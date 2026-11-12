@@ -47,6 +47,57 @@ guessed. The family's `requirements.lock` pins the parser and every wheel hash;
 build its SIF directly with Apptainer and do not install that stack into the
 Server image or a Runner SIF.
 
+Build the family SIF from its own directory, because `%files` paths in the
+definition are relative to the build working directory:
+
+```bash
+cd docker/tools/mdconvert
+apptainer build mdconvert.sif mdconvert.def
+apptainer test mdconvert.sif
+apptainer exec mdconvert.sif python3 /opt/revocompute-tool/tool_cli.py health
+```
+
+The output is `docker/tools/mdconvert/mdconvert.sif`. Record its SHA-256 and copy
+it to the target deployment's `TOOL_IMAGE_DIR` as `mdconvert.sif`; the
+`requirements.lock` install remains the definition's only dependency source and
+is verified with `--require-hashes` during the build. Building with the
+repository-root path `apptainer build docker/tools/mdconvert/mdconvert.sif
+docker/tools/mdconvert/mdconvert.def` does not work, because `%files` resolves
+against the caller's working directory.
+
+### mdconvert scientific contract
+
+The released input pair is GROMACS **GRO + XTC**, read by the pinned
+MDAnalysis 2.9.0 stack. Amber PRMTOP/NetCDF, CHARMM/NAMD PSF+DCD, LAMMPS
+DATA+trajectory and OpenMM PDB/mmCIF+DCD remain disabled until their unit,
+atom-order and periodic-box contracts have an audited proof; the Tool refuses
+those pairs with `unsupported_format_pair` rather than guessing.
+
+The conversion preserves source atom order and the topology's atom, residue
+and frame identity, applies the GRO reader's nm-to-Angstrom contract exactly
+once, and records original frame times and unit cells. It never reconstructs
+periodic wrapping, changes chemistry, hydrogens, charges, protonation or
+missing atoms, and it refuses unwrapping without bond evidence. Output is one
+reference PDB plus at most 50 ordered single-model snapshots (51 total), each
+with a member of the same stable atom map. GRO carries no chain or element
+column, so every atom is written to PDB chain `X` with a blank element; the
+manifest emits `chain_identity_synthetic` and `elements_not_representable`, and
+selected atoms whose chain/residue/atom identity would collide are refused.
+CAVER start-point and radius inference on that representation requires the
+external CAVER JAR acceptance and is not claimed by synthetic fixtures.
+
+The family's `conversion_manifest.json` records source SHA-256 and sizes,
+parser versions, the atom-map digest, representation policy, selected frame
+times and boxes, transitions, warnings and output hashes. Child refusals are
+published as typed `error_class`/`error` values.
+
+Accepted evidence for this release is: the SIF build, `%test` and health; an
+isolated local API-to-Tool call with a 100 MB-class GRO/XTC pair, 51 frames,
+verified digests, read-only binds, deterministic output and bounded RSS; and
+the scientific/CAVER-parser contracts in the hashed-dependency CI lane. A real
+deployment call through Slurm, a CAVER JAR run and production promotion remain
+separate acceptance gates.
+
 Use `revocompute-tool-status --json` inside the Tool worker to inspect image identity, COLD/WARM/UNAVAILABLE state, active calls, last use, recent startup failure, cold starts, warm hits, and idle shutdowns. This output contains no user filenames, parameters, sequences, structures, or molecules.
 
 For deployment, pause admission, allow active calls at most the configured five-minute bound, stop the old Tool worker and its generation-specific instances, deploy definitions and SIFs together, then restart web, maintenance, and workers COLD. Do not pre-warm families. Use a shortened idle TTL for acceptance and prove cold start, warm reuse, concurrent single-flight startup, workspace isolation, timeout recovery, idle stop, and cold restart before production enablement.

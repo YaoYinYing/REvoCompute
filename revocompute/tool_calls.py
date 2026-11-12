@@ -255,16 +255,19 @@ class ToolCallDatabase:
                 update(self.table).where(self.table.c.tool_call_id == tool_call_id).values(**fields)
             ).rowcount == 1
 
+    def accounted_bytes(self, user_id: int | None = None) -> int:
+        """Actual bytes plus reserved output headroom, globally or for one user."""
+        statement = select(
+            func.coalesce(func.sum(self.table.c.workspace_bytes + self.table.c.reserved_bytes), 0)
+        )
+        if user_id is not None:
+            statement = statement.where(self.table.c.submitted_by_user_id == user_id)
+        with self.engine.connect() as conn:
+            return int(conn.execute(statement).scalar_one())
+
     def total_accounted_bytes(self) -> int:
         """Actual bytes plus reserved output headroom across every row."""
-        with self.engine.connect() as conn:
-            return int(
-                conn.execute(
-                    select(
-                        func.coalesce(func.sum(self.table.c.workspace_bytes + self.table.c.reserved_bytes), 0)
-                    )
-                ).scalar_one()
-            )
+        return self.accounted_bytes()
 
     def cleanup_candidates(self, *, now: float, storage_pressure: bool = False) -> list[dict[str, Any]]:
         condition = self.table.c.status.in_(TERMINAL_STATUSES)

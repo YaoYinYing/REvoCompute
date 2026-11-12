@@ -162,6 +162,15 @@ invented release numbers or dates.
       respecting safe-area insets, the mobile visual viewport, and reduced
       motion, without adding a second submit control.
 
+### Fixed
+- Tools:
+  - Reclaim a submitting user's terminal workspaces when only the per-user
+    storage share is exhausted, while leaving running calls and other tenants'
+    terminal workspaces untouched.
+- Documentation:
+  - Retire the PR campaign DESIGN/TODO notes into the canonical Tool runtime,
+    operator Tool and Task-contract pages.
+
 ## [0.1.0+2890609] - 2026-11-12
 
 Historical development snapshot of `main` at commit

@@ -829,14 +829,36 @@ def tool_parameter_schema(tool_type):
         return jsonify({"error": "Tool not found"}), 404
 
 
-def _reclaim_tool_storage(required_bytes: int) -> bool:
-    if tool_calls.total_accounted_bytes() + required_bytes <= TOOL_CONFIG.storage_max_bytes:
+def _reclaim_tool_storage(required_bytes: int, user_id: int) -> bool:
+    """Evict terminal workspaces until both storage bounds admit the call.
+
+    Admission has a global budget and an equal per-user share of it.  A call
+    that fails only the user share must still reclaim the user's own terminal
+    workspaces; reclaiming another tenant's or a running call's bytes cannot
+    make the submitting user fit and is not allowed.
+    """
+    global_limit = TOOL_CONFIG.storage_max_bytes
+    user_allowance = max(global_limit // TOOL_CONFIG.max_active_per_user, required_bytes)
+
+    def shortfalls() -> tuple[bool, bool]:
+        global_short = tool_calls.total_accounted_bytes() + required_bytes > global_limit
+        user_short = tool_calls.accounted_bytes(user_id) + required_bytes > user_allowance
+        return global_short, user_short
+
+    global_short, user_short = shortfalls()
+    if not global_short and not user_short:
         return True
     for candidate in tool_calls.cleanup_candidates(now=time.time(), storage_pressure=True):
+        # cleanup_candidates returns terminal rows only.  When the global
+        # budget already fits, only the submitting user's rows can close the
+        # remaining per-user shortfall.
+        if not global_short and int(candidate["submitted_by_user_id"]) != user_id:
+            continue
         call_id = str(candidate["tool_call_id"])
         tool_workspace.delete(call_id)
         tool_calls.delete_terminal(call_id)
-        if tool_calls.total_accounted_bytes() + required_bytes <= TOOL_CONFIG.storage_max_bytes:
+        global_short, user_short = shortfalls()
+        if not global_short and not user_short:
             return True
     return False
 
@@ -1055,7 +1077,9 @@ def submit_tool_call(name):
             # without touching admission.  A storage rejection — global or the
             # caller's own share — may reclaim terminal workspaces, and then
             # only once.
-            if exc.reason not in {"storage_limit", "user_storage_limit"} or not _reclaim_tool_storage(required_bytes):
+            if exc.reason not in {"storage_limit", "user_storage_limit"} or not _reclaim_tool_storage(
+                required_bytes, int(g.current_user["id"])
+            ):
                 raise
             reservation = reserve_call()
         if not reservation.created:

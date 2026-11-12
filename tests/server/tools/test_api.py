@@ -389,6 +389,82 @@ def test_storage_pressure_evicts_terminal_calls_but_never_active_calls(monkeypat
     assert active_root.exists()
 
 
+def test_user_storage_pressure_reclaims_only_that_users_terminal_workspace(monkeypatch, tmp_path):
+    module = _app(
+        monkeypatch,
+        tmp_path,
+        {
+            "TOOL_STORAGE_MAX_BYTES": "3000",
+            "TOOL_REQUEST_MAX_BYTES": "500",
+            "TOOL_OUTPUT_MAX_BYTES": "500",
+            "TOOL_MAX_ACTIVE_PER_USER": "3",
+        },
+    )
+    monkeypatch.setattr(module.celery, "send_task", lambda *_args, **_kwargs: SimpleNamespace(id="queued"))
+    client = module.app.test_client()
+    owner_headers = _test_client_auth(module, "owner")
+    _test_client_auth(module, "other")
+    owner = module.app.config["user_db"].get_user_by_username("owner")
+    other = module.app.config["user_db"].get_user_by_username("other")
+
+    def submit(headers):
+        return client.post(
+            "/compute/api/tools/fasta_inspect/call",
+            headers=headers,
+            data={
+                "parameters": "{}",
+                "file_roles": "sequence",
+                "files": (io.BytesIO(b">sample\nACDE\n"), "sample.fasta"),
+            },
+        )
+
+    first = submit(owner_headers)
+    assert first.status_code == 202, first.get_json()
+    first_id = first.get_json()["tool_call_id"]
+    now = time.time()
+    assert module.tool_calls.transition(
+        first_id,
+        expected=("queued",),
+        status="finished",
+        finished_at=now,
+        expires_at=now + 86400,
+        result_manifest_json='{"outputs":{}}',
+    )
+
+    other_id = new_tool_call_id()
+    other_root = module.tool_workspace.create(other_id)
+    (other_root / "scratch" / "other.bin").write_bytes(b"z" * 700)
+    module.tool_calls.reserve(
+        tool_call_id=other_id,
+        tool_type="fasta_inspect",
+        runtime_family="bioio",
+        runtime_identity="fixture",
+        user_id=int(other["id"]),
+        username="other",
+        parameter_json="{}",
+        input_manifest_json='{"inputs":{}}',
+        idempotency_key=None,
+        per_user_limit=3,
+        global_limit=8,
+        workspace_bytes=700,
+    )
+    assert module.tool_calls.transition(
+        other_id,
+        expected=("queued",),
+        status="finished",
+        finished_at=now + 1,
+        expires_at=now + 86401,
+        result_manifest_json='{"outputs":{}}',
+    )
+
+    second = submit(owner_headers)
+
+    assert second.status_code == 202, second.get_json()
+    assert module.tool_calls.get(first_id) is None
+    assert module.tool_calls.get(other_id) is not None
+    assert other_root.exists()
+
+
 def test_active_calls_reserve_output_headroom_against_the_global_budget(monkeypatch, tmp_path):
     module = _app(
         monkeypatch,
