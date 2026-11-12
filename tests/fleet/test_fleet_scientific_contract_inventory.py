@@ -252,8 +252,8 @@ def test_every_family_live_test_plan_the_loader_accepts_covers_its_own_tasks(inv
 
     A family whose plan the loader rejects is reported as ``invalid`` with the
     loader's own message rather than dropped; a family with an accepted plan must
-    have every one of its discovered Tasks in the smoke collection, which is the
-    same invariant the production Doctor enforces.
+    have every executable (non-deprecated) discovered Task in the smoke
+    collection, which is the same invariant the production Doctor enforces.
     """
     families = inventory["families"]
     accepted = [row for row in families if row["live_test_plan"] == "valid"]
@@ -266,7 +266,8 @@ def test_every_family_live_test_plan_the_loader_accepts_covers_its_own_tasks(inv
         if row["live_test_plan"] == "absent":
             continue
         assert row["smoke_missing_tasks"] == []
-        assert set(row["smoke_cases"]) >= set(row["tasks"])
+        assert set(row["smoke_required_tasks"]) <= set(row["tasks"])
+        assert set(row["smoke_cases"]) >= set(row["smoke_required_tasks"])
         assert row["smoke_cases"] == sorted(set(row["smoke_cases"]))
 
 

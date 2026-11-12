@@ -54,6 +54,24 @@ def _config(tmp_path):
     return tmp_path / "runners"
 
 
+def test_doctor_excludes_a_deprecated_task_from_smoke_coverage(tmp_path):
+    root = _config(tmp_path)
+    family = root / "demo_impl"
+    plugin = yaml.safe_load((family / "plugin.yaml").read_text(encoding="utf-8"))
+    plugin["tasks"].append("tasks/retired/task.yaml")
+    (family / "plugin.yaml").write_text(yaml.safe_dump(plugin, sort_keys=False), encoding="utf-8")
+    (family / "tasks" / "retired").mkdir()
+    task = family / "tasks" / "retired" / "task.yaml"
+    task.write_text("id: retired\ndeprecated: true\nparameters: {type: object}\n", encoding="utf-8")
+
+    assert diagnose(root).ok
+
+    # The same descriptor without the flag is an executable Task and must be
+    # covered by the family's smoke collection.
+    task.write_text("id: retired\nparameters: {type: object}\n", encoding="utf-8")
+    assert any(item.code == "E3100" for item in diagnose(root).diagnostics)
+
+
 def test_doctor_reports_valid_minimal_configuration(tmp_path):
     report = diagnose(_config(tmp_path))
     assert report.ok
