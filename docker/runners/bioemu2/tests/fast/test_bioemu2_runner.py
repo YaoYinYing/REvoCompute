@@ -200,32 +200,41 @@ def _workspace(tmp_path, *, with_cli=False):
 
 def _run(
     tmp_path, asset_root, manifest, modules, input_file, params, extra_env=None,
-    role="sequence", extra_inputs=None, empty_roles=(),
+    role="sequence", extra_inputs=None, empty_roles=(), provide_steering=True,
 ):
     from runner_protocol import run_with_manifest
 
     output_dir = tmp_path / "outputs"
     capture = tmp_path / "calls.json"
-    steering = tmp_path / "steering.pkl"
-    steering.write_bytes(b"steering dictionary")
-    steering_manifest = tmp_path / "steering.sha256"
-    steering_manifest.write_text(
-        f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  {steering}\n", encoding="utf-8"
-    )
+    extra_env = dict(extra_env or {})
     env = os.environ.copy()
+    # Steering is a propagation-only dependency; no other mode gets a fixture.
+    env.pop("BIOEMU2_STEERING_CCD", None)
+    env.pop("BIOEMU2_STEERING_CCD_MANIFEST", None)
     env.update(
         {
             "BIOEMU2_PYTHON": sys.executable,
             "BIOEMU2_ASSET_ROOT": str(asset_root),
             "BIOEMU2_ASSET_MANIFEST": str(manifest),
-            "BIOEMU2_STEERING_CCD": str(steering),
-            "BIOEMU2_STEERING_CCD_MANIFEST": str(steering_manifest),
             "BIOEMU2_CALL": str(capture),
             "RUNNER_RUNTIME_ROOT": str(ROOT / "docker" / "runners"),
             "PYTHONPATH": str(modules),
         }
     )
-    env.update(extra_env or {})
+    if (
+        provide_steering
+        and extra_env.get("TASK_TYPE") == "bioemu2_propagate"
+        and "BIOEMU2_STEERING_CCD" not in extra_env
+    ):
+        steering = tmp_path / "steering.pkl"
+        steering.write_bytes(b"steering dictionary")
+        steering_manifest = tmp_path / "steering.sha256"
+        steering_manifest.write_text(
+            f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  {steering}\n", encoding="utf-8"
+        )
+        env["BIOEMU2_STEERING_CCD"] = str(steering)
+        env["BIOEMU2_STEERING_CCD_MANIFEST"] = str(steering_manifest)
+    env.update(extra_env)
     completed = run_with_manifest(
         RUNNER, input_file, output_dir, env, params=params, role=role,
         extra_inputs=extra_inputs, empty_roles=empty_roles,
@@ -891,36 +900,42 @@ def test_configure_steering_cache_is_optional_and_rejects_a_missing_asset(tmp_pa
 
 
 def test_bioemu2_runner_verifies_the_steering_ccd_identity(tmp_path):
-    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
+    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "starting.cif"
+    starting.write_text("data_x\n_atom_site.id\n1\n", encoding="utf-8")
     steering = tmp_path / "ccd.pkl"
     steering.write_bytes(b"steering dictionary")
     steering_manifest = tmp_path / "steering.sha256"
     steering_manifest.write_text(
         f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  {steering}\n", encoding="utf-8"
     )
-    env = {
-        "BIOEMU2_STEERING_CCD": str(steering),
-        "BIOEMU2_STEERING_CCD_MANIFEST": str(steering_manifest),
-    }
+    env.update(
+        {
+            "BIOEMU2_STEERING_CCD": str(steering),
+            "BIOEMU2_STEERING_CCD_MANIFEST": str(steering_manifest),
+        }
+    )
 
     completed, _output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, fasta, {"num_samples": 1}, env
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
     )
     assert completed.returncode == 0, completed.stderr
 
     steering.write_bytes(b"tampered")
     completed, _output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, fasta, {"num_samples": 1}, env
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
     )
     assert completed.returncode != 0
     assert "steering CCD integrity verification failed" in completed.stderr
 
 
-def test_bioemu2_propagation_requires_a_configured_steering_dictionary(tmp_path):
+def test_bioemu2_propagation_fails_early_when_the_steering_dictionary_is_missing(tmp_path):
     asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
     starting = tmp_path / "protein.cif"
     starting.write_text("data_protein\n_atom_site.id\n1\n", encoding="utf-8")
-    env["BIOEMU2_STEERING_CCD"] = ""
+    env["BIOEMU2_STEERING_CCD"] = str(tmp_path / "missing.pkl")
 
     completed, output_dir, _ = _run(
         tmp_path, asset_root, manifest, modules, starting,
@@ -928,5 +943,116 @@ def test_bioemu2_propagation_requires_a_configured_steering_dictionary(tmp_path)
     )
 
     assert completed.returncode != 0
-    assert "steering CCD dictionary is not configured" in completed.stderr
+    assert "steering CCD dictionary is missing" in completed.stderr
     assert not (output_dir / "task_finished").exists()
+
+
+def test_bioemu2_propagation_fails_when_the_steering_dictionary_does_not_match(tmp_path):
+    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "protein.cif"
+    starting.write_text("data_protein\n_atom_site.id\n1\n", encoding="utf-8")
+    wrong_manifest = tmp_path / "wrong-steering.sha256"
+    wrong_manifest.write_text(f"{'0' * 64}  steering.pkl\n", encoding="utf-8")
+    env["BIOEMU2_STEERING_CCD_MANIFEST"] = str(wrong_manifest)
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
+    )
+
+    assert completed.returncode != 0
+    assert "steering CCD integrity verification failed" in completed.stderr
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_bioemu2_non_propagation_modes_do_not_require_a_steering_dictionary(tmp_path):
+    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
+
+    for task_type in ("bioemu2_equilibrium", "bioemu2_structure_prediction"):
+        case_dir = tmp_path / task_type
+        case_dir.mkdir()
+        completed, output_dir, _ = _run(
+            case_dir, asset_root, manifest, modules, fasta, {"num_samples": 1},
+            {"TASK_TYPE": task_type, "BIOEMU2_STEERING_CCD": str(tmp_path / "missing.pkl")},
+        )
+        assert completed.returncode == 0, (task_type, completed.stderr)
+        assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu2_runner_config_does_not_mount_propagation_only_assets():
+    from revocompute.task_types import _load_runner_config
+
+    config = _load_runner_config(str(FAMILY / "runner.yaml"))
+
+    assert [mount.host_path for mount in config.mounts] == ["/mnt/db/weights/bioemu2"]
+    assert "BIOEMU2_STEERING_CCD" not in config.env
+
+
+def test_bioemu2_propagation_uses_the_default_steering_asset_path(tmp_path):
+    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
+    steering = asset_root / "steering" / "boltz-1-ccd.pkl"
+    steering.parent.mkdir()
+    steering.write_bytes(b"steering dictionary")
+    steering_manifest = asset_root / "steering.sha256"
+    steering_manifest.write_text(
+        f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  steering/boltz-1-ccd.pkl\n",
+        encoding="utf-8",
+    )
+    env["BIOEMU2_STEERING_CCD_MANIFEST"] = str(steering_manifest)
+    starting = tmp_path / "protein.cif"
+    starting.write_text("data_protein\n_atom_site.id\n1\n", encoding="utf-8")
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
+        provide_steering=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert f"BioEmu2 steering CCD: {steering}" in completed.stdout
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu2_ccd_prefetch_does_not_consume_a_retry_for_invalid_urls(monkeypatch):
+    import requests
+
+    adapter = _adapter()
+    monkeypatch.setattr(adapter, "_ccd_url", lambda code: f"https://example.test/{code}.cif")
+    attempts = {"count": 0}
+
+    def fetch(_code):
+        attempts["count"] += 1
+        raise requests.exceptions.InvalidURL("bad URL")
+
+    with pytest.raises(RuntimeError, match="not retried"):
+        adapter.prefetch_ccd(["A1L3H"], fetch, sleep=lambda _: pytest.fail("must not sleep"))
+    assert attempts["count"] == 1
+
+
+def test_transient_request_error_rejects_permanent_request_failures():
+    import requests
+
+    adapter = _adapter()
+    for error in (
+        requests.exceptions.InvalidURL("invalid"),
+        requests.exceptions.InvalidSchema("schema"),
+        requests.exceptions.MissingSchema("missing"),
+        requests.exceptions.TooManyRedirects("redirects"),
+    ):
+        assert adapter._transient_request_error(error) is False, type(error).__name__
+    for error in (
+        requests.exceptions.ConnectionError("connection"),
+        requests.exceptions.Timeout("timeout"),
+        requests.exceptions.SSLError("tls"),
+        requests.exceptions.ChunkedEncodingError("dropped body"),
+    ):
+        assert adapter._transient_request_error(error) is True, type(error).__name__
+
+    class Response:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    for status_code, transient in ((429, True), (500, True), (400, False)):
+        error = requests.exceptions.HTTPError("http", response=Response(status_code))
+        assert adapter._transient_request_error(error) is transient, status_code
+    assert adapter._transient_request_error(requests.exceptions.HTTPError("no response")) is False

@@ -2,12 +2,8 @@ mounts:
   - host_path: "/mnt/db/weights/bioemu2"
     container_path: "/mnt/db/weights/bioemu2"
     mode: "ro"
-  - host_path: "/mnt/db/boltz"
-    container_path: "/mnt/db/boltz"
-    mode: "ro"
 env:
   BIOEMU2_CHECKPOINT_ROOT: "/mnt/db/weights/bioemu2/checkpoints/bioemu2-preview"
-  BIOEMU2_STEERING_CCD: "/mnt/db/boltz/ccd.pkl"
   HF_HUB_OFFLINE: "1"
   TRANSFORMERS_OFFLINE: "1"
 max_runtime_seconds: 14400

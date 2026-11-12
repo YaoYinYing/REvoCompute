@@ -297,8 +297,19 @@ def _transient_request_error(error: Exception) -> bool:
 
     if isinstance(error, requests.exceptions.HTTPError):
         response = error.response
-        return response is None or response.status_code == 429 or response.status_code >= 500
-    return isinstance(error, requests.exceptions.RequestException)
+        return response is not None and (response.status_code == 429 or response.status_code >= 500)
+    # SSLError is a ConnectionError subclass. ChunkedEncodingError reports a
+    # connection dropped mid-body, so a fresh request may succeed. InvalidURL,
+    # InvalidSchema, MissingSchema, and TooManyRedirects are permanent and must
+    # not retry.
+    return isinstance(
+        error,
+        (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        ),
+    )
 
 
 def prefetch_ccd(
@@ -460,8 +471,8 @@ def main() -> int:
     scratch = Path(tempfile.mkdtemp(prefix="revodesign-bioemu2."))
     os.environ["BIOEMU2_MSA_CACHE"] = str(scratch / "colabfold_msa")
     try:
-        configure_steering_cache(scratch, required=args.mode == "propagate")
         if args.mode == "propagate":
+            configure_steering_cache(scratch, required=True)
             propagate(manifest, args.output_dir, checkpoint)
         else:
             sample(manifest, args.output_dir, checkpoint, args.mode)

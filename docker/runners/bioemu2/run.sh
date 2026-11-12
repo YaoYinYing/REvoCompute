@@ -33,10 +33,21 @@ for relative in checkpoints/bioemu2-preview/checkpoint.ckpt checkpoints/bioemu2-
   verify_model_asset "$asset_manifest" "$asset_root" "$relative" BioEmu2 || exit 1
 done
 
+# The Task manifest's own type selects the adapter mode; nothing here looks at
+# an input filename.
+task_type="${TASK_TYPE:-bioemu2_equilibrium}"
+case "$task_type" in
+  bioemu2_equilibrium) mode=equilibrium ;;
+  bioemu2_structure_prediction) mode=structure ;;
+  bioemu2_propagate) mode=propagate ;;
+  *) echo "Unknown BioEmu2 task type: $task_type" >&2; exit 2 ;;
+esac
+
 # Ligand steering resolves its CCD dictionary through Hugging Face's local
-# cache, which stays offline. Verify the mounted dictionary before exposing it.
-steering_ccd="${BIOEMU2_STEERING_CCD:-}"
-if [[ -n "$steering_ccd" ]]; then
+# cache, which stays offline. Only propagation uses steering, and only
+# propagation may require the dictionary.
+if [[ "$mode" == propagate ]]; then
+  steering_ccd="${BIOEMU2_STEERING_CCD:-$asset_root/steering/boltz-1-ccd.pkl}"
   steering_manifest="${BIOEMU2_STEERING_CCD_MANIFEST:-$runtime_root/bioemu2/steering-ccd.sha256}"
   [[ -s "$steering_ccd" ]] || { echo "BioEmu2 steering CCD dictionary is missing: $steering_ccd" >&2; exit 1; }
   steering_sha=$(awk 'NF && $1 !~ /^#/ { print $1; exit }' "$steering_manifest")
@@ -48,17 +59,8 @@ if [[ -n "$steering_ccd" ]]; then
     echo "BioEmu2 steering CCD integrity verification failed: $steering_ccd" >&2
     exit 1
   }
+  export BIOEMU2_STEERING_CCD="$steering_ccd"
 fi
-
-# The Task manifest's own type selects the adapter mode; nothing here looks at
-# an input filename.
-task_type="${TASK_TYPE:-bioemu2_equilibrium}"
-case "$task_type" in
-  bioemu2_equilibrium) mode=equilibrium ;;
-  bioemu2_structure_prediction) mode=structure ;;
-  bioemu2_propagate) mode=propagate ;;
-  *) echo "Unknown BioEmu2 task type: $task_type" >&2; exit 2 ;;
-esac
 
 echo "REVODESIGN_STAGE:${task_type}"
 "${BIOEMU2_PYTHON:-python}" "${BIOEMU2_SAMPLE_SCRIPT:-$runtime_root/bioemu2/sample.py}" \
