@@ -248,7 +248,7 @@ describe('bounded register rendering', () => {
     const first = pageOf(rows, 1, 50);
     expect(first.rows).toHaveLength(50);
     expect([first.page, first.pages]).toEqual([1, 3]);
-    expect(pageSummary(first)).toBe('Showing 1–50 of 137 tasks');
+    expect(pageSummary(first)).toBe('Showing 1–50 of 137 loaded tasks');
 
     const last = pageOf(rows, 3, 50);
     expect(last.rows).toHaveLength(37);
@@ -276,9 +276,9 @@ describe('bounded register rendering', () => {
     expect(root.querySelectorAll<FakeNode>('tr')[0]!.textContent).toContain('Execution class');
 
     const state = root.querySelectorAll<FakeNode>('span').map(node => node.textContent);
-    expect(state.join(' ')).toContain('Showing 1–50 of 120 tasks');
+    expect(state.join(' ')).toContain('Showing 1–50 of 120 loaded tasks');
     expect(state.join(' ')).toContain('Page 1 of 3');
-    expect(state.join(' ')).toContain('120 of 120 tasks');
+    expect(state.join(' ')).toContain('120 of 120 loaded tasks');
   });
 
   it('states an unrecorded Task as unrecorded in every placement column', async () => {

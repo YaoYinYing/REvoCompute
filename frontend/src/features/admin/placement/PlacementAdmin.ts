@@ -120,7 +120,7 @@ export function pageOf<T>(items: readonly T[], page: number, size: number): Task
 
 /** The visible statement of what the table is showing. */
 export function pageSummary(page: TaskPage<unknown>): string {
-  return page.total ? `Showing ${page.first}–${page.last} of ${page.total} tasks` : 'No tasks match the current filters';
+  return page.total ? `Showing ${page.first}–${page.last} of ${page.total} loaded tasks` : 'No tasks match the current filters';
 }
 
 const COLUMNS = ['Task', 'Runner', 'Owner', 'Status', 'Execution class', 'Queue', 'Device', 'QoS', 'Constraint', 'Account', 'Exclusive', 'Submitted', 'Walltime'] as const;
@@ -236,7 +236,7 @@ export class PlacementAdmin {
     const visible = selectPlacements(this.tasks, this.query);
     const view = pageOf(visible, this.page, this.size);
     this.page = view.page;
-    this.count.textContent = `${visible.length} of ${this.tasks.length} tasks`;
+    this.count.textContent = `${visible.length} of ${this.tasks.length} loaded tasks`;
     this.pageState.textContent = this.failure || pageSummary(view);
     this.pageState.classList.toggle('error-state', Boolean(this.failure));
 

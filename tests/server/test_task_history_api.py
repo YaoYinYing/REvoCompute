@@ -315,6 +315,39 @@ def test_expired_cursor_restarts_at_page_one(module, actors, monkeypatch):
     assert response.get_json()["returned"] == 2
 
 
+def test_a_finish_transition_after_the_first_page_does_not_duplicate_or_backfill(module, actors):
+    newest = _task_id("finished-newest")
+    older = _task_id("finished-older")
+    running = _task_id("was-running")
+    _seed(
+        module,
+        "tester",
+        [
+            {"task_id": newest, "finished_at": BASE + 300},
+            {"task_id": older, "finished_at": BASE + 200},
+            {"task_id": running, "status": "running", "finished_at": None},
+        ],
+    )
+    client = _client(module)
+    first = _get(client, actors["owner"], sort="finished", limit="1").get_json()
+    assert [item["task_id"] for item in first["tasks"]] == [newest]
+
+    # It finishes after the traversal already passed it; the keyset position is
+    # unchanged, so it is neither repeated on the next page nor back-filled.
+    module.task_store.update_task(running, status="finished", finished_at=BASE + 400)
+    walked = [newest]
+    cursor = first["next_cursor"]
+    while cursor:
+        page = _get(client, actors["owner"], sort="finished", limit="1", cursor=cursor).get_json()
+        walked.extend(item["task_id"] for item in page["tasks"])
+        cursor = page["next_cursor"]
+    assert walked == [newest, older]
+
+    # A fresh traversal observes the new state, still without a duplicate.
+    fresh = _walk(client, actors["owner"], sort="finished", limit="1")
+    assert fresh == [running, newest, older]
+
+
 def test_concurrent_insert_newer_than_the_anchor_stays_out_of_an_in_progress_walk(module, actors):
     _seed(module, "tester", [{"task_id": _task_id(f"base-{index}"), "uploaded_at": BASE - index} for index in range(6)])
     client = _client(module)
