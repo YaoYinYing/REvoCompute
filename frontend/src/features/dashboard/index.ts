@@ -105,16 +105,19 @@ export class Dashboard {
     const controller = new AbortController();
     this.requestController = controller;
     const append = Boolean(cursor);
+    // A keyboard activation keeps the control focused while the page loads;
+    // only an activation from that control owns focus settlement.
+    const activatedFromControl = document.activeElement === this.loadMoreButton;
     this.loading = true;
     this.renderState();
     try {
       const page = await getTaskPage(historyParams(this.query, cursor, pageSize), controller.signal);
       if (controller.signal.aborted) return;
-      this.cursorReset = page.cursor_reset;
+      this.cursorReset = Boolean(page.cursor_reset);
       this.nextCursor = page.next_cursor;
       this.hasMore = page.has_more;
       const incoming = page.tasks;
-      if (append) {
+      if (append && !this.cursorReset) {
         const known = new Set(this.tasks.map(task => task.task_id));
         const added = incoming.filter(task => !known.has(task.task_id));
         this.tasks = [...this.tasks, ...added].slice(0, maxLoadedTasks);
@@ -122,7 +125,12 @@ export class Dashboard {
         this.appendTasks(added);
         this.renderState();
       } else {
+        // A cursor reset is a new page one, not a continuation: replace the set
+        // instead of deduplicating the new page into the stale traversal, and
+        // drop selections whose Task is no longer loaded.
         this.tasks = incoming.slice(0, maxLoadedTasks);
+        const loadedIds = new Set(this.tasks.map(task => task.task_id));
+        this.selected = new Set([...this.selected].filter(taskId => loadedIds.has(taskId)));
         // The result step walks to a real result; record the first available one so
         // the tour never fabricates a task id or requests an id-less result route.
         recordTourResult(this.tasks.find(task => task.result.available)?.result.page_url);
@@ -136,8 +144,20 @@ export class Dashboard {
         this.requestController = null;
         this.loading = false;
         this.renderState();
+        if (activatedFromControl) this.settleLoadMoreFocus();
       }
     }
+  }
+
+  /** Keep focus on the control, or move it to the announced result state. */
+  private settleLoadMoreFocus(): void {
+    if (!this.loadMoreButton.hidden) {
+      this.loadMoreButton.focus();
+      return;
+    }
+    const target = this.list.querySelector<HTMLElement>('.error-state') ?? this.state;
+    target.tabIndex = -1;
+    target.focus();
   }
 
   private loadNextPage(): void {
@@ -414,16 +434,20 @@ export class Dashboard {
 
   private renderState(): void {
     const capped = this.hasMore && this.tasks.length >= maxLoadedTasks;
-    const canLoadMore = this.hasMore && !capped && !this.loading;
-    this.loadMoreButton.hidden = !canLoadMore;
-    this.sentinel.hidden = !canLoadMore;
+    // The control stays mounted while a page loads so keyboard focus survives
+    // the request; `aria-busy` reports the state and loadNextPage guards it.
+    const available = this.hasMore && !capped;
+    this.loadMoreButton.hidden = !available;
+    this.loadMoreButton.setAttribute('aria-busy', String(this.loading));
+    this.loadMoreButton.setAttribute('aria-disabled', String(this.loading));
+    this.sentinel.hidden = !available;
     if (this.loading) this.state.textContent = t('dashboard.list.loading');
     else if (capped) this.state.textContent = t('dashboard.list.capped', { count: this.tasks.length });
     else if (this.cursorReset) this.state.textContent = t('dashboard.list.cursorReset');
     else if (this.hasMore) this.state.textContent = t('dashboard.list.loadedMore', { count: this.tasks.length });
     else if (this.tasks.length) this.state.textContent = t('dashboard.list.end');
     else this.state.textContent = '';
-    if (canLoadMore) this.observeSentinel();
+    if (available && !this.loading) this.observeSentinel();
     else this.sentinelObserver?.disconnect();
   }
 

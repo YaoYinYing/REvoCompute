@@ -409,6 +409,42 @@ def test_narrow_admin_register_tolerates_wider_font_metrics(page: Page, tour_com
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+def test_load_more_keeps_keyboard_focus_through_pagination(page: Page) -> None:
+    page.set_viewport_size({"width": 1280, "height": 780})
+    # The accessible control, not the scroll sentinel, drives this case: the
+    # observer would load the second page as soon as focus scrolls the button
+    # into view and the activation under test would never happen.
+    page.add_init_script("delete window.IntersectionObserver;")
+    scenario = controlled_scenario()
+    summaries = []
+    for index in range(65):
+        summary = build_task_summary(
+            f"{index:032x}", scenario.runner, owner=scenario.session.username,
+            submitted_at=f"2026-09-20T10:{59 - index // 60:02d}:{59 - index % 60:02d}Z",
+        )
+        summary["display_name"] = f"History task {index:02d}"
+        summaries.append(summary)
+    mount_scenario(page, scenario.with_task_summaries(summaries))
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card")).to_have_count(30)
+
+    more = page.get_by_role("button", name="Load more")
+    more.focus()
+    page.keyboard.press("Enter")
+    expect(page.locator(".task-card")).to_have_count(60)
+    # A continuation leaves the reader on the control that asked for it.
+    expect(more).to_be_focused()
+    expect(page.locator("body")).not_to_be_focused()
+
+    page.keyboard.press("Enter")
+    expect(page.locator(".task-card")).to_have_count(65)
+    expect(page.locator(".list-state")).to_have_text("End of task history.")
+    # The control retires at the end; focus moves to the announced end state
+    # rather than falling back to the document body.
+    expect(page.locator(".list-state")).to_be_focused()
+    expect(page.locator("body")).not_to_be_focused()
+
+
 def _overflow(page: Page) -> int:
     return page.evaluate(
         "document.documentElement.scrollWidth - document.documentElement.clientWidth"

@@ -93,6 +93,53 @@ describe('dashboard history pagination', () => {
     expect(requestedUrls(fetchMock)[1]).toContain('q=alpha');
   });
 
+  it('keeps the Load more control mounted and busy while a page is in flight', async () => {
+    let release: (() => void) | null = null;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes('cursor=next-page')) {
+        await pending;
+        return new Response(JSON.stringify(page([task({ task_id: 'b'.repeat(32), display_name: 'older.fasta' })])), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify(page([task()], 'next-page')), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { dashboard, root } = build();
+
+    await dashboard.load();
+    const more = root.querySelector('[data-action="load-more"]') as HarnessNode;
+    more.dispatch('click', {});
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(more.hidden).toBe(false);
+    expect(more.getAttribute('aria-busy')).toBe('true');
+    expect(more.getAttribute('aria-disabled')).toBe('true');
+
+    release!();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(root.querySelectorAll('.task-card')).toHaveLength(2);
+    expect(more.hidden).toBe(true);
+  });
+
+  it('rebuilds page one when a continuation cursor resets', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes('cursor=next-page')) {
+        return new Response(JSON.stringify({ ...page([task({ task_id: 'c'.repeat(32), display_name: 'fresh.fasta' })]), cursor_reset: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify(page([task()], 'next-page')), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { dashboard, root } = build();
+
+    await dashboard.load();
+    (root.querySelector('[data-action="load-more"]') as HarnessNode).dispatch('click', {});
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(root.querySelectorAll('.task-card')).toHaveLength(1);
+    expect(root.querySelector('.task-card .task-identity h2')?.textContent).toBe('fresh.fasta');
+    expect(root.querySelector('.list-state')?.textContent).toBe('The previous page token no longer matched these filters; showing the first page again.');
+  });
+
   it('removes the client-side regex control and explains literal search', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(page([])), { status: 200, headers: { 'content-type': 'application/json' } })));
     const { dashboard, root } = build();
