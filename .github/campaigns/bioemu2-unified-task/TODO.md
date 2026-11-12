@@ -20,9 +20,10 @@
 
 ## Verification and release boundary
 - [x] 3-mode input matrix (server submission + preflight) and runner fast regressions for YAML parsing, mode dispatch, CCD retry and steering.
-- [ ] Fast regressions + real SIF/pinned upstream CLI tests + server preflight negative tests + browser tests/screenshots.
-  - Fast runner and server tests pass. Real SIF/CLI and browser runs require the
-    Commander-authorized window and a fresh Runtime Bundle/live receipt.
+- [x] Fast Runner/Server regressions: mode dispatch and CLI args, malformed YAML failing before the CLI, role matrix at submission/preflight, CCD retry, steering-asset gating, deprecated-task catalog/doctor handling, fleet inventory.
+- [ ] Real SIF/pinned upstream CLI tests + browser tests/screenshots.
+  - BLOCKED: real SIF/CLI and browser runs require the Commander-authorized
+    window and a fresh Runtime Bundle/live receipt.
 - [ ] Actual ligand-bearing live scientific acceptance and fresh bundle identity/receipt **before READY**, never inferred from mock success.
   - BLOCKED: `/mnt/db/weights/bioemu2/steering/` is absent; the expected
     `boltz-1-ccd.pkl` is not provisioned. A live-test PASS would activate live
