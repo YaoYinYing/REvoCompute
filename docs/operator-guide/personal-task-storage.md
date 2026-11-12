@@ -29,6 +29,17 @@ an immutable downstream input snapshot; execution never reads a mutable upstream
 result path. Provenance records the source task, logical artifact path, digest,
 size, media type, and timestamp without carrying authorization state.
 
+## History query scope
+
+Task history search, filters, and keyset order run as SQL over the Task database
+inside the caller's visibility scope; the server does not materialize the full
+history to serve a page. The submitted sort uses the existing submitter and
+upload-time indexes. The finished sort is scoped by submitter and then ordered
+in a temporary B-tree. A composite
+`(submitted_by_user_id, finished_at, md5sum)` index is deferred until
+production-volume `EXPLAIN` shows it is a bottleneck. The paginated history API
+introduces no schema migration.
+
 ## Result publication states
 
 Publication is one transition: the manifest anchor is recorded in server-owned
