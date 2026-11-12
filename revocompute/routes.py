@@ -239,6 +239,7 @@ from revocompute.tool_types import canonical_parameters, public_tool
 from revocompute.tool_workspace import ToolWorkspaceError
 from revocompute.upload_encoding import (
     DECLARATION_FIELD,
+    MULTIPART_HEADROOM_BYTES,
     DecodeLimits,
     DecodedStream,
     UploadEncodingError,
@@ -878,6 +879,10 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
 @login_required
 @rate_limit(max_requests=60, window_seconds=3600)
 def submit_tool_call(name):
+    # Tool inputs can opt into a larger tier than an ordinary Task submission.
+    # Set Flask's per-request body cap before any form access; the gateway's
+    # Tool location carries the same multipart headroom.
+    request.max_content_length = TOOL_CONFIG.request_max_bytes + MULTIPART_HEADROOM_BYTES
     if blocked := require_bearer_auth():
         return blocked
     if blocked := _reject_guest():
@@ -926,7 +931,7 @@ def submit_tool_call(name):
     except UploadEncodingError as exc:
         return jsonify({"error": str(exc), "error_class": "invalid_input", "code": exc.code}), 400
     tool_decode_limits = DecodeLimits(
-        encoded_max_bytes=int(current_app.config["MAX_CONTENT_LENGTH"]),
+        encoded_max_bytes=int(request.max_content_length),
         decoded_max_bytes=TOOL_CONFIG.request_max_bytes,
         decoded_total_max_bytes=TOOL_CONFIG.request_max_bytes,
     )
@@ -2183,7 +2188,8 @@ def _input_preflight_error_response(error: InputPreflightError):
 
 @app.errorhandler(RequestEntityTooLarge)
 def _request_entity_too_large(_error):
-    message = f"Request body exceeds the {current_app.config['MAX_CONTENT_LENGTH']} byte limit."
+    limit = request.max_content_length or current_app.config["MAX_CONTENT_LENGTH"]
+    message = f"Request body exceeds the {limit} byte limit."
     finding = PreflightFinding(code="request_size_limit", message=message)
     emit_event(
         "preflight.security_rejected",

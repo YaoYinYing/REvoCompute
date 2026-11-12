@@ -38,6 +38,10 @@ DECLARATION_FIELD = "file_encodings"
 #: does not know it sends no declaration at all and is treated as ``identity``.
 CONTRACT_VERSION = 1
 
+#: Multipart framing headroom above a request's decoded/input byte cap.  The
+#: gateway location cap and Flask's per-request body cap use the same tier.
+MULTIPART_HEADROOM_BYTES = 1024 * 1024
+
 #: A real scientific text file compresses a few times over; 200 leaves ample
 #: room for unusually repetitive structures while refusing a tiny encoded part
 #: that claims an implausibly large original.

@@ -86,9 +86,9 @@ http {
 
         # Tool calls share the /compute/api/tools/<name>/call transport with the
         # ordinary Task submission API but may opt into a larger multipart body.
-        # The application cap (TOOL_REQUEST_MAX_BYTES) and this location cap are
-        # the same tier; the gateway value carries multipart headroom above it.
-        # Ordinary Task submissions keep the 16m http-level cap.
+        # The route sets Flask's per-request cap to TOOL_REQUEST_MAX_BYTES plus
+        # 1 MiB of framing headroom, so this gateway value must be at least that
+        # sum. Ordinary Task submissions keep the 16m http-level cap.
         location ~ ^/compute/api/tools/[^/]+/call$ {
             if (-f /srv/deployment/.maintenance) { return 503; }
             client_max_body_size ${TOOL_CLIENT_MAX_BODY_SIZE};
