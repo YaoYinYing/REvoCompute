@@ -148,11 +148,47 @@ parameters:
     then: {required: [start_residue_name]}
   - if: {properties: {start_point_mode: {const: group}}, required: [start_point_mode]}
     then: {required: [start_group]}
+  - if:
+      properties:
+        start_point_mode: {const: point}
+        start_point_source: {enum: [centroid, com]}
+      required: [start_point_mode, start_point_source]
+    then:
+      required: [start_selected_residues, start_selected_serials, start_reference_sha256]
+      properties:
+        start_selected_residues: {minLength: 1}
+        start_selected_serials: {minLength: 1}
+        start_reference_sha256: {minLength: 64}
   properties:
     start_point_mode:
       type: string
       enum: [point, atom, residue, group, ligand]
       description: How to derive the point inside the structure from which tunnels are explored. A manual point must lie inside the structure's coordinate bounding box expanded by 10 Angstrom so a mistyped coordinate cannot silently start the search outside the protein.
+    start_point_source:
+      type: string
+      enum: [manual, viewer-crosshair, centroid, com]
+      default: manual
+      description: Where a point-mode coordinate came from. Manual values are typed, viewer-crosshair values come from the molecular viewer, and centroid or com values are explicit coordinates computed from the selected atoms. Atom, residue, ligand and group modes record their own source in provenance. Centroid and com require the selected residues, atom serials and reference digest so the point can be audited.
+    start_reference_sha256:
+      type: string
+      pattern: '^([0-9a-f]{64})?$'
+      default: ''
+      description: SHA-256 of the reference structure the coordinates were derived from. When present it must match the submitted reference PDB; the Runner records its own digest either way.
+    start_selected_residues:
+      type: string
+      pattern: '^([A-Za-z0-9_]:[0-9]+(-[0-9]+)?(,[A-Za-z0-9_]:[0-9]+(-[0-9]+)?)*)?$'
+      default: ''
+      description: Comma-separated CHAIN:RESIDUE or CHAIN:START-END terms whose atoms produced an explicit centroid or center-of-mass point. Every term is validated against the reference structure.
+    start_selected_serials:
+      type: string
+      pattern: '^([0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*)?$'
+      default: ''
+      description: Comma-separated atom serial numbers or NUMBER-NUMBER ranges of the atoms that produced an explicit centroid or center-of-mass point. Every serial must belong to a named selected residue.
+    start_com_hydrogen_policy:
+      type: string
+      enum: [include, exclude]
+      default: include
+      description: Whether hydrogens contributed to an explicit mass-weighted center-of-mass point. It has no effect on a geometric centroid, whose arithmetic mean already includes every selected atom, or on any other start-point mode.
     start_x:
       type: number
       description: Manual start-point x coordinate in Angstrom (point mode).
@@ -304,16 +340,34 @@ parameters:
       default: 1
       minimum: -2147483648
       maximum: 2147483647
+    include_residue_ids:
+      type: string
+      pattern: '^$|^(?:[A-Za-z0-9]:)?[0-9]+(?:[,\s]+(?:[A-Za-z0-9]:)?[0-9]+)*$'
+      default: ''
+      description: Space- or comma-separated residue identifiers to include in the whole calculation, such as A:24 or 146, validated against the structure. When any include directive is set, only included atoms are analyzed and the exclude directives then remove from that selection (upstream include_residue_ids). Insertion-coded residues cannot be named because CAVER does not match them.
+    include_residue_names:
+      type: string
+      pattern: '^$|^[A-Za-z0-9]{1,4}(?:[,\s]+[A-Za-z0-9]{1,4})*$'
+      default: ''
+      description: Space- or comma-separated residue names to include in the whole calculation, such as HEM or SO4; every name is validated against the structure, so a typo fails instead of silently including nothing (upstream include_residue_names).
+    include_atom_numbers:
+      type: string
+      pattern: '^$|^[0-9]+(-[0-9]+)?(?:[,\s]+[0-9]+(-[0-9]+)?)*$'
+      default: ''
+      description: Space- or comma-separated atom serial numbers or NUMBER-NUMBER ranges to include in the whole calculation, validated against the structure (upstream include_atom_numbers).
     exclude_residue_ids:
       type: string
+      pattern: '^$|^(?:[A-Za-z0-9]:)?[0-9]+(?:[,\s]+(?:[A-Za-z0-9]:)?[0-9]+)*$'
       default: ''
       description: Space- or comma-separated residue identifiers to exclude from the whole calculation, such as A:24 or 146, validated against the structure so a typo cannot silently change the calculation (upstream exclude_residue_ids). Insertion-coded residues cannot be named because CAVER does not match them.
     exclude_residue_names:
       type: string
+      pattern: '^$|^[A-Za-z0-9]{1,4}(?:[,\s]+[A-Za-z0-9]{1,4})*$'
       default: ''
       description: Space- or comma-separated residue names to exclude from the whole calculation, such as HOH or SO4; every name is validated against the structure, so a typo fails instead of silently excluding nothing (upstream exclude_residue_names).
     exclude_atom_numbers:
       type: string
+      pattern: '^$|^[0-9]+(-[0-9]+)?(?:[,\s]+[0-9]+(-[0-9]+)?)*$'
       default: ''
       description: Space- or comma-separated atom serial numbers or NUMBER-NUMBER ranges to exclude from the whole calculation, validated against the structure (upstream exclude_atom_numbers).
     residue_contact_distance:

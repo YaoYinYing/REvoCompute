@@ -65,6 +65,16 @@ CAVER_PICKER = RunnerDefinition(
         ParameterSpec("start_residue_name"),
         ParameterSpec("start_chain"),
         ParameterSpec("start_group"),
+        ParameterSpec.enumeration(
+            "start_point_source", ("manual", "viewer-crosshair", "centroid", "com"),
+            default="manual", has_default=True,
+        ),
+        ParameterSpec("start_reference_sha256", default="", has_default=True),
+        ParameterSpec("start_selected_residues", default="", has_default=True),
+        ParameterSpec("start_selected_serials", default="", has_default=True),
+        ParameterSpec.enumeration(
+            "start_com_hydrogen_policy", ("include", "exclude"), default="include", has_default=True,
+        ),
         ParameterSpec.number("start_x"),
         ParameterSpec.number("start_y"),
         ParameterSpec.number("start_z"),
@@ -158,13 +168,15 @@ def test_a_residue_pick_writes_the_owning_tasks_canonical_parameters(page: Page,
     picked = int(_control(page, "start_residue_number").input_value())
     assert _control(page, "start_point_mode").input_value() == "residue"
     assert _control(page, "start_chain").input_value() == "A"
-    assert _control(page, "start_residue_name").input_value() == _residues(PDB)[picked]
+    # A native residue selection is addressed by chain and number only; the
+    # residue name is provenance the Runner reads from the structure.
+    assert _control(page, "start_residue_name").input_value() == ""
 
     # Editing the canonical control selects that residue again; the authored
     # identity in the submitted selection follows the edit, not the first pick.
     target = 11 if picked != 11 else 1
     _control(page, "start_residue_number").fill(str(target))
-    expect(_control(page, "start_residue_name")).to_have_value(_residues(PDB)[target])
+    expect(_control(page, "start_chain")).to_have_value("A")
 
     _run(page).click()
     page.wait_for_url(f"{ORIGIN}/compute/dashboard**", timeout=30_000)
@@ -177,7 +189,7 @@ def test_a_residue_pick_writes_the_owning_tasks_canonical_parameters(page: Page,
     assert params["start_point_mode"] == "residue"
     assert params["start_chain"] == "A"
     assert params["start_residue_number"] == str(target)
-    assert params["start_residue_name"] == _residues(PDB)[target]
+    assert params["start_residue_name"] == ""
 
 
 def test_an_insertion_coded_pick_is_refused_and_writes_nothing(

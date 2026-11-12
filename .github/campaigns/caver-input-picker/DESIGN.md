@@ -30,3 +30,17 @@ Headless tests compare typed selection `->` normalized schema `->` `pdb_selectio
 
 ## Non-goals
 No CAVER engine replacement, no new generic structural viewer, no MD conversion or trajectory ingester in this PR. #156 will provide topology+trajectory -> ordered CAVER-compatible PDB snapshots after its own scientific proof. No deployment or merge without maintainer.
+## Pinned directive audit (2026-11-13)
+
+Evidence is from the pinned distribution (`distribution_sha256 2d819541…`, `caver.jar` SHA-256 `6ed4d88f…`), its shipped `user_guide`, the constants in `caver/CalculationSettings.class`, and an observed run of that JAR on `tests/data/3fap_hf3_A_short.pdb` with all six filter directives in one config (exit 0; host JDK 17, same JAR bytes the SIF pins, not a SIF/JRE 8 execution).
+
+| Directive | Present in pinned build | Combinable with the other family |
+| --- | --- | --- |
+| `include_residue_names` | yes | yes |
+| `include_residue_ids` | yes | yes |
+| `include_atom_numbers` | yes | yes |
+| `exclude_residue_names` / `exclude_residue_ids` / `exclude_atom_numbers` | yes | yes |
+
+The guide and the observed run agree on precedence: CAVER first selects the union of every include directive (or all atoms when no include is present, the automatic `include *`), then removes the exclude set. Order in the file does not matter. Both families are therefore offered; the Task validates every include token against the reference structure exactly as it already validates exclusions, so a typo fails instead of silently narrowing the calculation.
+
+`20_AA` is an upstream alias, not a residue actually present in a structure. It is not offered or accepted: every emitted residue name comes from the loaded reference atoms, and the Task's own validation requires the name to exist.

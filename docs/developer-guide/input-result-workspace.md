@@ -249,6 +249,30 @@ The same structure and region plugins serve PLACER and MPNN tasks. Task-specific
 behavior belongs in declarative composition or a narrowly scoped adapter, not
 copied page-level event handlers.
 
+### Typed start-point selection
+
+CAVER reuses the structure capability and adds one scoped panel bound to the
+shared molecular scene. The panel projects the owning `task.yaml` start-point
+vocabulary and never introduces a second parameter schema:
+
+- a point is edited as Angstrom XYZ or placed from a viewer selection, with the
+  active crosshair drawn by the shared viewer;
+- an atom is addressed by its authored chain, residue number, insertion code,
+  atom name and alternate location, and an ambiguous serial or conformer is
+  refused rather than guessed;
+- a residue, ligand or multi-chain group keeps CAVER's own residue directive,
+  whose geometric centre is never called a centre of mass;
+- converting that selection to explicit XYZ writes point mode and records the
+  authored residues, atom serials, reference digest and the coordinate method
+  (geometric centroid or mass-weighted centre of mass with an explicit hydrogen
+  policy).
+
+Every derived value is bound to the loaded topology revision and digest.
+Loading another reference clears the selection, crosshair and topology-derived
+parameters before the new structure can contribute a name or coordinate. The
+Runner independently recomputes a geometric-centroid point from the recorded
+serials and verifies CAVER's `data/origins.pdb` against the point it renders.
+
 ## Result-workspace reference composition
 
 Keep the artifact tree and principal scientific result as separate views over

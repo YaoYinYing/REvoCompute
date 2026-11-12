@@ -42,7 +42,9 @@ def test_renders_only_allowlisted_keys_with_the_selected_start_point() -> None:
     assert "swap no" in lines
     assert "seed 1" in lines
     assert lines[-1] == "seed 1"
-    assert not any(line.startswith(("exclude_residue", "exclude_atom")) for line in lines)
+    assert not any(line.startswith(("include_", "exclude_residue", "exclude_atom")) for line in lines)
+    # Provenance parameters are not upstream directives.
+    assert not any(line.startswith(("start_point_source", "start_reference", "start_selected")) for line in lines)
 
 
 def test_float_directives_keep_the_server_value_at_full_precision() -> None:
@@ -149,3 +151,36 @@ def test_rejects_an_unbounded_or_injected_heap(heap: str) -> None:
             output_dir="/out",
             tmp_dir="/tmp",
         )
+
+
+def test_renders_include_filters_before_excludes() -> None:
+    params = dict(BASE_PARAMS)
+    params.update(
+        {
+            "include_residue_ids": "A:1,2",
+            "include_residue_names": "ALA GLY",
+            "include_atom_numbers": "1-3,14",
+            "exclude_residue_names": "HOH",
+        }
+    )
+    lines = render_config(params, point()).splitlines()
+    assert "include_residue_ids A:1 2" in lines
+    assert "include_residue_names ALA GLY" in lines
+    assert "include_atom_numbers 1-3 14" in lines
+    assert "exclude_residue_names HOH" in lines
+    assert lines.index("include_residue_names ALA GLY") < lines.index("exclude_residue_names HOH")
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"include_residue_ids": "A:1; rm -rf /"}, "invalid token"),
+        ({"include_residue_names": "TOOLONGNAME"}, "invalid token"),
+        ({"include_atom_numbers": "1-2-3"}, "invalid token"),
+        ({"include_residue_ids": "A:24B"}, "invalid token"),
+        ({"include_residue_ids": "5-15"}, "invalid token"),
+    ],
+)
+def test_rejects_invalid_include_values(override: dict[str, object], message: str) -> None:
+    with pytest.raises(ConfigError, match=message):
+        render_config({**BASE_PARAMS, **override}, point())
