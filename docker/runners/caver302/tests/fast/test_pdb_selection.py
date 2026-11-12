@@ -616,6 +616,24 @@ def test_explicit_centroid_requires_a_complete_selected_atom_set() -> None:
         )
 
 
+def test_an_atom_serial_range_beyond_the_structure_is_refused() -> None:
+    atoms = _atoms()
+    base = {
+        "start_point_mode": "point",
+        "start_point_source": "centroid",
+        "start_x": 2.0,
+        "start_y": 1.0,
+        "start_z": 1.0,
+        "start_selected_residues": "A:1",
+    }
+    # A schema-valid range must be refused before it is expanded; this would
+    # otherwise allocate a billion integers.
+    with pytest.raises(SelectionError, match="name more than the 14 atoms in the structure"):
+        resolve_start_point(atoms, {**base, "start_selected_serials": "1-1000000000"})
+    with pytest.raises(SelectionError, match="name more than the 14 atoms in the structure"):
+        resolve_start_point(atoms, {**base, "start_selected_serials": "1-10,11-20"})
+
+
 def test_com_is_recorded_as_the_clients_declared_method_not_recomputed() -> None:
     atoms = _atoms()
     # Fe at 4.0 and N at 4.5 give a mass-weighted x near 4.10, distinct from

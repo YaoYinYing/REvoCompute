@@ -183,24 +183,26 @@ describe('CAVER explicit point conversion', () => {
   });
 
   it('honours an explicit hydrogen policy in the centre of mass', () => {
-    const included = caverExplicitPoint([heme], atoms, 'com', '', 'include') as { params: Record<string, string> };
-    const excluded = caverExplicitPoint([heme], atoms, 'com', '', 'exclude') as { params: Record<string, string> };
+    const digest = 'a'.repeat(64);
+    const included = caverExplicitPoint([heme], atoms, 'com', digest, 'include') as { params: Record<string, string> };
+    const excluded = caverExplicitPoint([heme], atoms, 'com', digest, 'exclude') as { params: Record<string, string> };
     expect(included.params.start_y).not.toBe(excluded.params.start_y);
     expect(excluded.params.start_com_hydrogen_policy).toBe('exclude');
   });
 
-  it('omits a digest the browser could not compute as SHA-256', () => {
+  it('refuses an explicit point when the browser could not compute SHA-256', () => {
     const result = caverExplicitPoint([heme], atoms, 'centroid', 'fnv1a-deadbeef-42');
-    expect(result).toMatchObject({ params: { start_reference_sha256: '' } });
+    expect(result).toMatchObject({ error: expect.stringContaining('SHA-256') });
   });
 
   it('refuses an ambiguous alternate location and an unaddressable residue', () => {
+    const digest = 'a'.repeat(64);
     const conformers = [
       sceneAtom(11, 'C', { x: 1, y: 1, z: 1 }, { altloc: 'A' }),
       sceneAtom(12, 'C', { x: 2, y: 2, z: 2 }, { altloc: 'B' }),
     ];
-    expect(caverExplicitPoint([heme], conformers, 'centroid', '')).toHaveProperty('error');
-    expect(caverExplicitPoint([{ ...heme, insertion_code: 'A' }], atoms, 'centroid', '')).toHaveProperty('error');
+    expect(caverExplicitPoint([heme], conformers, 'centroid', digest)).toHaveProperty('error');
+    expect(caverExplicitPoint([{ ...heme, insertion_code: 'A' }], atoms, 'centroid', digest)).toHaveProperty('error');
   });
 
   it('refuses ambiguous atom serial or conformer mappings', () => {

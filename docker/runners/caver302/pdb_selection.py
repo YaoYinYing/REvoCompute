@@ -421,8 +421,14 @@ def _selection_fields(params: dict[str, object]) -> dict[str, object]:
     return _nonempty(params, fields)
 
 
-def _parse_atom_serials(spec: str) -> list[int]:
-    """Expand ``NUMBER`` and ``NUMBER-NUMBER`` tokens into atom serials."""
+def _parse_atom_serials(spec: str, limit: int) -> list[int]:
+    """Expand ``NUMBER`` and ``NUMBER-NUMBER`` tokens into atom serials.
+
+    No selection can name more distinct serials than the structure has atoms,
+    so a longer range or list is malformed. The length is checked before the
+    range is expanded; otherwise a schema-valid range such as ``1-1000000000``
+    would allocate the whole list and exhaust the worker.
+    """
     serials: list[int] = []
     for token in _tokens(spec):
         match = _ATOM_TOKEN.fullmatch(token)
@@ -432,6 +438,11 @@ def _parse_atom_serials(spec: str) -> list[int]:
         last = int(match.group("last") or first)
         if last < first:
             raise SelectionError(f"selected atom serial range {token!r} is descending")
+        count = last - first + 1
+        if len(serials) + count > limit:
+            raise SelectionError(
+                f"selected atom serials at {token!r} name more than the {limit} atoms in the structure"
+            )
         serials.extend(range(first, last + 1))
     return serials
 
@@ -477,7 +488,7 @@ def _point_selection(
     }
     if not retained:
         raise SelectionError("the recorded selection resolves to no atoms CAVER retains")
-    serials = _parse_atom_serials(serial_spec)
+    serials = _parse_atom_serials(serial_spec, len(atoms))
     if len(serials) != len(set(serials)):
         raise SelectionError("start_selected_serials names the same atom serial more than once")
     missing = sorted(set(serials) - set(retained))

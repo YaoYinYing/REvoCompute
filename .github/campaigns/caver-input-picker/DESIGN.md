@@ -1,6 +1,6 @@
 # PR-3 — CAVER 3.0.2 input form, typed start selection and exact scientific config
 
-**Status:** DESIGN ONLY · Draft; base `21b62a2c7fd6ce4862d05cf88fbdd111ac0af6d4`. **Hard prerequisite:** merged and verified shared Mol* scene contract in #152. **Owner:** CAVER Runner + its frontend input-workspace plugin; Core retains input-validation authority.
+**Status:** READY FOR FINAL REVIEW; base `21b62a2c7fd6ce4862d05cf88fbdd111ac0af6d4`. **Hard prerequisite:** merged and verified shared Mol* scene contract in #152. **Owner:** CAVER Runner + its frontend input-workspace plugin; Core retains input-validation authority.
 
 ## Existing evidence
 `docker/runners/caver302/tasks/caver/task.yaml` declares start modes `point`, `atom`, `residue`, `group`, `ligand` with JSON Schema conditional fields; group requires `start_group`, **not** `start_residue_number`. `docker/runners/caver302/pdb_selection.py` resolves authored atom/residue identities; `caver_config.py` only authorizes `exclude_residue_ids`, `exclude_residue_names`, and `exclude_atom_numbers` as list-like exclusion directives. `frontend/src/features/create-task/input-workspace/builtins.ts` and existing CAVER selection tests already cover parts of residue/group selection. **Never duplicate existing working selection logic**.
@@ -41,6 +41,6 @@ Evidence is from the pinned distribution (`distribution_sha256 2d819541…`, `ca
 | `include_atom_numbers` | yes | yes |
 | `exclude_residue_names` / `exclude_residue_ids` / `exclude_atom_numbers` | yes | yes |
 
-The guide and the observed run agree on precedence: CAVER first selects the union of every include directive (or all atoms when no include is present, the automatic `include *`), then removes the exclude set. Order in the file does not matter. Both families are therefore offered; the Task validates every include token against the reference structure exactly as it already validates exclusions, so a typo fails instead of silently narrowing the calculation.
+The upstream guide states that CAVER first selects the union of every include directive (or all atoms when no include is present, the automatic `include *`), then removes the exclude set, and that file order does not matter. The observed run demonstrates that the pinned JAR accepts all six directives together in one config (host JDK 17, exit 0); it is an acceptance check, not a formal precedence proof. Both families are therefore offered; the Task validates every include token against the reference structure exactly as it already validates exclusions, so a typo fails instead of silently narrowing the calculation.
 
 `20_AA` is an upstream alias, not a residue actually present in a structure. It is not offered or accepted: every emitted residue name comes from the loaded reference atoms, and the Task's own validation requires the name to exist.

@@ -234,6 +234,11 @@ export function isSha256Digest(value: string): boolean {
  * mass-weighted centre of mass under an explicit hydrogen policy. Both are
  * point mode: CAVER's own residue/group centre is a different quantity and is
  * never labelled centre of mass.
+ *
+ * The Task requires a 64-character reference digest for these two sources, so
+ * a browser without Web Crypto (a non-secure origin) cannot submit them: the
+ * digest would fall back to the non-SHA-256 `fnv1a-` form. Refuse here with a
+ * clear reason instead of writing an empty value the server must reject.
  */
 export function caverExplicitPoint(
   residues: readonly SelectedResidue[],
@@ -245,6 +250,12 @@ export function caverExplicitPoint(
   const problem = unaddressable(residues);
   if (problem) return { error: problem };
   if (!atoms.length) return { error: 'The selection resolves to no atoms.' };
+  if (!isSha256Digest(referenceDigest)) {
+    return {
+      error: 'Centroid and center-of-mass points need a SHA-256 reference digest, '
+        + 'which this browser cannot compute without HTTPS. Open the task over HTTPS and try again.',
+    };
+  }
   let point: XYZ;
   try {
     point = method === 'centroid'
@@ -262,9 +273,7 @@ export function caverExplicitPoint(
     start_selected_residues: caverGroupSpec(residues),
     start_selected_serials: serialRanges(atoms),
     start_com_hydrogen_policy: method === 'com' ? hydrogenPolicy : 'include',
-    // The browser cannot compute SHA-256 on a non-secure origin; the Runner
-    // records its own digest and only verifies a value it can compare.
-    start_reference_sha256: isSha256Digest(referenceDigest) ? referenceDigest : '',
+    start_reference_sha256: referenceDigest,
   });
   return { params };
 }
