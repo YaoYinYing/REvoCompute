@@ -16,6 +16,7 @@ export type AppRoute =
   | { id: 'demo-replay'; scenario: string }
   | { id: 'account'; section: AccountSection }
   | { id: 'quota' }
+  | { id: 'version' }
   | { id: 'admin-fleet' }
   | { id: 'admin-users' }
   | { id: 'admin-configuration' }
@@ -51,6 +52,7 @@ export function resolveRoute(pathname: string): AppRoute {
   const account = /^\/compute\/account\/([^/]+)$/.exec(path);
   if (account?.[1] && accountSections.has(account[1])) return { id: 'account', section: account[1] as AccountSection };
   if (path === '/compute/quota') return { id: 'quota' };
+  if (path === '/compute/version') return { id: 'version' };
   if (path === '/compute/local_results') return { id: 'local-results' };
   if (path === '/compute/demo') return { id: 'demo' };
   const demoReplay = /^\/compute\/demo\/replays\/([^/]+)$/.exec(path);
@@ -73,7 +75,7 @@ export function resolveRoute(pathname: string): AppRoute {
 }
 
 const protectedRoutes = new Set<AppRoute['id']>([
-  'dashboard', 'create-task', 'result', 'local-results', 'demo', 'demo-replay', 'account', 'quota', 'admin-fleet', 'admin-users', 'admin-configuration', 'admin-logs',
+  'dashboard', 'create-task', 'result', 'local-results', 'demo', 'demo-replay', 'account', 'quota', 'version', 'admin-fleet', 'admin-users', 'admin-configuration', 'admin-logs',
 ]);
 const publicShellRoutes = new Set<AppRoute['id']>([
   'home', 'api-docs', 'login', 'register', 'reset-password', 'verify-email', 'terms', 'not-found',
@@ -104,6 +106,7 @@ export function routePath(route: AppRoute): string {
     case 'demo-replay': return `/compute/demo/replays/${encodeURIComponent(route.scenario)}`;
     case 'account': return route.section === 'account' ? '/compute/profile' : `/compute/account/${route.section}`;
     case 'quota': return '/compute/quota';
+    case 'version': return '/compute/version';
     case 'admin-fleet': return '/compute/runner_fleet';
     case 'admin-users': return '/compute/user_control';
     case 'admin-configuration': return '/compute/configuration';

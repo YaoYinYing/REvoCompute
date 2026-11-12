@@ -9,6 +9,15 @@ const serverResources = [
 
 export const createViteConfig = (backend: string, base = '/static/app/') => ({
   base,
+  define: {
+    // The same immutable identity the server image records, baked into the
+    // bundle so the version page can detect a mixed or stale deployment.
+    __REVOCOMPUTE_BUILD__: JSON.stringify({
+      gitSha: process.env.REVOCOMPUTE_BUILD_GIT_SHA || '',
+      builtAt: process.env.REVOCOMPUTE_BUILD_TIME || '',
+      baseVersion: process.env.REVOCOMPUTE_BASE_VERSION || '',
+    }),
+  },
   build: {
     manifest: true,
     outDir: 'dist',

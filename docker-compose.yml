@@ -179,6 +179,14 @@ services:
         # so it is an explicit build choice (see docker-compose.mcp.yml). The
         # default image is the one every deployment already ran.
         REVOCOMPUTE_EXTRAS: ${REVOCOMPUTE_EXTRAS:-resend}
+        # The deployment controller captures one immutable identity per build and
+        # passes it here; it is baked into both the server image and the frontend
+        # bundle, never read from a live ref at request time.
+        REVOCOMPUTE_BUILD_GIT_SHA: ${REVOCOMPUTE_BUILD_GIT_SHA:-}
+        REVOCOMPUTE_BUILD_TIME: ${REVOCOMPUTE_BUILD_TIME:-}
+        REVOCOMPUTE_BUILD_ID: ${REVOCOMPUTE_BUILD_ID:-}
+        REVOCOMPUTE_BASE_VERSION: ${REVOCOMPUTE_BASE_VERSION:-}
+        REVOCOMPUTE_RELEASE_CHANNEL: ${REVOCOMPUTE_RELEASE_CHANNEL:-development}
     environment:
       <<: [*task-env, *web-auth-env]
       ADMIN_BOOTSTRAP_CREDENTIALS: ${ADMIN_BOOTSTRAP_CREDENTIALS:-}

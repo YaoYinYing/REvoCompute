@@ -20,9 +20,44 @@
     {"name": "Tasks"},
     {"name": "Results"},
     {"name": "Runner fleet", "description": "Admin-only Runner fleet readiness, typed operator planning, and Operator Jobs."},
-    {"name": "Administration reports", "description": "Bounded, read-only Admin reports over facts the canonical stores already own, and the placement dry run. Every unknown is reported as unknown rather than as zero."}
+    {"name": "Administration reports", "description": "Bounded, read-only Admin reports over facts the canonical stores already own, and the placement dry run. Every unknown is reported as unknown rather than as zero."},
+    {"name": "Version", "description": "The authenticated build identity of this deployment, with the canonical bounded changelog."}
   ],
   "paths": {
+    "/compute/api/version": {
+      "get": {
+        "tags": ["Version"],
+        "summary": "Read this deployment's build identity and canonical changelog",
+        "description": "The immutable source revision, display version, build time and release channel baked into this image, with the root CHANGELOG.md parsed into bounded structured plain text. Available to any signed-in user; the response is private to the reader and never cached.",
+        "operationId": "getVersionInfo",
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authenticated build identity and bounded changelog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
     "/compute/api/tasks/{task_id}/diagnostics": {
       "get": {
         "operationId": "getTaskDiagnostics",
@@ -3815,6 +3850,61 @@
         "generated_at": {"type": "number"}
       },
       "additionalProperties": true
+    },
+    "VersionChangelogItem": {
+      "type": "object",
+      "required": ["text", "depth"],
+      "properties": {
+        "text": {"type": "string", "maxLength": 500},
+        "depth": {"type": "integer", "enum": [0, 1]}
+      },
+      "additionalProperties": false
+    },
+    "VersionChangelogCategory": {
+      "type": "object",
+      "required": ["name", "items"],
+      "properties": {
+        "name": {"type": "string", "maxLength": 200},
+        "items": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/VersionChangelogItem"}}
+      },
+      "additionalProperties": false
+    },
+    "VersionChangelogSection": {
+      "type": "object",
+      "required": ["version", "date", "kind", "categories"],
+      "properties": {
+        "version": {"type": "string", "maxLength": 200},
+        "date": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "kind": {"type": "string", "enum": ["unreleased", "development-snapshot", "release"]},
+        "categories": {"type": "array", "maxItems": 12, "items": {"$ref": "#/components/schemas/VersionChangelogCategory"}}
+      },
+      "additionalProperties": false
+    },
+    "VersionChangelog": {
+      "type": "object",
+      "required": ["source_sha256", "truncated", "sections"],
+      "properties": {
+        "source_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "truncated": {"type": "boolean"},
+        "sections": {"type": "array", "maxItems": 50, "items": {"$ref": "#/components/schemas/VersionChangelogSection"}}
+      },
+      "additionalProperties": false
+    },
+    "VersionInfo": {
+      "type": "object",
+      "description": "The authenticated deployment build identity and the canonical bounded changelog. No host path, credential or environment value is included.",
+      "required": ["base_version", "app_version", "git_sha", "revision_status", "release_channel", "built_at", "build_id", "changelog"],
+      "properties": {
+        "base_version": {"type": "string"},
+        "app_version": {"type": "string"},
+        "git_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+        "revision_status": {"type": "string", "enum": ["verified", "unknown"]},
+        "release_channel": {"type": "string"},
+        "built_at": {"type": ["string", "null"]},
+        "build_id": {"type": ["string", "null"]},
+        "changelog": {"$ref": "#/components/schemas/VersionChangelog"}
+      },
+      "additionalProperties": false
     }
     }
   }

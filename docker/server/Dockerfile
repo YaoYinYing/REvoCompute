@@ -1,5 +1,13 @@
 FROM node:22-bookworm-slim AS frontend-builder
 
+# The immutable build identity the server image records is baked into the
+# frontend bundle too, so the version page can detect mixed or stale assets.
+ARG REVOCOMPUTE_BUILD_GIT_SHA
+ARG REVOCOMPUTE_BUILD_TIME
+ARG REVOCOMPUTE_BUILD_ID
+ARG REVOCOMPUTE_BASE_VERSION
+ARG REVOCOMPUTE_RELEASE_CHANNEL=development
+
 WORKDIR /build/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 COPY frontend/scripts/verify-lock.mjs ./scripts/verify-lock.mjs
@@ -26,6 +34,19 @@ ARG PORT
 # It is a build argument because the MCP transport stack is a dependency of the
 # image, not a runtime flag: an image built without it can never bind the listener.
 ARG REVOCOMPUTE_EXTRAS=resend
+
+# Immutable build identity, baked at image build. Only a full 40-hex commit is
+# accepted at request time; an absent or malformed SHA is reported as unknown
+# rather than synthesized into a revision.
+ARG REVOCOMPUTE_BUILD_GIT_SHA
+ARG REVOCOMPUTE_BUILD_TIME
+ARG REVOCOMPUTE_BUILD_ID
+ARG REVOCOMPUTE_BASE_VERSION
+ARG REVOCOMPUTE_RELEASE_CHANNEL=development
+
+LABEL org.opencontainers.image.revision="${REVOCOMPUTE_BUILD_GIT_SHA}" \
+      org.opencontainers.image.version="${REVOCOMPUTE_BASE_VERSION}" \
+      org.opencontainers.image.created="${REVOCOMPUTE_BUILD_TIME}"
 
 RUN groupadd -o -r ${RUNNER_GROUP} -g ${RUNNER_GID} && \
     useradd -o -r -g ${RUNNER_GROUP} -u ${RUNNER_UID} ${RUNNER_USERNAME}
@@ -56,6 +77,11 @@ RUN python -m pip install --no-cache-dir uv && \
 
 
 ENV PYTHONPATH=/app/server
+ENV REVOCOMPUTE_BUILD_GIT_SHA="${REVOCOMPUTE_BUILD_GIT_SHA}" \
+    REVOCOMPUTE_BUILD_TIME="${REVOCOMPUTE_BUILD_TIME}" \
+    REVOCOMPUTE_BUILD_ID="${REVOCOMPUTE_BUILD_ID}" \
+    REVOCOMPUTE_BASE_VERSION="${REVOCOMPUTE_BASE_VERSION}" \
+    REVOCOMPUTE_RELEASE_CHANNEL="${REVOCOMPUTE_RELEASE_CHANNEL}"
 # ponytail: WORKDIR must be /app/server, not /app/server/revocompute.
 # When CWD is inside the package dir, Python's '' sys.path entry finds
 # app.py as a top-level module, shadowing the revocompute package.

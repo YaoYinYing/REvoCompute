@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/compute/api/version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read this deployment's build identity and canonical changelog
+         * @description The immutable source revision, display version, build time and release channel baked into this image, with the root CHANGELOG.md parsed into bounded structured plain text. Available to any signed-in user; the response is private to the reader and never cached.
+         */
+        get: operations["getVersionInfo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/tasks/{task_id}/diagnostics": {
         parameters: {
             query?: never;
@@ -3552,6 +3572,39 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        VersionChangelogItem: {
+            text: string;
+            /** @enum {integer} */
+            depth: 0 | 1;
+        };
+        VersionChangelogCategory: {
+            name: string;
+            items: components["schemas"]["VersionChangelogItem"][];
+        };
+        VersionChangelogSection: {
+            version: string;
+            date: string | null;
+            /** @enum {string} */
+            kind: "unreleased" | "development-snapshot" | "release";
+            categories: components["schemas"]["VersionChangelogCategory"][];
+        };
+        VersionChangelog: {
+            source_sha256: string | null;
+            truncated: boolean;
+            sections: components["schemas"]["VersionChangelogSection"][];
+        };
+        /** @description The authenticated deployment build identity and the canonical bounded changelog. No host path, credential or environment value is included. */
+        VersionInfo: {
+            base_version: string;
+            app_version: string;
+            git_sha: string | null;
+            /** @enum {string} */
+            revision_status: "verified" | "unknown";
+            release_channel: string;
+            built_at: string | null;
+            build_id: string | null;
+            changelog: components["schemas"]["VersionChangelog"];
+        };
     };
     responses: {
         /** @description Invalid request */
@@ -3620,6 +3673,27 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getVersionInfo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authenticated build identity and bounded changelog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionInfo"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
     getTaskDiagnostics: {
         parameters: {
             query?: never;

@@ -1092,6 +1092,63 @@ def build_categorical_projection(values: Sequence[str], *, key: str | None = Non
     return payload
 
 
+# ---------------------------------------------------------------------------
+# The deployment's own build identity
+# ---------------------------------------------------------------------------
+
+#: The verified commit the fixture's development snapshot names.
+VERSION_SHA = "2890609" + "0" * 33
+
+
+def build_version_info(**overrides: Any) -> dict[str, Any]:
+    """The authenticated version projection, validated against its contract.
+
+    A verified development snapshot with a bounded two-entry changelog: the
+    Unreleased section and the historical baseline. A case that needs an unknown
+    revision or a mixed deployment states that field explicitly.
+    """
+    payload: dict[str, Any] = {
+        "base_version": "0.1.0",
+        "app_version": f"0.1.0+{VERSION_SHA[:7]}",
+        "git_sha": VERSION_SHA,
+        "revision_status": "verified",
+        "release_channel": "development",
+        "built_at": "2026-11-12T00:00:00Z",
+        "build_id": None,
+        "changelog": {
+            "source_sha256": "a" * 64,
+            "truncated": False,
+            "sections": [
+                {
+                    "version": "Unreleased",
+                    "date": None,
+                    "kind": "unreleased",
+                    "categories": [
+                        {"name": "Added", "items": [{"text": "Release governance.", "depth": 0}]}
+                    ],
+                },
+                {
+                    "version": f"0.1.0+{VERSION_SHA[:7]}",
+                    "date": "2026-11-12",
+                    "kind": "development-snapshot",
+                    "categories": [
+                        {
+                            "name": "Added",
+                            "items": [
+                                {"text": "Server:", "depth": 0},
+                                {"text": "Authenticated multi-user Task execution.", "depth": 1},
+                            ],
+                        }
+                    ],
+                },
+            ],
+        },
+    }
+    payload.update(overrides)
+    validate_payload("VersionInfo", payload)
+    return payload
+
+
 __all__ = [
     "DEFAULT_GPU_ALLOWANCE",
     "DEFAULT_GPU_RESERVED",
@@ -1117,10 +1174,12 @@ __all__ = [
     "view_entry",
     "build_task_status",
     "build_task_summary",
+    "build_version_info",
     "catalog_access_payload",
     "openapi_spec",
     "preflight_fixture",
     "runner_access_payload",
     "subject_id_for",
     "validate_payload",
+    "VERSION_SHA",
 ]

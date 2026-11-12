@@ -1,0 +1,42 @@
+name: REvoCompute Release Tag Gate
+
+# A product release tag is validated against the exact tagged commit, the one
+# editable version source, and a dated changelog section. Evidence tags
+# (`pr-*-evidence`) and any other non-product ref are rejected. This workflow
+# never publishes a release or deploys; the maintainer decides those separately.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          # The tag and the commit it points at must both be present.
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install the repository
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-deps -e .
+
+      - name: Validate the product tag
+        run: >-
+          python -m revocompute.release_governance verify-tag
+          --tag "$GITHUB_REF_NAME"
+          --sha "$(git rev-list -n1 "$GITHUB_REF_NAME")"

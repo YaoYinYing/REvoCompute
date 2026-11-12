@@ -1,5 +1,5 @@
 import { DAYLIGHT_MARK } from './assets';
-import { Bell, ChartLine, FileText, FlaskConical, FolderOpen, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus, Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow, createIcons } from 'lucide';
+import { Bell, ChartLine, FileText, FlaskConical, FolderOpen, Gauge, Info, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus, Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow, createIcons } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import { authorizedJson, clearSessionCredential } from './session';
 import { ADMIN_DESTINATIONS } from './admin-destinations';
@@ -23,7 +23,7 @@ export interface AppShell {
 const railKey = 'revocompute-rail';
 type RailState = 'collapsed' | 'expanded';
 const shellIcons = {
-  Bell, ChartLine, FileText, FlaskConical, FolderOpen, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus,
+  Bell, ChartLine, FileText, FlaskConical, FolderOpen, Gauge, Info, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus,
   Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow,
 };
 
@@ -53,6 +53,14 @@ const ACCOUNT_DESTINATIONS: ReadonlyArray<NavDestination> = [
  * session semantics: signed out, the region collapses to one sign-in affordance.
  */
 const QUOTA_DESTINATION: NavDestination = ['/compute/quota', 'scale', 'shell.account.quota'];
+
+/**
+ * The signed-in Version page: this deployment's build identity and changelog.
+ * Like the Quota destination it is the reader's own view, but it carries no
+ * section of its own in ``router.ts``'s account vocabulary and has its own
+ * protected route id.
+ */
+const VERSION_DESTINATION: NavDestination = ['/compute/version', 'info', 'shell.account.version'];
 
 export function mountShell(root: HTMLElement): AppShell {
   root.replaceChildren();
@@ -107,7 +115,7 @@ export function mountShell(root: HTMLElement): AppShell {
   // links are rebuilt when the session changes, so no link ever points a signed-out
   // reader at a protected page.
   const accountLinks: HTMLAnchorElement[] = [];
-  for (const [, , labelKey] of [...ACCOUNT_DESTINATIONS, QUOTA_DESTINATION]) { const link = navLink('', '', ''); link.dataset.labelKey = labelKey; groups.account.items.append(link); accountLinks.push(link); }
+  for (const [, , labelKey] of [...ACCOUNT_DESTINATIONS, QUOTA_DESTINATION, VERSION_DESTINATION]) { const link = navLink('', '', ''); link.dataset.labelKey = labelKey; groups.account.items.append(link); accountLinks.push(link); }
   for (const destination of ADMIN_DESTINATIONS) {
     const link = navLink(destination.path, destination.icon, t(destination.label)); groups.admin.items.append(link);
   }
@@ -255,7 +263,7 @@ export function mountShell(root: HTMLElement): AppShell {
     // The Account region is the user's own navigation when signed in and a single
     // sign-in affordance when signed out. The Quota destination is the region's
     // last slot, so its own label follows the sections' from the same table.
-    const destinations = [...ACCOUNT_DESTINATIONS, QUOTA_DESTINATION];
+    const destinations = [...ACCOUNT_DESTINATIONS, QUOTA_DESTINATION, VERSION_DESTINATION];
     accountLinks.forEach((link, index) => {
       const destination = user ? destinations[index] : null;
       const linkLabel = destination ? t(destination[2]) : label;

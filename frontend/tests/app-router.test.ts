@@ -24,6 +24,8 @@ describe('application routes', () => {
     expect(resolveRoute('/compute/account/unknown')).toEqual({ id: 'not-found' });
     expect(resolveRoute('/compute/quota')).toEqual({ id: 'quota' });
     expect(routePath({ id: 'quota' })).toEqual('/compute/quota');
+    expect(resolveRoute('/compute/version')).toEqual({ id: 'version' });
+    expect(routePath({ id: 'version' })).toEqual('/compute/version');
     expect(resolveRoute('/compute/runner_fleet')).toEqual({ id: 'admin-fleet' });
     expect(resolveRoute('/compute/user_control')).toEqual({ id: 'admin-users' });
     expect(resolveRoute('/compute/configuration')).toEqual({ id: 'admin-configuration' });
@@ -37,6 +39,7 @@ describe('application routes', () => {
     expect(protectedRoute(resolveRoute('/compute/dashboard'))).toBe(true);
     expect(protectedRoute(resolveRoute('/compute/profile'))).toBe(true);
     expect(protectedRoute(resolveRoute('/compute/quota'))).toBe(true);
+    expect(protectedRoute(resolveRoute('/compute/version'))).toBe(true);
     expect(adminRoute(resolveRoute('/compute/runner_fleet'))).toBe(true);
     expect(protectedRoute(resolveRoute('/compute/runner_fleet'))).toBe(true);
     expect(adminRoute(resolveRoute('/compute/user_control'))).toBe(true);

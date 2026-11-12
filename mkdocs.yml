@@ -108,6 +108,9 @@ nav:
       - Frontend Taste Review: developer-guide/frontend-taste-review.md
       - Testing and CI: developer-guide/testing.md
       - Demo Playground: developer-guide/demo-playground.md
+      - Experience Modernization Campaign: developer-guide/experience-modernization-campaign.md
+      - Experience Intent: developer-guide/experience-intent.md
+      - Release Governance: developer-guide/release-governance.md
       - Writing Documentation: developer-guide/documentation.md
       - "Goal: GMX-MMPBSA": developer-guide/gmx-mmpbsa.md
   - Reference:

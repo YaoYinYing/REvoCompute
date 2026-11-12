@@ -67,6 +67,28 @@ jobs:
             echo "compose=true"
           } >> "$GITHUB_OUTPUT"
 
+  # One editable SemVer source and its mirrors are repository metadata, not
+  # Server or browser behavior. A frontend-only change selects only the browser
+  # lane, so this gate cannot live inside a classified job: it always runs.
+  ReleaseMetadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install the repository
+        run: pip install --no-deps -e .
+      - name: Check release version mirrors
+        run: python -m revocompute.release_governance check
+
   REvoComputeTests:
     needs: ClassifyChanges
     if: ${{ !cancelled() && needs.ClassifyChanges.outputs.server != 'false' }}

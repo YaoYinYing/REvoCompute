@@ -192,6 +192,7 @@ from revocompute.schemas import (
     VerifyEmailRequest,
 )
 from revocompute.storage_quota import parse_quota_input
+from revocompute.version_info import version_info as build_version_info
 from revocompute.task_runtime import (
     _cleanup_task_workspace,
     _finalize_failed_results,
@@ -610,6 +611,19 @@ def quota_page():
     The page route therefore carries no state of its own: it serves the same
     entry document every other page route serves, so a hard refresh or a shared
     deep link lands on a real page instead of a 404.
+    """
+    return _serve_frontend_entry(private=True)
+
+
+@app.route("/compute/version", methods=["GET"])
+@login_required
+def version_page():
+    """The signed-in version page, an inert frontend-shell page.
+
+    The page reads the deployment's own build identity and the canonical
+    changelog from ``/compute/api/version``, which carries the same
+    authentication boundary. The route itself holds no state: a hard refresh or
+    a shared deep link lands on a real page instead of a 404.
     """
     return _serve_frontend_entry(private=True)
 
@@ -4177,6 +4191,20 @@ register_admin_pages(app, _serve_frontend_entry)
 # Likewise the user's own Account sections: each direct destination the shell
 # links to is a page the server serves at the Account's own auth boundary.
 register_account_pages(app, _serve_frontend_entry)
+
+
+@app.route("/compute/api/version", methods=["GET"])
+@login_required
+def version_api():
+    """Return this deployment's immutable build identity and bounded changelog.
+
+    Ordinary signed-in users and administrators read the same non-sensitive
+    projection. The response is private to the reader and never cached, and it
+    carries no host path, credential or environment value.
+    """
+    response = jsonify(build_version_info())
+    response.headers["Cache-Control"] = "private, no-store"
+    return response, 200
 
 
 _MAX_LEGAL_DOCUMENT_BYTES = 64 * 1024

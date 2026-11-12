@@ -16,6 +16,9 @@ export type GPUCreditWaterfall = components['schemas']['GPUCreditWaterfall'];
 export type GPUCreditWaterfallStep = components['schemas']['GPUCreditWaterfallStep'];
 export type GPUCreditWaterfallSummary = components['schemas']['GPUCreditWaterfallSummary'];
 export type RunnerAccess = components['schemas']['RunnerAccess'];
+export type VersionInfo = components['schemas']['VersionInfo'];
+export type VersionChangelog = components['schemas']['VersionChangelog'];
+export type VersionChangelogSection = components['schemas']['VersionChangelogSection'];
 
 export type RegistrationCapability = components['schemas']['RegistrationCapability'];
 export type McpCapability = components['schemas']['McpCapability'];
@@ -97,6 +100,9 @@ export const getResourceEntitlement = (signal?: AbortSignal): Promise<ResourceEn
 export const getResourceLedger = (limit?: number, signal?: AbortSignal): Promise<ResourceLedger> =>
   requestJson(`/compute/api/resource-ledger${limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`}`, { signal });
 export const getAccess = (): Promise<AccessResponse> => requestJson('/compute/api/access');
+/** This deployment's own build identity and bounded canonical changelog. */
+export const getVersionInfo = (signal?: AbortSignal): Promise<VersionInfo> =>
+  requestJson('/compute/api/version', { signal });
 export const requestAccess = (policyId: string, reason: string): Promise<Record<string, unknown>> =>
   authorizedJson('/compute/api/access/requests', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ policy_id: policyId, reason }),
