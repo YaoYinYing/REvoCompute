@@ -308,8 +308,10 @@ export class MolecularViewer implements MolecularScene {
       await this.applyPresentation();
       const info = this.trajectoryInfo();
       if (!info) throw new Error('Mol* did not create a trajectory');
-      this.sceneState.setFrame(info.frame);
+      // Coordinates are read in the frame that is about to be published, so a
+      // frame listener observes the matching atom positions.
       this.sceneState.refreshSelection(this.readSelection());
+      this.sceneState.setFrame(info.frame);
       this.lastLegacySelectionSignature = '';
       this.handleViewerSelection();
       return { frame: info.frame, frameCount: info.frameCount };
@@ -325,8 +327,8 @@ export class MolecularViewer implements MolecularScene {
       const update = this.plugin.state.data.build();
       update.to(info.model).update({ modelIndex: frame });
       await this.plugin.state.data.updateTree(update).run();
-      this.sceneState.setFrame(frame);
       this.sceneState.refreshSelection(this.readSelection());
+      this.sceneState.setFrame(frame);
       return { frame, frameCount: info.frameCount };
     });
   }
