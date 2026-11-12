@@ -78,6 +78,13 @@ invented release numbers or dates.
       molecular stage, with a focus trap, Escape and focus return, native
       fullscreen where available, a labelled fallback otherwise, and the
       camera, selection, trajectory frame, and overlays preserved across modes.
+    - Add preview-only trajectory recentering and fitting to the Result
+      workspace: weighted Kabsch rigid-body fits of a whole-frame or typed
+      scene selection to an explicit reference frame, a bounded Web Worker with
+      progress, cancellation and a generation token, a reversible display
+      transform with raw reset, a labelled preview RMSD, periodic-boundary
+      warnings that never unwrap, and a validated single-model PDB export with
+      provenance sidecar metadata.
   - Workflow:
     - Make `pyproject.toml` the one editable version source, with deterministic
       `check`/`sync` for the frontend manifest and lockfile, `uv.lock` and the

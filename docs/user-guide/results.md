@@ -49,6 +49,22 @@ representation, colour, camera, trajectory frame, overlays, and scientific
 selection survive when the mode changes. The mode buttons are keyboard
 reachable, and the stage reflows for narrow screens and both themes.
 
+Trajectory views add a preview-only fitting row. Choose the fit atoms (the whole
+frame or the current typed selection), a reference frame, and either **Center
+only** or **Fit and preview**. The browser fits each frame to the reference with
+a weighted rigid-body least-squares transform in a background worker and applies
+a reversible display transform; **Reset preview** restores the exact source
+coordinates. The reported RMSD is a preview metric on the fit selection, not
+simulation dynamics or a stability claim. A periodic box declared by the source
+is shown, with a warning when positions span it; the browser never unwraps
+coordinates, reconstructs chains, or changes topology, and such a wrapped
+preview carries no scientific claim. **Export aligned frame (PDB)** writes the
+current aligned frame and a JSON sidecar with the source artifact digests and the
+transform. The export is a new local derived artifact, not a server-published
+result and not authenticated Tool output, and a text PDB is never given a binary
+trajectory extension. A topology the fixed PDB columns cannot represent is
+refused rather than truncated.
+
 The manifest records a *technical* output check: configured files are present,
 non-empty, and structurally mappable. That check does not establish scientific
 or experimental validity. Task-owned limitations are recorded alongside the

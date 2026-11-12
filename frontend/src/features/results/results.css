@@ -267,6 +267,14 @@ body:has(.structure-viewport[data-display-mode="maximize"][data-fullscreen-fallb
 .structure-extra-tools[open] { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .structure-gesture { font-size: 10px; color: var(--result-muted); }
 .structure-toolbar .result-button { font-size: 12px; font-weight: 400; min-height: 34px; padding: 6px 10px; }
+/* The preview fit row: selection, reference frame, an explicit center/fit mode,
+   reset and the derived PDB export. Status carries the preview-only RMSD. */
+.trajectory-fit { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: end; gap: 8px 10px; padding-top: 8px; border-top: 1px dashed var(--result-line); }
+.trajectory-fit .structure-tool-field { display: flex; flex-direction: column; gap: 4px; }
+.trajectory-fit .structure-tool-field select { width: 190px; }
+.trajectory-fit-reference { width: 84px; min-height: 34px; padding: 6px 9px; background: var(--app-raised); color: var(--result-ink); border: 1px solid var(--app-line-strong); border-radius: 4px; font-size: 12px; }
+.trajectory-fit-status { flex-basis: 100%; margin: 4px 0 0; font-size: 12px; }
+.trajectory-fit-status:empty { display: none; }
 [data-structure-slot] > .storyboard-structure-panel, [data-structure-slot] .storyboard-structure-panel .structure-viewport { height: 100%; min-height: 0; display: block; }
 [data-structure-slot] .storyboard-structure-panel .structure-host { height: 100%; min-height: 0; }
 .storyboard-geometry-panel { padding: 16px; border-top: 1px solid var(--result-line); }

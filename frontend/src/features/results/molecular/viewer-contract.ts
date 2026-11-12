@@ -9,6 +9,7 @@ import type {
   StructureSource,
   XYZ,
 } from '../../structure/molecular-scene';
+import type { PeriodicBox } from '../../structure/trajectory-fit';
 
 export type { StructureSource };
 
@@ -65,6 +66,14 @@ export interface MolecularViewer {
   centerOfMass?(options: CenterOfMassOptions, atoms?: readonly SceneAtom[]): XYZ;
   boundingBox?(atoms?: readonly SceneAtom[]): AxisAlignedBox;
   pickAtoms?(): Promise<SceneAtom[]>;
+  /** Turn the viewer's own click-to-select interaction on or off. */
+  setSelectionMode?(enabled: boolean): void;
+  /** Read the fit-subset coordinates of one source frame in Angstrom. */
+  readTrajectoryFrame?(frame: number, indices: readonly number[]): Float64Array;
+  /** The periodic box declared by one source frame, when the artifact has one. */
+  trajectoryFrameCell?(frame: number): PeriodicBox | null;
+  /** Apply or clear the reversible preview-only conformation transform. */
+  applyPreviewTransform?(matrix: ArrayLike<number> | null): Promise<void>;
   dispose(): void;
 }
 
