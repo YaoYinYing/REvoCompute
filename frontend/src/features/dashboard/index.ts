@@ -1,6 +1,6 @@
-import { Archive, Ban, Download, ExternalLink, RefreshCw, Search, Trash2 } from 'lucide';
+import { Archive, Ban, Copy, Download, ExternalLink, RefreshCw, Search, Trash2 } from 'lucide';
 import { createIcons } from 'lucide';
-import { deleteTaskBatch, getTaskPage, getTaskStatus, prepareArchive, runTaskAction, type CurrentUser, type TaskStatus, type TaskSummary } from '../../api/app-api';
+import { createClonePlan, deleteTaskBatch, getTaskPage, getTaskStatus, prepareArchive, runTaskAction, type CurrentUser, type TaskStatus, type TaskSummary } from '../../api/app-api';
 import { ApiError } from '../../app/session';
 import { confirmAction, openDialog } from '../../app/dialogs';
 import { mountTaskDiagnostics } from '../tasks/diagnostics';
@@ -18,7 +18,7 @@ const pageSize = 30;
 // a fresh traversal.
 const maxLoadedTasks = 500;
 const maxPolledTasks = 20;
-const dashboardIcons = { Archive, Ban, Download, ExternalLink, RefreshCw, Search, Trash2 };
+const dashboardIcons = { Archive, Ban, Copy, Download, ExternalLink, RefreshCw, Search, Trash2 };
 
 // Machine facts keep a stable, locale-neutral format: dates and durations compare
 // across cards and never depend on interface language.
@@ -559,6 +559,9 @@ export class Dashboard {
       progress.textContent = t(task.terminal ? 'dashboard.card.details' : 'dashboard.card.progress');
       actions.append(progress);
     }
+    // Clone opens a fresh draft from this Task's own recorded state; it never
+    // reruns or mutates the source, so it is offered on every visible Task.
+    actions.append(button(t('dashboard.card.clone'), 'clone', 'copy'));
     if (task.actions.cancel.allowed) actions.append(button(t('dashboard.card.cancel'), 'cancel', 'ban'));
     if (task.actions.delete.allowed) actions.append(button(t('dashboard.card.delete'), 'delete', 'trash-2'));
     const secondary = [...actions.children].filter(node => (node as HTMLElement).dataset.action === 'delete');
@@ -610,6 +613,19 @@ export class Dashboard {
       return;
     }
     if (action === 'select') { (target as HTMLInputElement).checked ? this.selected.add(task.task_id) : this.selected.delete(task.task_id); this.syncSelectionState(); return; }
+    if (action === 'clone') {
+      const control = target as HTMLButtonElement;
+      control.disabled = true;
+      try {
+        const plan = await createClonePlan(task.task_id);
+        // Only the opaque reference travels; the draft re-resolves the plan.
+        window.location.assign(`/compute/create_task?clone=${encodeURIComponent(plan.plan_id)}`);
+      } catch (error) {
+        control.disabled = false;
+        this.shell.notify((error as Error).message, 'error');
+      }
+      return;
+    }
     if (action === 'cancel' && await confirmAction({ title: t('dashboard.confirm.cancelTitle', { name: task.display_name }), message: t('dashboard.confirm.cancel', { name: task.display_name }), confirmLabel: t('dashboard.card.cancel') })) await this.mutate(() => runTaskAction(task.actions.cancel, 'POST'), t('dashboard.notice.cancelled'));
     if (action === 'delete' && await confirmAction({ title: t('dashboard.confirm.deleteTitle', { name: task.display_name }), message: t('dashboard.confirm.delete', { name: task.display_name }), confirmLabel: t('dashboard.card.delete') })) await this.mutate(() => runTaskAction(task.actions.delete, 'DELETE'), t('dashboard.notice.deleted'));
     if (action === 'archive' && task.result.archive_request_url) {

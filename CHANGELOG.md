@@ -88,6 +88,26 @@ invented release numbers or dates.
     - Bake the immutable commit, build time and opaque build identifier into the
       server image labels/runtime environment and the frontend bundle; a release
       build refuses a dirty tree.
+- Clone & Reuse:
+  - Server:
+    - Add authenticated, read-only `POST /compute/api/tasks/{id}/clone-plan` and
+      the owner-scoped `GET /compute/api/clone-plans/{plan_id}` reference. The
+      plan resolves only explicitly recorded values against the current schema,
+      reports removed/renamed parameters, unavailable enum choices, type and
+      range changes, missing roles, and unverifiable input snapshots by field,
+      and never mutates the source, derives a Task ID, or reserves resources.
+    - Record optional non-sensitive `cloned_from` provenance on submission after
+      checking that the caller can see the source.
+    - Validate a reviewed `x-ui-placeholder` schema annotation on optional string
+      fields during Task discovery; it is presentation only and is never a
+      default, required declaration, or submitted parameter.
+  - Frontend:
+    - Add Clone & reuse to dashboard cards and the remote Result page, opening a
+      fresh draft from an opaque plan reference with a keyboard-accessible
+      reconciliation panel, re-upload guidance, reset-to-defaults, and revert.
+    - Pin the existing Task Snapshot submit rail to the visible viewport bottom,
+      respecting safe-area insets, the mobile visual viewport, and reduced
+      motion, without adding a second submit control.
 
 ## [0.1.0+2890609] - 2026-11-12
 

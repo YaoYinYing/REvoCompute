@@ -6,6 +6,9 @@ import type { PresetApplication, WorkspacePreset } from './input-workspace/Input
 import { buildSubmissionFormData, encodeSubmissionFormData } from './submission';
 import type { EncodedSubmission } from './submission';
 import { formatBytes } from './input-workspace/utils';
+import { clonePreset, renderClonePanel } from './clone';
+import type { ClonePlan } from './clone';
+import { getClonePlan } from '../../api/app-api';
 import type { TaskCatalog, TaskFormDefinition, TaskPreflight, TaskSummary } from './types';
 import { submissionNotice, submissionRefusal } from '../runners/readiness-copy';
 import { t } from '../../app/i18n';
@@ -86,6 +89,14 @@ export class CreateTask {
   // Cancels an in-flight encode/preflight/submit when the view is left or the
   // generation is replaced. Abort is not a retry: no second POST is sent.
   private submitController: AbortController | null = null;
+  // The authorized source Task this draft was cloned from. It is provenance for
+  // the submission; it is never submitted as an input.
+  private cloneSource: string | null = null;
+  private clonePanel: HTMLElement | null = null;
+  // Lifts the sticky submit rail above a mobile virtual keyboard. Registered
+  // with the route's lifetime: leaving the view must not leave a listener that
+  // writes to a root the route no longer owns.
+  private viewportCleanup: (() => void) | null = null;
 
   constructor(private readonly root: HTMLElement) {
     // The preparation surface owns exactly one visible level-1 heading per state:
@@ -103,13 +114,68 @@ export class CreateTask {
 
   async mount(): Promise<void> {
     this.renderShell();
+    this.observeViewport();
     await this.resolveEnvironment();
     try {
       this.catalog = await getTaskCatalog(); this.renderCatalog();
-      const requested = new URLSearchParams(window.location.search).get('task_type');
-      if (requested && this.catalog.task_types.some(task => task.name === requested)) await this.selectTask(requested);
+      const params = new URLSearchParams(window.location.search);
+      const cloneReference = params.get('clone');
+      const requested = params.get('task_type');
+      // A clone reference names one source Task; the current contract decides
+      // whether the draft can even open. It is resolved before a plain deep
+      // link because it also carries the prefilled state.
+      if (cloneReference) await this.openClone(cloneReference);
+      else if (requested && this.catalog.task_types.some(task => task.name === requested)) await this.selectTask(requested);
       else this.showChooser(requested ? t('ct.unavailable') : t('ct.choosePrompt'));
     } catch (error) { this.showChooser(error instanceof Error ? error.message : t('ct.offline')); }
+  }
+
+  /**
+   * Open one clone plan as a fresh draft.
+   *
+   * The plan is re-resolved from the current Task contract at this moment, so a
+   * schema change, catalog removal, or source deletion since the button click is
+   * observed. A slower resolution never overrides a method the reader chose
+   * while it was in flight: the same generation guards every other load.
+   */
+  private async openClone(reference: string): Promise<void> {
+    const generation = this.generation;
+    this.setStatus(t('ct.clone.loading'), 'busy');
+    let plan: ClonePlan;
+    try {
+      plan = await getClonePlan(reference);
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.showChooser(error instanceof Error ? error.message : t('ct.clone.unavailable'));
+      return;
+    }
+    if (generation !== this.generation) return;
+    if (this.catalog?.task_types.some(task => task.name === plan.target_task_type)) {
+      await this.selectTask(plan.target_task_type, plan);
+      return;
+    }
+    // The source's method is no longer offered. The plan still explains why it
+    // cannot become a draft, but no form is opened for a Task that cannot run.
+    this.showChooser(t('ct.clone.noTarget'));
+    this.showClonePanel(plan, false);
+  }
+
+  /** Move the existing snapshot rail above a mobile virtual keyboard. */
+  private observeViewport(): void {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const apply = (): void => {
+      const offset = Math.max(0, Math.round(window.innerHeight - (viewport.height + viewport.offsetTop)));
+      this.root.style.setProperty('--ct-vv-offset', `${offset}px`);
+    };
+    apply();
+    viewport.addEventListener('resize', apply);
+    viewport.addEventListener('scroll', apply);
+    this.viewportCleanup = () => {
+      viewport.removeEventListener('resize', apply);
+      viewport.removeEventListener('scroll', apply);
+      this.root.style.removeProperty('--ct-vv-offset');
+    };
   }
 
   private renderShell(): void {
@@ -215,8 +281,9 @@ export class CreateTask {
     button.addEventListener('click', () => void this.selectTask(task.name)); return button;
   }
 
-  private async selectTask(name: string): Promise<void> {
+  private async selectTask(name: string, plan: ClonePlan | null = null): Promise<void> {
     this.closeDemoDialog(); this.loadController?.abort(); const controller = new AbortController(); this.loadController = controller; const generation = ++this.generation;
+    this.cloneSource = null;
     // The workbench swaps in for the chooser: the loading status that lived in the
     // chooser's now-hidden region has to be on screen, and the region must travel
     // with it or the loading message would be announced from a hidden panel. The
@@ -228,6 +295,10 @@ export class CreateTask {
       const definition = await getTaskDefinition(name, controller.signal); if (generation !== this.generation) return;
       this.definition = definition; this.preflight = null; this.renderWorkbench(); this.setBusy(false); this.revision++; await this.workspace.mount(definition);
       if (generation !== this.generation) return;
+      // One preset, applied once, before the reader can have edited anything.
+      // A later fetch never applies a second time.
+      if (plan && plan.target_task_type === definition.name) this.applyClone(plan);
+      if (generation !== this.generation) return;
       if (this.status.classList.contains('busy')) this.setStatus('');
       this.refreshValidation(); window.scrollTo({ top: 0, behavior: 'auto' });
     } catch (error) {
@@ -237,7 +308,7 @@ export class CreateTask {
   }
 
   private renderWorkbench(): void {
-    const form = this.definition!; this.workbench.replaceChildren();
+    const form = this.definition!; this.workbench.replaceChildren(); this.clonePanel = null;
     this.pageHeader.hidden = true;
     const header = node('header', 'ct-method-header');
     const title = node('div'); title.append(node('p', 'ct-category', `${t('ct.title')} / ${this.categoryLabel(form.category)}`), node('h1', '', form.display_name), node('p', 'ct-method-summary', form.summary));
@@ -356,6 +427,52 @@ export class CreateTask {
     return errors;
   }
 
+  /** Apply the plan's one preset and state exactly what it did and did not carry. */
+  private applyClone(plan: ClonePlan): void {
+    this.cloneSource = plan.source_task_id;
+    // The state the reader would have without the clone, held so the panel's
+    // revert is a real undo of this application rather than a second reset.
+    const baseline = this.workspace.snapshot();
+    this.workspace.apply(clonePreset(plan));
+    this.showClonePanel(plan, true, baseline);
+    this.setStatus(t('ct.clone.applied'), 'ok');
+    // The reference is consumed: a refresh opens an ordinary draft instead of
+    // reapplying the preset over anything the reader changed.
+    const url = new URL(window.location.href);
+    url.searchParams.delete('clone');
+    url.searchParams.set('task_type', plan.target_task_type);
+    history.replaceState(null, '', url);
+  }
+
+  /**
+   * Render the reconciliation panel for one plan.
+   *
+   * In the workbench it sits above the input columns and offers explicit reset
+   * and revert actions. In the chooser (the source's method is gone) it is
+   * read-only: there is no form to reset and no draft to submit.
+   */
+  private showClonePanel(plan: ClonePlan, interactive: boolean, baseline?: WorkspacePreset): void {
+    this.clonePanel?.remove();
+    const reset = (): void => {
+      this.workspace.apply({ files: new Map(), parameters: {} });
+      this.refreshValidation();
+      this.setStatus(t('ct.clone.resetDone'), 'ok');
+    };
+    const panel = renderClonePanel(plan, interactive ? {
+      onReset: reset,
+      onRevert: () => {
+        if (baseline) this.workspace.restore(baseline);
+        else reset();
+        this.refreshValidation();
+        this.setStatus(t('ct.clone.reverted'), 'ok');
+      },
+    } : {});
+    this.clonePanel = panel;
+    const grid = interactive ? this.workbench.querySelector<HTMLElement>('.ct-workbench-grid') : null;
+    if (grid) this.workbench.insertBefore(panel, grid);
+    else this.chooser.append(panel);
+  }
+
   private refreshSnapshot(): void {
     const definition = this.definition; if (!definition) return;
     this.snapshot.replaceChildren();
@@ -408,7 +525,7 @@ export class CreateTask {
     if (!this.definition || this.busy) return;
     const errors = this.refreshValidation(); if (errors.length) { this.setStatus(t('ct.fixIssues'), 'error'); return; }
     const generation = this.generation; const revision = this.revision;
-    const data = buildSubmissionFormData(this.definition, this.workspace, this.workspace.collect());
+    const data = buildSubmissionFormData(this.definition, this.workspace, this.workspace.collect(), this.cloneSource);
     this.submitController?.abort();
     const controller = new AbortController();
     this.submitController = controller;
@@ -627,19 +744,22 @@ export class CreateTask {
 
   private showChooser(message: string): void {
     this.loadController?.abort(); this.submitController?.abort(); this.generation++; this.definition = null; this.preflight = null; this.setBusy(false); this.checking = false; this.closeDemoDialog(); this.workspace.destroy();
+    this.clonePanel?.remove(); this.clonePanel = null; this.cloneSource = null;
     this.chooser.hidden = false; this.pageHeader.hidden = false; this.workbench.hidden = true;
     // The region and the chooser's methods come home with the state, so the
     // chooser's own status message is always inside the live region, whether or
     // not the catalog rendered before this point.
     this.renderChooserChrome();
     this.catalogStatus.textContent = message;
-    const url = new URL(window.location.href); url.searchParams.delete('task_type'); history.replaceState(null, '', url);
+    const url = new URL(window.location.href); url.searchParams.delete('task_type'); url.searchParams.delete('clone'); history.replaceState(null, '', url);
     this.chooser.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
   }
 
   destroy(): void {
     this.loadController?.abort();
     this.submitController?.abort();
+    this.viewportCleanup?.(); this.viewportCleanup = null;
+    this.clonePanel?.remove(); this.clonePanel = null;
     // A route change must not leave a modal in the top layer over the next page,
     // and any await holding it open settles as a cancelled decision.
     this.generation++;

@@ -1289,6 +1289,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/tasks/{task_id}/clone-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a read-only Clone & Reuse plan for an existing Task
+         * @description Resolves one visible source Task's recorded parameter values and immutable input metadata against the Task's *current* schema, and returns a bounded typed plan with every incompatible value reported by field. It never mutates the source, derives a Task ID, reserves resources, or reads file bytes. The returned plan_id is an opaque, owner-scoped, short-lived reference: GET /compute/api/clone-plans/{plan_id} re-resolves the plan against the current contract, so a schema change between the click and the draft is observed.
+         */
+        post: operations["createClonePlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/clone-plans/{plan_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve a Clone & Reuse plan reference
+         * @description Rebuilds the typed plan against the current Task contract and checks that the source Task is still visible. An expired reference, a reference owned by another caller, or a deleted source answers 404 with a stable clone_plan_unavailable or clone_source_unavailable code.
+         */
+        get: operations["getClonePlan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/running/{task_id}": {
         parameters: {
             query?: never;
@@ -2187,9 +2227,31 @@ export interface components {
             /** @constant */
             additionalProperties: false;
             properties: {
-                [key: string]: Record<string, never>;
+                [key: string]: components["schemas"]["TaskParameterProperty"];
             };
             required?: string[];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description One Task-owned JSON Schema property. The reviewed x-ui annotations are presentation only; x-ui-placeholder is never a default, a required declaration, or a submitted value. */
+        TaskParameterProperty: {
+            type?: string | string[];
+            title?: string;
+            description?: string;
+            default?: unknown;
+            enum?: unknown[];
+            minimum?: number;
+            maximum?: number;
+            exclusiveMinimum?: number;
+            exclusiveMaximum?: number;
+            multipleOf?: number;
+            format?: string;
+            "x-help"?: string;
+            "x-unit"?: string;
+            "x-advanced"?: boolean;
+            "x-ui-control"?: Record<string, never>;
+            /** @description Optional example text rendered as an input placeholder on an optional string field. Never a default, a stored form value, or a submitted parameter. */
+            "x-ui-placeholder"?: string;
         } & {
             [key: string]: unknown;
         };
@@ -2891,6 +2953,8 @@ export interface components {
             execution_mode?: string;
             /** @description Optional JSON-encoded object mapping each declared reuse role to {source_task, stage, port, digest}. */
             reuse?: string;
+            /** @description Optional provenance: the visible source Task a Clone & Reuse draft was built from. It is verified for visibility and recorded with the new Task; it is not an input or a scientific parameter. */
+            cloned_from?: string;
             /** @description Optional JSON-encoded version-2 workspace document. */
             workspace?: string;
         } & {
@@ -3643,6 +3707,80 @@ export interface components {
             built_at: string | null;
             build_id: string | null;
             changelog: components["schemas"]["VersionChangelog"];
+        };
+        /** @description One value the draft may prefill. source=recorded means the source Task explicitly recorded it; source=current_default means the value comes from the current schema because the source recorded none. */
+        CloneParameter: {
+            name: string;
+            /** @description The string the owning form control holds. 0 and false are values, not absence. */
+            value: string;
+            /** @enum {string} */
+            source: "recorded" | "current_default";
+        };
+        /** @description Digest metadata for one source input. The plan never carries a filesystem path or download URL; Core has no submission-time input reference, so the browser re-uploads the bytes and normal validation hashes them. */
+        CloneInputFile: {
+            original_name: string;
+            sha256: string | null;
+            size: number | null;
+            format: string;
+            /** @constant */
+            reuse: "reupload_required";
+            /** @description Whether the source's immutable snapshot is still verifiable and the caller owns it. */
+            available: boolean;
+            /** @description not_owner or snapshot_unavailable when a file cannot be reused. */
+            reason: string | null;
+        };
+        CloneInputRole: {
+            role: string;
+            title: string;
+            /** @description Logical formats the current role accepts; every reused file must be re-uploaded and matches one of them. */
+            formats: string[];
+            required: boolean;
+            /** @constant */
+            reuse: "reupload_required";
+            files: components["schemas"]["CloneInputFile"][];
+        };
+        CloneFinding: {
+            /** @description Stable machine-readable reason; clients localize their own copy. */
+            code: string;
+            message: string;
+            field?: string;
+            recorded_value?: string;
+        };
+        /** @description A bounded, typed, read-only plan for a new draft. can_submit is always false: only a normal preflight and POST can create a Task. */
+        ClonePlan: {
+            source_task_id: components["schemas"]["TaskId"];
+            source_task_type: string;
+            /** Format: date-time */
+            source_submitted_at: string | null;
+            target_task_type: string;
+            target_display_name: string;
+            /** @description Canonical sha256 of the current parameter schema, or null when the Task type is no longer registered. */
+            target_schema_revision: string | null;
+            compatible_parameters: components["schemas"]["CloneParameter"][];
+            reusable_inputs: components["schemas"]["CloneInputRole"][];
+            warnings: components["schemas"]["CloneFinding"][];
+            blocked_fields: components["schemas"]["CloneFinding"][];
+            /** @constant */
+            can_submit: false;
+        };
+        ClonePlanResponse: {
+            /** @description Opaque owner-scoped reference; the only clone fact a URL may carry. */
+            plan_id: string;
+            /** Format: date-time */
+            expires_at: string | null;
+            source_task_id: components["schemas"]["TaskId"];
+            source_task_type: string;
+            /** Format: date-time */
+            source_submitted_at: string | null;
+            target_task_type: string;
+            target_display_name: string;
+            target_schema_revision: string | null;
+            compatible_parameters: components["schemas"]["CloneParameter"][];
+            reusable_inputs: components["schemas"]["CloneInputRole"][];
+            warnings: components["schemas"]["CloneFinding"][];
+            blocked_fields: components["schemas"]["CloneFinding"][];
+            /** @constant */
+            can_submit: false;
         };
     };
     responses: {
@@ -5866,6 +6004,79 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    createClonePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: components["parameters"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Plan resolved and its short-lived reference created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClonePlanResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Task does not exist or is not visible to the caller */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Clone-plan rate limit exceeded */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getClonePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current plan for the referenced source */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClonePlanResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Reference expired, unavailable, or its source is no longer visible */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     getTaskStatus: {

@@ -45,6 +45,7 @@ export interface ParameterSchema { properties?: Record<string, ParameterDefiniti
 export type TaskAction = components['schemas']['TaskAction'];
 export type TaskSummary = components['schemas']['TaskSummary'];
 export type TaskList = components['schemas']['TaskList'];
+export type ClonePlan = components['schemas']['ClonePlanResponse'];
 export type TaskHistoryQuery = components['schemas']['TaskHistoryQuery'];
 export type TaskStatus = components['schemas']['TaskStatus'];
 
@@ -72,6 +73,12 @@ export const getTaskPage = (params: TaskPageParams = {}, signal?: AbortSignal): 
 /** The bounded status payload for one visible Task, used for live reconciliation. */
 export const getTaskStatus = (taskId: string, signal?: AbortSignal): Promise<components['schemas']['TaskStatus']> =>
   requestJson(`/compute/api/running/${encodeURIComponent(taskId)}`, { signal });
+/** Create the opaque, short-lived reference a clone draft is opened with. */
+export const createClonePlan = (taskId: string): Promise<ClonePlan> =>
+  authorizedJson<ClonePlan>(`/compute/api/tasks/${encodeURIComponent(taskId)}/clone-plan`, { method: 'POST' });
+/** Resolve a clone plan against the current Task contract. */
+export const getClonePlan = (planId: string, signal?: AbortSignal): Promise<ClonePlan> =>
+  requestJson<ClonePlan>(`/compute/api/clone-plans/${encodeURIComponent(planId)}`, { signal });
 
 export async function login(username: string, password: string): Promise<components['schemas']['LoginResponse']> {
   const response = await jsonRequest<components['schemas']['LoginResponse']>('/compute/api/auth/login', { username, password });

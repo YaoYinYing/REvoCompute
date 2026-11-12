@@ -34,6 +34,9 @@ export function parametersFromSchema(schema: ParameterSchema): ParameterDefiniti
       description: typeof property.description === 'string' ? property.description : '',
       help: typeof property['x-help'] === 'string' ? property['x-help'] : '',
       unit: typeof property['x-unit'] === 'string' ? property['x-unit'] : '',
+      // Presentation only: the server admits this annotation on optional string
+      // fields, and the control uses it as a hint, never as a value.
+      placeholder: typeof property['x-ui-placeholder'] === 'string' ? property['x-ui-placeholder'] : undefined,
       required: required.has(name), defaultValue: property.default as string | number | boolean | undefined,
       choices: Array.isArray(property.enum) ? property.enum.filter((value): value is string | number | boolean => ['string', 'number', 'boolean'].includes(typeof value)) : [],
       minimum: typeof property.minimum === 'number' ? property.minimum : undefined,

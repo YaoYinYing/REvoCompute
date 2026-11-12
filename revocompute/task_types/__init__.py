@@ -415,6 +415,48 @@ def _load_task_inputs(raw: Any, task_id: str) -> tuple[TaskInputRole, ...]:
     )
 
 
+#: A reviewed presentation-only annotation. It is deliberately not ``default``:
+#: an empty optional control stays empty, and the value is never submitted.
+_UI_PLACEHOLDER = "x-ui-placeholder"
+_PLACEHOLDER_MAX_LENGTH = 200
+
+
+def _validate_ui_annotations(schema: Any, task_id: str) -> None:
+    """Refuse an annotation whose contract the form cannot honour.
+
+    A placeholder is only meaningful on an optional string field: a required
+    field must be entered, and a non-string control cannot render text. Keeping
+    the annotation out of ``default``/``required`` is what makes it presentational
+    only, so validation lives here rather than in the submission boundary.
+    """
+    if not isinstance(schema, dict):
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return
+    required = {str(name) for name in schema.get("required", ()) or ()}
+    for name, property_schema in properties.items():
+        if not isinstance(property_schema, dict) or _UI_PLACEHOLDER not in property_schema:
+            continue
+        if name in required:
+            raise ValueError(
+                f"Task type {task_id!r} declares {_UI_PLACEHOLDER} on required field {name!r}"
+            )
+        if property_schema.get("type") != "string":
+            raise ValueError(
+                f"Task type {task_id!r} declares {_UI_PLACEHOLDER} on non-string field {name!r}"
+            )
+        placeholder = property_schema[_UI_PLACEHOLDER]
+        if (
+            not isinstance(placeholder, str)
+            or not placeholder.strip()
+            or len(placeholder) > _PLACEHOLDER_MAX_LENGTH
+        ):
+            raise ValueError(
+                f"Task type {task_id!r} declares an invalid {_UI_PLACEHOLDER} on field {name!r}"
+            )
+
+
 def _load_task_params(raw: Any, schema: dict[str, Any], task_id: str) -> tuple[TaskParam, ...]:
     """Load UI parameter metadata, deriving a minimal form from JSON Schema when needed."""
     if raw is not None:
@@ -707,6 +749,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 )
                 continue
             schema = dict(raw.get("schema") or raw.get("parameters") or {})
+            _validate_ui_annotations(schema, task_id)
             params = _load_task_params(raw.get("params"), schema, task_id)
             workspace_owner = manifest_obj.runner_family or family_id
             owner_schemas = {**capability_schemas, **workspace_schemas_by_owner.get(workspace_owner, {})}

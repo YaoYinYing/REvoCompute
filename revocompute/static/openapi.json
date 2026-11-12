@@ -1104,6 +1104,39 @@
         }
       }
     },
+    "/compute/api/tasks/{task_id}/clone-plan": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "Create a read-only Clone & Reuse plan for an existing Task",
+        "description": "Resolves one visible source Task's recorded parameter values and immutable input metadata against the Task's *current* schema, and returns a bounded typed plan with every incompatible value reported by field. It never mutates the source, derives a Task ID, reserves resources, or reads file bytes. The returned plan_id is an opaque, owner-scoped, short-lived reference: GET /compute/api/clone-plans/{plan_id} re-resolves the plan against the current contract, so a schema change between the click and the draft is observed.",
+        "operationId": "createClonePlan",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/TaskId"}],
+        "responses": {
+          "201": {"description": "Plan resolved and its short-lived reference created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ClonePlanResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"description": "Task does not exist or is not visible to the caller", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "429": {"description": "Clone-plan rate limit exceeded"}
+        }
+      }
+    },
+    "/compute/api/clone-plans/{plan_id}": {
+      "get": {
+        "tags": ["Tasks"],
+        "summary": "Resolve a Clone & Reuse plan reference",
+        "description": "Rebuilds the typed plan against the current Task contract and checks that the source Task is still visible. An expired reference, a reference owned by another caller, or a deleted source answers 404 with a stable clone_plan_unavailable or clone_source_unavailable code.",
+        "operationId": "getClonePlan",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [{"name": "plan_id", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[A-Za-z0-9_-]{20,64}$"}}],
+        "responses": {
+          "200": {"description": "Current plan for the referenced source", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ClonePlanResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"description": "Reference expired, unavailable, or its source is no longer visible", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        }
+      }
+    },
     "/compute/api/running/{task_id}": {
       "get": {
         "tags": ["Tasks"],
@@ -2086,11 +2119,39 @@
           "$schema": {"type": "string", "const": "https://json-schema.org/draft/2020-12/schema"},
           "type": {"type": "string", "const": "object"},
           "additionalProperties": {"type": "boolean", "const": false},
-          "properties": {"type": "object", "additionalProperties": {"type": "object"}},
+          "properties": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/TaskParameterProperty"}},
           "required": {"type": "array", "items": {"type": "string"}}
         },
         "additionalProperties": true,
         "description": "Draft 2020-12 parameter schema projected without modification from the owning task.yaml"
+      },
+      "TaskParameterProperty": {
+        "type": "object",
+        "description": "One Task-owned JSON Schema property. The reviewed x-ui annotations are presentation only; x-ui-placeholder is never a default, a required declaration, or a submitted value.",
+        "properties": {
+          "type": {"type": ["string", "array"], "items": {"type": "string"}},
+          "title": {"type": "string"},
+          "description": {"type": "string"},
+          "default": {},
+          "enum": {"type": "array"},
+          "minimum": {"type": "number"},
+          "maximum": {"type": "number"},
+          "exclusiveMinimum": {"type": "number"},
+          "exclusiveMaximum": {"type": "number"},
+          "multipleOf": {"type": "number"},
+          "format": {"type": "string"},
+          "x-help": {"type": "string"},
+          "x-unit": {"type": "string"},
+          "x-advanced": {"type": "boolean"},
+          "x-ui-control": {"type": "object"},
+          "x-ui-placeholder": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Optional example text rendered as an input placeholder on an optional string field. Never a default, a stored form value, or a submitted parameter."
+          }
+        },
+        "additionalProperties": true
       },
       "ToolCallId": {"type": "string", "pattern": "^tool_call_[A-Za-z0-9_-]{32}$"},
       "ToolFileRole": {
@@ -2975,6 +3036,7 @@
           "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types; omitted when it is supplied by the request path."},
           "execution_mode": {"type": "string", "description": "Manifest-declared execution mode from the Task Type projection; defaults to full."},
           "reuse": {"type": "string", "description": "Optional JSON-encoded object mapping each declared reuse role to {source_task, stage, port, digest}."},
+          "cloned_from": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "Optional provenance: the visible source Task a Clone & Reuse draft was built from. It is verified for visibility and recorded with the new Task; it is not an input or a scientific parameter."},
           "workspace": {"type": "string", "description": "Optional JSON-encoded version-2 workspace document."}
         },
         "additionalProperties": {"type": "string", "description": "Runner parameter field named params[parameter_name]."}
@@ -3965,6 +4027,95 @@
         "built_at": {"type": ["string", "null"]},
         "build_id": {"type": ["string", "null"]},
         "changelog": {"$ref": "#/components/schemas/VersionChangelog"}
+      },
+      "additionalProperties": false
+    },
+    "CloneParameter": {
+      "type": "object",
+      "description": "One value the draft may prefill. source=recorded means the source Task explicitly recorded it; source=current_default means the value comes from the current schema because the source recorded none.",
+      "required": ["name", "value", "source"],
+      "properties": {
+        "name": {"type": "string"},
+        "value": {"type": "string", "description": "The string the owning form control holds. 0 and false are values, not absence."},
+        "source": {"type": "string", "enum": ["recorded", "current_default"]}
+      },
+      "additionalProperties": false
+    },
+    "CloneInputFile": {
+      "type": "object",
+      "description": "Digest metadata for one source input. The plan never carries a filesystem path or download URL; Core has no submission-time input reference, so the browser re-uploads the bytes and normal validation hashes them.",
+      "required": ["original_name", "sha256", "size", "format", "reuse", "available", "reason"],
+      "properties": {
+        "original_name": {"type": "string"},
+        "sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+        "size": {"type": ["integer", "null"], "minimum": 0},
+        "format": {"type": "string"},
+        "reuse": {"type": "string", "const": "reupload_required"},
+        "available": {"type": "boolean", "description": "Whether the source's immutable snapshot is still verifiable and the caller owns it."},
+        "reason": {"type": ["string", "null"], "description": "not_owner or snapshot_unavailable when a file cannot be reused."}
+      },
+      "additionalProperties": false
+    },
+    "CloneInputRole": {
+      "type": "object",
+      "required": ["role", "title", "formats", "required", "reuse", "files"],
+      "properties": {
+        "role": {"type": "string"},
+        "title": {"type": "string"},
+        "formats": {"type": "array", "items": {"type": "string"}, "description": "Logical formats the current role accepts; every reused file must be re-uploaded and matches one of them."},
+        "required": {"type": "boolean"},
+        "reuse": {"type": "string", "const": "reupload_required"},
+        "files": {"type": "array", "items": {"$ref": "#/components/schemas/CloneInputFile"}}
+      },
+      "additionalProperties": false
+    },
+    "CloneFinding": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "description": "Stable machine-readable reason; clients localize their own copy."},
+        "message": {"type": "string"},
+        "field": {"type": "string"},
+        "recorded_value": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "ClonePlan": {
+      "type": "object",
+      "description": "A bounded, typed, read-only plan for a new draft. can_submit is always false: only a normal preflight and POST can create a Task.",
+      "required": ["source_task_id", "source_task_type", "source_submitted_at", "target_task_type", "target_display_name", "target_schema_revision", "compatible_parameters", "reusable_inputs", "warnings", "blocked_fields", "can_submit"],
+      "properties": {
+        "source_task_id": {"$ref": "#/components/schemas/TaskId"},
+        "source_task_type": {"type": "string"},
+        "source_submitted_at": {"type": ["string", "null"], "format": "date-time"},
+        "target_task_type": {"type": "string"},
+        "target_display_name": {"type": "string"},
+        "target_schema_revision": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$", "description": "Canonical sha256 of the current parameter schema, or null when the Task type is no longer registered."},
+        "compatible_parameters": {"type": "array", "items": {"$ref": "#/components/schemas/CloneParameter"}},
+        "reusable_inputs": {"type": "array", "items": {"$ref": "#/components/schemas/CloneInputRole"}},
+        "warnings": {"type": "array", "items": {"$ref": "#/components/schemas/CloneFinding"}},
+        "blocked_fields": {"type": "array", "items": {"$ref": "#/components/schemas/CloneFinding"}},
+        "can_submit": {"type": "boolean", "const": false}
+      },
+      "additionalProperties": false
+    },
+    "ClonePlanResponse": {
+      "type": "object",
+      "required": ["plan_id", "expires_at", "source_task_id", "source_task_type", "source_submitted_at", "target_task_type", "target_display_name", "target_schema_revision", "compatible_parameters", "reusable_inputs", "warnings", "blocked_fields", "can_submit"],
+      "properties": {
+        "plan_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{20,64}$", "description": "Opaque owner-scoped reference; the only clone fact a URL may carry."},
+        "expires_at": {"type": ["string", "null"], "format": "date-time"},
+        "source_task_id": {"$ref": "#/components/schemas/TaskId"},
+        "source_task_type": {"type": "string"},
+        "source_submitted_at": {"type": ["string", "null"], "format": "date-time"},
+        "target_task_type": {"type": "string"},
+        "target_display_name": {"type": "string"},
+        "target_schema_revision": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+        "compatible_parameters": {"type": "array", "items": {"$ref": "#/components/schemas/CloneParameter"}},
+        "reusable_inputs": {"type": "array", "items": {"$ref": "#/components/schemas/CloneInputRole"}},
+        "warnings": {"type": "array", "items": {"$ref": "#/components/schemas/CloneFinding"}},
+        "blocked_fields": {"type": "array", "items": {"$ref": "#/components/schemas/CloneFinding"}},
+        "can_submit": {"type": "boolean", "const": false}
       },
       "additionalProperties": false
     }
