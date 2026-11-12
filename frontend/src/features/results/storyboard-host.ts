@@ -1,5 +1,6 @@
 import type { LogicalResultFile, ResultManifest, ResultStoryboardDeclaration, ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
+import type { MolecularSelection } from '../structure/molecular-scene';
 import { ResultSelectionStore } from './scientific';
 
 export interface StoryboardServices {
@@ -13,8 +14,8 @@ export interface StoryboardServices {
     /** Frame count of a mounted trajectory view, when the view declares one. */
     frameCount?: number;
   }>;
-  focusStructure?(selection: unknown): boolean;
-  selectStructure?(selection: unknown): boolean;
+  focusStructure?(selection: MolecularSelection): boolean;
+  selectStructure?(selection: MolecularSelection): boolean;
   resetStructure?(): void;
   describeResult?(description: { title: string; subtitle?: string }): void;
   setStructureGeometry?(artifact: LogicalResultFile | null): Promise<void>;

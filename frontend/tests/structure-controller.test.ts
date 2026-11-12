@@ -72,7 +72,7 @@ describe('StructureController', () => {
 
     // A multi-residue collection crosses the boundary as ONE call, so the adapter
     // builds a single combined selection instead of N replacing selections.
-    const residues = [{ chain: 'A', residue: 101, numbering: 'label_seq_id' }, { chain: 'A', residue: 104, numbering: 'label_seq_id' }];
+    const residues = [{ chain: 'A', residue: 101, numbering: 'label_seq_id' as const }, { chain: 'A', residue: 104, numbering: 'label_seq_id' as const }];
     expect(controller.select({ residues })).toBe(true);
     expect(select).toHaveBeenCalledTimes(1);
     expect(select).toHaveBeenCalledWith({ residues });

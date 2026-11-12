@@ -16,6 +16,7 @@ import { createEvidenceBundleViewRenderer } from './evidence-bundle-view';
 import { createCandidateCollectionViewRenderer } from './candidate-collection-view';
 import type { MolecularViewerFactory } from './molecular/viewer-contract';
 import { StructureController } from './molecular/structure-controller';
+import { createDisplayModeControls, type DisplayModeControls } from '../structure/display-mode';
 import { installScientificPrimitives } from './scientific';
 import { StoryboardHost } from './storyboard-host';
 import { mountTaskDiagnostics } from '../tasks/diagnostics';
@@ -114,6 +115,7 @@ export class ResultWorkspace {
   private selected: ResultFile | null = null;
   private viewRenderer: { destroy(): void } | null = null;
   private renderController: AbortController | null = null;
+  private displayModeControls: DisplayModeControls | null = null;
   private loadController: AbortController | null = null;
   private diagnosticController: AbortController | null = null;
   private poll: number | null = null;
@@ -597,6 +599,9 @@ export class ResultWorkspace {
   }
 
   private structureToolbar(artifact: ResultFile, viewport: HTMLElement, owner: StructureController): HTMLElement {
+    // A rebuilt toolbar owns a fresh mode controller; the previous one is
+    // disposed first so fullscreen/focus listeners cannot outlive their stage.
+    this.displayModeControls?.destroy(); this.displayModeControls = null;
     const own = owner === this.structure;
     const toolbar = element('div', 'structure-toolbar'); toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', t('results.structure.controls'));
     const representations: Array<[string, string]> = [['cartoon', t('results.structure.cartoon')], ['cartoon_ligand', t('results.structure.cartoonLigand')], ['sticks', t('results.structure.sticks')], ['surface_ligand', t('results.structure.surface')]];
@@ -628,15 +633,28 @@ export class ResultWorkspace {
     });
     const image = element('button', 'result-button result-button-small', t('results.structure.savePng')) as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await owner.captureImage()));
     const source = element('button', 'result-button result-button-small', t('results.download')) as HTMLButtonElement; source.type = 'button'; source.addEventListener('click', () => beginDownload(downloadUrl(artifact), downloadName(artifact)));
-    const fullscreen = element('button', 'result-button result-button-small') as HTMLButtonElement; fullscreen.type = 'button';
-    const syncFullscreen = (): void => { const expanded = document.fullscreenElement === (viewport.closest('[data-molecular-workspace]') || viewport); const label = expanded ? t('results.structure.exitFullscreen') : t('results.structure.enterFullscreen'); fullscreen.title = label; fullscreen.setAttribute('aria-label', label); fullscreen.setAttribute('aria-pressed', String(expanded)); fullscreen.textContent = expanded ? label : t('results.structure.expandStage'); };
-    syncFullscreen();
-    fullscreen.addEventListener('click', async () => { const surface = viewport.closest<HTMLElement>('[data-molecular-workspace]') || viewport; if (document.fullscreenElement === surface) await document.exitFullscreen(); else await surface.requestFullscreen(); });
-    const controller = this.renderController; if (controller) document.addEventListener('fullscreenchange', syncFullscreen, { signal: controller.signal });
     const secondary = element('div', 'structure-tool-secondary');
     const native = element('details', 'structure-extra-tools'); native.append(element('summary', '', t('results.structure.advanced')), themeButton, source);
     secondary.append(native, image, element('span', 'structure-gesture', 'Drag to rotate · scroll to zoom'));
-    actions.append(reset, fullscreen); toolbar.append(representationGroup, colorGroup, actions, secondary);
+    actions.append(reset);
+    // Reparenting is deliberately absent: the mode controller re-lays out this
+    // one stage, so the mounted canvas, camera, selection and frame survive.
+    this.displayModeControls = createDisplayModeControls({
+      stage: viewport,
+      container: actions,
+      resize: () => { owner.resize(); },
+      labels: {
+        group: t('results.structure.displayMode'),
+        normal: t('results.structure.modeNormal'),
+        expand: t('results.structure.modeExpand'),
+        maximize: t('results.structure.modeMaximize'),
+        fullscreenFallback: t('results.structure.fullscreenFallback'),
+        expanded: t('results.structure.expanded'),
+        maximized: t('results.structure.maximized'),
+        collapsed: t('results.structure.collapsed'),
+      },
+    });
+    toolbar.append(representationGroup, colorGroup, actions, secondary);
     return toolbar;
   }
 
@@ -794,10 +812,10 @@ export class ResultWorkspace {
   private renderPreviewError(message: string): void { this.resetPreview(); this.nodes.preview.replaceChildren(element('p', 'result-empty', message)); this.nodes.preview.setAttribute('aria-busy', 'false'); }
   private renderFatal(message: string): void { this.setState(t('results.fatalTitle'), message); this.renderPreviewError(t('results.fatalHint')); }
   private cancelRender(): void { this.renderController?.abort(); this.renderController = null; }
-  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.storyboardStructure = null; this.destroyViewRenderer(); this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose(); }
+  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.storyboardStructure = null; this.destroyViewRenderer(); this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose(); this.displayModeControls?.destroy(); this.displayModeControls = null; }
 
   destroy(): void {
-    if (this.disposed) return; this.disposed = true; this.destroyViewRenderer(); this.cancelRender(); this.loadController?.abort(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose();
+    if (this.disposed) return; this.disposed = true; this.destroyViewRenderer(); this.cancelRender(); this.loadController?.abort(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose(); this.displayModeControls?.destroy(); this.displayModeControls = null;
     this.diagnosticController?.abort();
     if (this.poll != null) clearInterval(this.poll); if (this.archiveTimer != null) clearTimeout(this.archiveTimer); this.listeners.abort(); this.root.replaceChildren();
   }

@@ -115,6 +115,41 @@
 .result-app .structure-host .msp-control-row-ctrl { min-width: 0; }
 .structure-host[data-loading="true"] { visibility: hidden; }
 .structure-viewport:fullscreen { grid-template-rows: auto 1fr; width: 100vw; height: 100vh; border: 0; border-radius: 0; background: var(--result-paper); }
+.structure-display-modes { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .25rem; }
+.structure-display-modes .result-button[aria-pressed="true"] { border-color: var(--result-accent); background: var(--result-accent-soft); color: var(--result-accent); }
+/* Expand and the fallback maximize re-lay out the SAME stage node: no canvas
+   reparenting and no viewer teardown. Native fullscreen uses :fullscreen above. */
+.structure-viewport[data-display-mode="expand"],
+.structure-viewport[data-display-mode="maximize"][data-fullscreen-fallback="true"] {
+  position: fixed;
+  inset: clamp(1rem, 4vw, 3rem);
+  z-index: 100;
+  width: auto;
+  height: auto;
+  max-height: calc(100dvh - 2 * clamp(1rem, 4vw, 3rem));
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  border: 1px solid var(--result-line);
+  border-radius: var(--r-surface-lg);
+  background: var(--result-paper);
+  box-shadow: 0 1.5rem 4rem color-mix(in srgb, var(--result-ink) 28%, transparent);
+}
+.structure-viewport[data-display-mode="expand"] .structure-host,
+.structure-viewport[data-display-mode="maximize"][data-fullscreen-fallback="true"] .structure-host { min-height: 0; }
+.structure-mode-backdrop { position: fixed; inset: 0; z-index: 99; background: color-mix(in srgb, var(--result-ink) 45%, transparent); backdrop-filter: blur(3px); }
+body:has(.structure-viewport[data-display-mode="expand"]),
+body:has(.structure-viewport[data-display-mode="maximize"][data-fullscreen-fallback="true"]) { overflow: hidden; }
+@media (prefers-reduced-motion: no-preference) {
+  .structure-viewport[data-display-mode="expand"],
+  .structure-viewport[data-display-mode="maximize"][data-fullscreen-fallback="true"] { animation: structure-mode-in 160ms ease-out; }
+  .structure-mode-backdrop { animation: structure-mode-fade 160ms ease-out; }
+}
+@keyframes structure-mode-in { from { opacity: .55; transform: scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes structure-mode-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 600px) {
+  .structure-viewport[data-display-mode="expand"],
+  .structure-viewport[data-display-mode="maximize"][data-fullscreen-fallback="true"] { inset: 0; max-height: 100dvh; border-radius: 0; border: 0; }
+}
 .result-record { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 2.5rem; padding-top: 1.5rem; }
 .result-definition-list { display: grid; grid-template-columns: minmax(8rem, auto) minmax(0, 1fr); margin: .7rem 0; font-size: .875rem; }
 .result-definition-list dt, .result-definition-list dd { margin: 0; padding: .35rem 0; border-bottom: 1px solid var(--result-line); }

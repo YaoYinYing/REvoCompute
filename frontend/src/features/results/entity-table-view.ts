@@ -63,7 +63,10 @@ export function createEntityTableViewRenderer(): ViewRenderer {
           const residue = Number(cell(mapping.residue_column!));
           const chain = String(cell(mapping.chain_column!) ?? '');
           if (chain === '' || !Number.isFinite(residue)) return;
-          context.selectStructure({ chain, residue, numbering: mapping.numbering });
+          // A declared numbering value is a closed vocabulary; anything else is
+          // authored numbering rather than an arbitrary string handed to Mol*.
+          const numbering = mapping.numbering === 'label_seq_id' ? 'label_seq_id' as const : 'auth_seq_id' as const;
+          context.selectStructure({ chain, residue, numbering });
         },
       });
       if (mounted) {
