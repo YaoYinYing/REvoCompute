@@ -49,4 +49,6 @@ science, and the guide owns only the expectation that the record exists.
   families.
 - [Adding a Runner](adding-a-runner.md) — the standard Example Runner-based onboarding path.
 - [Docking Runners](docking-runners.md) — the molecular docking suite.
+- [CAVER Tunnels](caver.md) — start-point semantics, filter directives, and
+  acceptance evidence for the CAVER family.
 - [Adaptation Wait List](wait-list.md) — families queued for adaptation.
