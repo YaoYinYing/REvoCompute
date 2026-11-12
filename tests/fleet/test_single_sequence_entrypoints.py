@@ -2,28 +2,24 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The two sequence-first no-MSA Tasks are real, separately discoverable entries.
+"""The sequence-first no-MSA Task is a real, separately discoverable entry.
 
 Discovery, the catalog, the workspace projection, and the preflight contract are
 read through the real application against the shipped Runner manifests. Nothing
 here executes a Runner or reads a manifest as text; the server projections are
-the consumers.
+the consumers. AlphaFold 3 has no separate single-sequence Task: its general
+JSON Task selects the same no-MSA path with empty inline MSA fields.
 """
 
 from __future__ import annotations
 
 import io
 
-import conftest
 from conftest import _load_fleet_module, _test_client_auth
 from frontend_fixtures import validate_payload
 
 AF2 = "alphafold_single_sequence"
-AF3 = "alphafold3_single_sequence"
-DISPLAY_NAMES = {
-    AF2: "AlphaFold2 — Single sequence (no MSA)",
-    AF3: "AlphaFold3 — Single sequence (no MSA)",
-}
+DISPLAY_NAME = "AlphaFold2 — Single sequence (no MSA)"
 
 
 def _client(monkeypatch, tmp_path):
@@ -51,48 +47,39 @@ def _preflight(module, name: str, fasta: bytes | str, filename: str):
     )
 
 
-def _allow_gpu_tasks(module) -> None:
-    """Give the test user the entitlement the restricted AF3 family requires."""
-    _test_client_auth(module)  # ensure the test user exists
-    db = module.app.config["user_db"]
-    user = db.get_user_by_username("tester")
-    db.update_user(user["id"], allow_gpu_use=True)
-    db.grant_entitlement(user["id"], "alphafold3_noncommercial", granted_by=user["id"], basis="other")
-
-
-def test_both_entries_are_separate_catalog_rows(monkeypatch, tmp_path):
+def test_the_entry_is_a_separate_catalog_row(monkeypatch, tmp_path):
     _module, client = _client(monkeypatch, tmp_path)
     catalog = client.get("/compute/api/types").get_json()
     validate_payload("TaskCatalog", catalog)
     by_name = {row["name"]: row for row in catalog["task_types"]}
 
-    for name, display_name in DISPLAY_NAMES.items():
-        assert name in by_name, f"{name} is missing from the discoverable catalog"
-        assert by_name[name]["display_name"] == display_name
-        assert by_name[name]["detail_url"] == f"/compute/api/types/{name}"
+    assert AF2 in by_name, f"{AF2} is missing from the discoverable catalog"
+    assert by_name[AF2]["display_name"] == DISPLAY_NAME
+    assert by_name[AF2]["detail_url"] == f"/compute/api/types/{AF2}"
 
     # The pre-existing MSA-assisted entries are still selectable.
     assert {"alphafold", "alphafold3"} <= set(by_name)
+    assert "alphafold3_single_sequence" not in by_name
 
 
 def test_the_sequence_workspace_binds_the_single_record_role(monkeypatch, tmp_path):
     _module, client = _client(monkeypatch, tmp_path)
 
-    for name in (AF2, AF3):
-        detail = _detail(client, name)
-        roles = {role["id"]: role for role in detail["inputs"]}
-        assert set(roles) == {"sequence"}
-        role = roles["sequence"]
-        assert role["type"] == "single_protein_sequence"
-        assert role["cardinality"] == {"min": 1, "max": 1}
-        assert "fasta" in role["formats"]
-        assert detail["gpus"] is True
+    detail = _detail(client, AF2)
+    roles = {role["id"]: role for role in detail["inputs"]}
+    assert set(roles) == {"sequence"}
+    role = roles["sequence"]
+    assert role["type"] == "single_protein_sequence"
+    assert role["cardinality"] == {"min": 1, "max": 1}
+    assert "fasta" in role["formats"]
+    assert detail["gpus"] is True
+    assert detail["access"]["restricted"] is False
 
-        material = next(step for step in detail["input_workspace"]["steps"] if step["id"] == "material")
-        sequence = next(capability for capability in material["capabilities"] if capability["plugin"] == "sequence")
-        assert sequence["options"] == {"role": "sequence"}
-        assert any(capability["plugin"] == "files" for capability in material["capabilities"])
-        assert detail["input_workspace"]["steps"][-1]["capabilities"][-1]["plugin"] == "review"
+    material = next(step for step in detail["input_workspace"]["steps"] if step["id"] == "material")
+    sequence = next(capability for capability in material["capabilities"] if capability["plugin"] == "sequence")
+    assert sequence["options"] == {"role": "sequence"}
+    assert any(capability["plugin"] == "files" for capability in material["capabilities"])
+    assert detail["input_workspace"]["steps"][-1]["capabilities"][-1]["plugin"] == "review"
 
 
 def test_the_single_sequence_params_do_not_expose_search_controls(monkeypatch, tmp_path):
@@ -102,70 +89,34 @@ def test_the_single_sequence_params_do_not_expose_search_controls(monkeypatch, t
     assert set(af2) == {"model_preset", "models_to_relax", "benchmark"}
     assert set(af2["model_preset"]["enum"]) == {"monomer", "monomer_ptm"}
 
-    af3 = client.get(f"/compute/api/task-parameters/{AF3}").get_json()["properties"]
-    assert set(af3) == {
-        "model_seed",
-        "num_recycles",
-        "num_diffusion_samples",
-        "save_embeddings",
-        "save_distogram",
-    }
 
-
-def test_af3_keeps_the_noncommercial_access_projection(monkeypatch, tmp_path):
-    _module, client = _client(monkeypatch, tmp_path)
-
-    catalog = client.get("/compute/api/types").get_json()
-    summary = next(row for row in catalog["task_types"] if row["name"] == AF3)
-    assert summary["access"]["restricted"] is True
-
-    access = _detail(client, AF3)["access"]
-    validate_payload("RunnerAccess", access)
-    assert access["restricted"] is True
-    assert access["policy_id"] == "alphafold3_noncommercial"
-    assert access["requestable"] is True
-
-    # The unrestricted AF2 entry stays unrestricted.
-    assert _detail(client, AF2)["access"]["restricted"] is False
-
-
-def test_af3_preflight_refuses_an_unentitled_user_without_hiding_the_entry(monkeypatch, tmp_path):
-    module, client = _client(monkeypatch, tmp_path)
-
-    # The entry is still discoverable; only execution is gated.
-    catalog = client.get("/compute/api/types").get_json()
-    assert AF3 in {row["name"] for row in catalog["task_types"]}
-
-    response = _preflight(module, AF3, ">one\nACDEFGHIK\n", "one.fasta")
-
-    assert response.status_code == 403, response.get_data(as_text=True)
-    payload = response.get_json()
-    assert payload["valid"] is False
-    assert payload["admission"]["allowed"] is False
-    assert payload["errors"][0]["blocking"] is True
-    assert module.task_store.list_tasks() == []
+def _allow_gpu_use(module) -> None:
+    """Give the test user the entitlement the GPU-only family requires."""
+    _test_client_auth(module)  # ensure the test user exists
+    db = module.app.config["user_db"]
+    user = db.get_user_by_username("tester")
+    db.update_user(user["id"], allow_gpu_use=True)
 
 
 def test_preflight_rejects_multi_record_and_empty_sequences_before_scheduling(monkeypatch, tmp_path):
     module, _client_obj = _client(monkeypatch, tmp_path)
-    _allow_gpu_tasks(module)
+    _allow_gpu_use(module)
     queued: list[bool] = []
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
 
-    for name in (AF2, AF3):
-        multi = _preflight(module, name, ">a\nACDEFG\n>b\nHHHHHH\n", "complex.fasta")
-        assert multi.status_code == 400, multi.get_data(as_text=True)
-        payload = multi.get_json()
-        assert payload["valid"] is False
-        assert payload["security"]["status"] == "failed"
-        assert payload["errors"][0]["code"] == "input_format_invalid"
-        assert payload["errors"][0]["role"] == "sequence"
-        assert "exactly one FASTA record" in payload["errors"][0]["message"]
+    multi = _preflight(module, AF2, ">a\nACDEFG\n>b\nHHHHHH\n", "complex.fasta")
+    assert multi.status_code == 400, multi.get_data(as_text=True)
+    payload = multi.get_json()
+    assert payload["valid"] is False
+    assert payload["security"]["status"] == "failed"
+    assert payload["errors"][0]["code"] == "input_format_invalid"
+    assert payload["errors"][0]["role"] == "sequence"
+    assert "exactly one FASTA record" in payload["errors"][0]["message"]
 
-        empty = _preflight(module, name, ">a\n", "empty.fasta")
-        assert empty.status_code == 400, empty.get_data(as_text=True)
-        assert empty.get_json()["security"]["status"] == "failed"
-        assert "at least one residue" in empty.get_json()["errors"][0]["message"]
+    empty = _preflight(module, AF2, ">a\n", "empty.fasta")
+    assert empty.status_code == 400, empty.get_data(as_text=True)
+    assert empty.get_json()["security"]["status"] == "failed"
+    assert "at least one residue" in empty.get_json()["errors"][0]["message"]
 
     assert module.task_store.list_tasks() == []
     assert queued == []
@@ -173,20 +124,19 @@ def test_preflight_rejects_multi_record_and_empty_sequences_before_scheduling(mo
 
 def test_preflight_rejects_gap_and_stop_symbols_before_scheduling(monkeypatch, tmp_path):
     module, _client_obj = _client(monkeypatch, tmp_path)
-    _allow_gpu_tasks(module)
+    _allow_gpu_use(module)
     queued: list[bool] = []
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
 
-    for name in (AF2, AF3):
-        for symbol in "-.*":
-            response = _preflight(module, name, f">one\nACD{symbol}EF\n", "one.fasta")
-            assert response.status_code == 400, response.get_data(as_text=True)
-            payload = response.get_json()
-            assert payload["valid"] is False
-            assert payload["security"]["status"] == "failed"
-            assert payload["errors"][0]["code"] == "input_format_invalid"
-            assert payload["errors"][0]["role"] == "sequence"
-            assert "amino-acid letters" in payload["errors"][0]["message"]
+    for symbol in "-.*":
+        response = _preflight(module, AF2, f">one\nACD{symbol}EF\n", "one.fasta")
+        assert response.status_code == 400, response.get_data(as_text=True)
+        payload = response.get_json()
+        assert payload["valid"] is False
+        assert payload["security"]["status"] == "failed"
+        assert payload["errors"][0]["code"] == "input_format_invalid"
+        assert payload["errors"][0]["role"] == "sequence"
+        assert "amino-acid letters" in payload["errors"][0]["message"]
 
     assert module.task_store.list_tasks() == []
     assert queued == []
@@ -194,13 +144,12 @@ def test_preflight_rejects_gap_and_stop_symbols_before_scheduling(monkeypatch, t
 
 def test_preflight_accepts_one_single_record_fasta(monkeypatch, tmp_path):
     module, _client_obj = _client(monkeypatch, tmp_path)
-    _allow_gpu_tasks(module)
+    _allow_gpu_use(module)
 
-    for name in (AF2, AF3):
-        response = _preflight(module, name, ">one\nACDEFGHIKLMNPQRSTVWY\n", "one.fasta")
-        assert response.status_code == 200, response.get_data(as_text=True)
-        payload = response.get_json()
-        assert payload["valid"] is True
-        assert payload["security"]["status"] == "passed"
-        assert payload["contract"]["status"] == "passed"
-        assert payload["inputs"] == [{"format": "fasta", "path": "one.fasta", "role": "sequence"}]
+    response = _preflight(module, AF2, ">one\nACDEFGHIKLMNPQRSTVWY\n", "one.fasta")
+    assert response.status_code == 200, response.get_data(as_text=True)
+    payload = response.get_json()
+    assert payload["valid"] is True
+    assert payload["security"]["status"] == "passed"
+    assert payload["contract"]["status"] == "passed"
+    assert payload["inputs"] == [{"format": "fasta", "path": "one.fasta", "role": "sequence"}]

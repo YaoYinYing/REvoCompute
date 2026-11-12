@@ -67,7 +67,7 @@ _FAMILY_SELECTORS = {
     "pssm": lambda family: "scripts" in _overlay_leaf_names(family),
     "lh": lambda family: "fit_model.py" in _overlay_leaf_names(family),
     "af3": lambda family: _overlay_leaf_names(family) == {
-        "task_context.sh", "task_context.py", "stage_inputs.py", "run.sh", "sequence_to_json.py",
+        "task_context.sh", "task_context.py", "stage_inputs.py", "run.sh",
     },
 }
 

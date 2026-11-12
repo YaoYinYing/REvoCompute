@@ -11,14 +11,12 @@ runtime:
   - common/runtime/task_context.py
   - common/runtime/stage_inputs.py
   - alphafold3/run.sh
-  - alphafold3/sequence_to_json.py
   access_policy: alphafold3_noncommercial
   entrypoint:
   - bash
   - /opt/revocompute/runtime/alphafold3/run.sh
 tasks:
 - tasks/predict/task.yaml
-- tasks/single_sequence/task.yaml
 access_policies:
 - common/policy/alphafold3_noncommercial.yaml
 contributions:
