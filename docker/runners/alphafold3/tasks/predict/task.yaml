@@ -66,7 +66,9 @@ use_when: Use this for protein, nucleic-acid, ligand, ion, or modified-residue c
   expressed in the upstream AlphaFold 3 JSON format.
 input_summary: One current upstream AlphaFold 3 JSON input document; the document is
   authoritative for sequence, MSA, and template content. Empty `unpairedMsa` and
-  `pairedMsa` fields are a supported single-sequence path.
+  `pairedMsa` fields with an empty `templates` list are the supported
+  single-sequence path. Ligands, ions, nucleic acids, and modified residues are
+  declared in the same document as in an MSA-assisted prediction.
 output_summary: Ranked mmCIF structures, confidence data, ranking scores, and the
   processed data-pipeline input.
 considerations:
@@ -76,10 +78,12 @@ considerations:
   the upstream pipeline."
 - "Empty inline `unpairedMsa` and `pairedMsa` fields select single-sequence inference:
   the data pipeline materializes a query-only MSA, and a real production result
-  completed with this input. File-referenced `unpairedMsaPath`, `pairedMsaPath`, and
-  `templates[].mmcifPath` assets are not named Task input roles: the JSON document is
-  passed through to AlphaFold 3, so it can reference paths, but this Task neither
-  provides nor validates those assets."
+  completed with this input. `templates: []` disables template search; omitting
+  `templates` or setting it to null enables it. Non-protein components are declared
+  and featurized exactly as in an MSA-assisted prediction. File-referenced
+  `unpairedMsaPath`, `pairedMsaPath`, and `templates[].mmcifPath` assets are not named
+  Task input roles: the JSON document is passed through to AlphaFold 3, so it can
+  reference paths, but this Task neither provides nor validates those assets."
 - Predictions are computational estimates whose confidence measures and biological
   context require scientific interpretation.
 - Use of the mounted model parameters and generated output remains subject to the
