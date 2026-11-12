@@ -21,11 +21,17 @@ Starting point (2026-11-12): main 2890609942680e29ce17b3d83f546569434c5247; zero
 - [ ] Keep pyproject.toml version as the one editable application version; validate SemVer and explicit development/pre-release semantics.
 - [ ] Provide deterministic sync/check for frontend/package.json and frontend/package-lock.json; no separate manually edited version source.
 - [ ] Add regression tests that deliberately desynchronize each frontend version and prove CI rejects both.
-- [ ] Implement build-time source Git SHA and build/image metadata; make local dev without injected metadata explicit rather than fabricated.
-- [ ] Add a small safe API version projection, contract/test it, and show version/revision in an accessible frontend About/Version location.
+- [ ] Implement immutable full build-time Git SHA, historical development display version `0.1.0+<SHA[:7]>`, and safe missing-revision state; maintain base `0.1.0` in packaging until a formal release is approved.
+- [ ] Backfill `CHANGELOG.md` from merged Git history at the verified main snapshot `2890609` with only high-information user-facing milestones. Preserve historical commit-derived versions without inventing prior tags or release dates.
+- [ ] Implement authenticated `GET /compute/api/version` for signed-in regular users and admins with build metadata and bounded changelog content; reject anonymous/invalid/expired credentials without leaking data.
+- [ ] Implement dedicated login-protected `/compute/version` frontend AND server route, reachable from signed-in navigation, with direct refresh/deep link support, history, and accessible dark/mobile layout.
+- [ ] Test authenticated API/page route parity, unauthenticated redirects/401, stale session, response cache/privacy, Markdown safety and return-to-login behavior.
+- [ ] Check the version API and page against the same immutable frontend/backend build SHA; present mixed or unknown build identities explicitly.
 - [ ] Ensure built frontend/backend identities match; test mixed/stale assets without corrupting normal page load.
 - [ ] Add OCI labels or the nearest existing deploy image equivalent; no new version registry.
-- [ ] Keep CHANGELOG.md curated with Unreleased entries and a precise release-cut procedure. Never invent historical versions.
+- [ ] Confirm Keep a Changelog **1.0.0** (not 1.1.0), dated version headings, standard change categories, and version comparison links; reuse REvoDesign `docs/agents/RELEASE.md` module-scoped terse bullet style.
+- [ ] Preserve original user-facing `Unreleased` workflow; use an explicit, stage-safe release-cut process adapted from REvoDesign without silently pushing tags.
+- [ ] Do not invent historical **formal releases**; source-derived `0.1.0+<SHA7>` snapshots and their curated baseline are not official release tags.
 - [ ] Introduce a release tag gate for vX.Y.Z (optional prerelease), exact metadata equality and changelog section existence; evidence tags remain separate.
 - [ ] Document explicit manual release and rollback procedure, including deployment SHA, image digest and existing Runner provenance separation.
 - [ ] Run API contract, server unit and frontend build tests at exact head. Document failed checks truthfully.
