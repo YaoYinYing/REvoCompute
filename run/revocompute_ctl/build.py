@@ -7,14 +7,74 @@
 from __future__ import annotations
 
 import os
+import re
+import subprocess
 import sys
+import tomllib
+from datetime import datetime, timezone
 from revocompute_ctl.compose import compose_args, run_cmd
+
+
+def collect_build_identity(server_root: str, release_channel: str = "development") -> dict[str, str]:
+    """Capture one immutable build identity for this build.
+
+    A full commit is recorded only when the working tree is clean: an image
+    built from uncommitted code is not that commit, so it reports an unknown
+    revision instead of claiming one. A release build refuses outright. The
+    time and the opaque build identifier are captured once, here.
+    """
+    clean = False
+    sha = ""
+    try:
+        status = subprocess.run(
+            ["git", "-C", server_root, "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        clean = status.returncode == 0 and not status.stdout.strip()
+        if clean:
+            completed = subprocess.run(
+                ["git", "-C", server_root, "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            candidate = completed.stdout.strip().lower()
+            if completed.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", candidate):
+                sha = candidate
+            else:
+                clean = False
+    except OSError:
+        clean = False
+    if release_channel == "release" and not (clean and sha):
+        raise RuntimeError(
+            "A release build requires a clean working tree with an exact commit; commit or stash changes first"
+        )
+    built_at = datetime.now(timezone.utc).replace(microsecond=0)
+    stamp = built_at.strftime("%Y%m%dT%H%M%SZ")
+    base_version = ""
+    try:
+        with open(os.path.join(server_root, "pyproject.toml"), "rb") as handle:
+            base_version = str(tomllib.load(handle).get("project", {}).get("version") or "")
+    except (OSError, ValueError):
+        base_version = ""
+    return {
+        "REVOCOMPUTE_BUILD_GIT_SHA": sha,
+        "REVOCOMPUTE_BUILD_TIME": built_at.isoformat().replace("+00:00", "Z"),
+        "REVOCOMPUTE_BUILD_ID": f"{sha[:7]}-{stamp}" if sha else "",
+        "REVOCOMPUTE_BASE_VERSION": base_version,
+        "REVOCOMPUTE_RELEASE_CHANNEL": release_channel,
+    }
 
 
 def build_web_images(state, compose_cmd: tuple[str, ...], proxy_build_args: list[str], uid: str, gid: str) -> None:
     print("Building web/worker images...")
     username = state.get("RUNNER_USERNAME") or "revodesign"
     group = state.get("RUNNER_GROUP") or "revodesign_appgroup"
+    identity = collect_build_identity(
+        state.server_root(), state.get("REVOCOMPUTE_RELEASE_CHANNEL") or "development"
+    )
     if proxy_build_args:
         server_dockerfile = os.path.join(state.server_root(), "docker", "server", "Dockerfile")
         run_cmd(
@@ -34,6 +94,7 @@ def build_web_images(state, compose_cmd: tuple[str, ...], proxy_build_args: list
                 f"PORT={state.get('PORT') or '8080'}",
                 "--build-arg",
                 f"REVOCOMPUTE_EXTRAS={state.get('REVOCOMPUTE_EXTRAS') or 'resend'}",
+                *[item for name, value in identity.items() for item in ("--build-arg", f"{name}={value}")],
                 "-t",
                 state.get("SERVER_IMAGE") or "revodesign-revocompute-server",
                 "-f",
@@ -43,6 +104,10 @@ def build_web_images(state, compose_cmd: tuple[str, ...], proxy_build_args: list
             env=state.exported(),
         )
     else:
+        # The compose file interpolates the same identity into its build args;
+        # runtime exports take precedence over the env file, so one snapshot
+        # reaches both the frontend builder and the server image.
+        state.runtime.update(identity)
         run_cmd(
             [*compose_cmd, *compose_args(state), "--env-file", state.env_file, "build", "web", "worker", "tool-worker"],
             env=state.exported(),

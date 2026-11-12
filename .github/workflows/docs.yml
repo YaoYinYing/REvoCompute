@@ -64,11 +64,12 @@ jobs:
             fi
           done
 
-          # Regular root-level markdown is limited to the agent contract and
-          # forward-looking intake such as GOAL_GMX_MMPBSA.md. PR working notes
-          # (TODO.md, TODO_*.md, IMPLEMENTATION_STATE.md) are allowed while the
-          # work is active and retired before the PR merges.
-          allowed="README.md CLAUDE.md GOAL_GMX_MMPBSA.md"
+          # Regular root-level markdown is limited to the agent contract, the
+          # canonical changelog, and forward-looking intake such as
+          # GOAL_GMX_MMPBSA.md. PR working notes (TODO.md, TODO_*.md,
+          # IMPLEMENTATION_STATE.md) are allowed while the work is active and
+          # retired before the PR merges.
+          allowed="README.md CLAUDE.md CHANGELOG.md GOAL_GMX_MMPBSA.md"
           for path in *.md; do
             name="$(basename "$path")"
             case "$name" in
