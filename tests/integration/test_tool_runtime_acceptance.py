@@ -27,10 +27,16 @@ def _candidate_registry() -> ToolRegistry:
     image_dir = os.environ.get("REVOCOMPUTE_TOOL_ACCEPTANCE_IMAGE_DIR")
     if not image_dir:
         pytest.skip("REVOCOMPUTE_TOOL_ACCEPTANCE_IMAGE_DIR is not configured")
+    enabled = {"bioio", "chemio"}
+    # The MD converter has an opt-in large-input tier; exercise it only when an
+    # exact candidate image was built for this acceptance run.
+    if (Path(image_dir) / "mdconvert.sif").is_file():
+        enabled.add("mdconvert")
     return ToolRegistry.discover(
         REPO_ROOT / "docker" / "tools",
-        enabled={"bioio", "chemio"},
+        enabled=enabled,
         image_root=image_dir,
+        maximum_request_bytes=108_000_000,
     )
 
 
@@ -71,6 +77,52 @@ def _execute_tool(manager, workspace, tool, source: Path, role: str, filename: s
     assert result.returncode == 0, result.stderr
     outputs, warnings, provenance = workspace.collect(call_id, tool)
     return call_id, cold, time.monotonic() - started, outputs, warnings, provenance
+
+
+def _execute_md_conversion(manager, workspace, tool):
+    call_id = new_tool_call_id()
+    workspace.create(call_id)
+    inputs = {}
+    for role, name in (("topology", "tiny.gro"), ("trajectory", "tiny.xtc")):
+        inputs[role] = [
+            workspace.materialize_file(
+                call_id,
+                role=role,
+                filename=name,
+                accepted_formats=next(item for item in tool.inputs if item.name == role).formats,
+                source=REPO_ROOT / "tests" / "data" / "mdconvert" / name,
+            )
+        ]
+    workspace.write_request(
+        call_id,
+        tool,
+        inputs,
+        {"output_adapter": "caver_pdb_snapshots", "start": 0, "stop": 3, "stride": 1},
+    )
+    root = workspace.call_root(call_id)
+    result = manager.execute(
+        tool.runtime,
+        [
+            *tool.runtime.entrypoint,
+            "run",
+            "--tool",
+            tool.name,
+            "--request",
+            "/tool/scratch/request.json",
+            "--output",
+            "/tool/output",
+        ],
+        binds=(
+            (root / "input", "/tool/input", "ro"),
+            (root / "output", "/tool/output", "rw"),
+            (root / "scratch", "/tool/scratch", "rw"),
+        ),
+        timeout_seconds=tool.timeout_seconds,
+        output_max_bytes=workspace.output_max_bytes,
+    )
+    assert result.returncode == 0, result.stderr
+    outputs, warnings, provenance = workspace.collect(call_id, tool)
+    return outputs, warnings, provenance
 
 
 def test_exact_candidate_tool_runtime_lifecycle_and_scientific_outputs(tmp_path):
@@ -157,6 +209,23 @@ def test_exact_candidate_tool_runtime_lifecycle_and_scientific_outputs(tmp_path)
             manager, workspace, registry.get("ligand_inspect"), ligand, "ligand", "ethanol.sdf", {}
         )
         assert chem_warm is False
+
+        if "md_trajectory_convert" in {tool.name for tool in registry.list()}:
+            md_tool = registry.get("md_trajectory_convert")
+            md_outputs, _md_warnings, md_provenance = _execute_md_conversion(manager, workspace, md_tool)
+            assert len(md_outputs["reference"]) == 1
+            assert len(md_outputs["snapshots"]) == 2
+            manifest = json.loads(
+                Path(md_outputs["manifest"][0]["physical_path"]).read_text(encoding="utf-8")
+            )
+            assert manifest["units"] == {
+                "source_coordinate_unit": "nm",
+                "source_time_unit": "ps",
+                "output_coordinate_unit": "angstrom",
+                "conversion": "The MDAnalysis GRO reader converts nm to Angstrom; no additional scale was applied",
+            }
+            assert manifest["reference"]["time_ps"] == 0.0
+            assert md_provenance["declared"]["name"] == "MDAnalysis"
 
         bioio = registry.get("structure_inspect").runtime
         manager.reset_cold((bioio,))

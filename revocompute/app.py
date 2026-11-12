@@ -255,6 +255,7 @@ tool_registry = ToolRegistry.discover(
     enabled=set(TOOL_CONFIG.enabled_families),
     image_root=TOOL_CONFIG.image_dir,
     maximum_timeout=TOOL_CONFIG.call_timeout_seconds,
+    maximum_request_bytes=TOOL_CONFIG.request_max_bytes,
 )
 tool_calls = ToolCallDatabase(CONFIG.db_path)
 tool_workspace = ToolWorkspace(

@@ -45,6 +45,7 @@ tool_registry = ToolRegistry.discover(
     enabled=set(CONFIG.enabled_families),
     image_root=CONFIG.image_dir,
     maximum_timeout=CONFIG.call_timeout_seconds,
+    maximum_request_bytes=CONFIG.request_max_bytes,
 )
 tool_workspace = ToolWorkspace(
     CONFIG.workspace_root,
@@ -174,8 +175,11 @@ def execute_tool_call(
         )
         if completed.returncode != 0:
             logging.error("Tool call %s child failed: %s", tool_call_id, completed.stderr[-4000:])
+            detail = workspace.failure_detail(tool_call_id)
             _finish_failed(
-                tool_call_id, error_class="conversion_failed", message="Tool execution failed",
+                tool_call_id,
+                error_class=detail["code"] if detail else "conversion_failed",
+                message=f"{detail['code']}: {detail['message']}" if detail else "Tool execution failed",
                 calls=calls, workspace=workspace, config=config,
             )
             return

@@ -2947,6 +2947,10 @@ export interface components {
             input_paths?: string[];
             /** @description Optional per-file-part transport encoding aligned 1:1 with files; omitted means identity. */
             file_encodings?: ("identity" | "gzip")[];
+            /** @description Same-user finished Tool call outputs, referenced as @tool_call_<id>/<output path>. */
+            tool_output_references?: string[];
+            /** @description Named input role corresponding positionally to each Tool output reference. */
+            tool_output_roles?: string[];
             /** @description Enabled task-type name from GET /compute/api/types; omitted when it is supplied by the request path. */
             task_type?: string;
             /** @description Manifest-declared execution mode from the Task Type projection; defaults to full. */

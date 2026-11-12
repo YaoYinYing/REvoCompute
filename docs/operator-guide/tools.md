@@ -7,6 +7,7 @@ The dedicated `tool-worker` receives only the Tool definitions, Tool SIFs, deplo
 | Variable | Default | Meaning |
 | --- | ---: | --- |
 | `ENABLED_TOOL_FAMILIES` | empty | Comma-separated family IDs, initially `bioio,chemio`. |
+| `TOOL_REQUEST_MAX_BYTES` | `16777216` | Deployment ceiling for one call's aggregate decoded input bytes; a Tool's own `limits.request_bytes` cannot exceed it. |
 | `TOOL_IMAGE_DIR` | `${SERVER_DIR}/../images/tools` | Immutable candidate SIF directory. |
 | `TOOL_MAX_ACTIVE_PER_USER` | `3` | Maximum nonterminal calls for one user. |
 | `TOOL_MAX_ACTIVE_GLOBAL` | `8` | Maximum nonterminal calls across users. |
@@ -15,14 +16,29 @@ The dedicated `tool-worker` receives only the Tool definitions, Tool SIFs, deplo
 | `TOOL_CALL_TTL_SECONDS` | `86400` | Retention after a terminal state. |
 | `TOOL_RUNTIME_IDLE_TTL_SECONDS` | `1800` | Warm-family idle lifetime. |
 | `TOOL_STORAGE_MAX_BYTES` | `104857600` | Hard cap on accounted bytes: actual usage plus each active call's reserved output headroom. |
-| `TOOL_REQUEST_MAX_BYTES` | `16777216` | Maximum total materialized input bytes per call. |
 | `TOOL_OUTPUT_MAX_BYTES` | `33554432` | Maximum declared output bytes per call. |
 | `TOOL_DRAIN_TIMEOUT_SECONDS` | call timeout + 10 | Maximum bounded redeploy drain wait. |
 
-Decoded uploads are charged to `TOOL_REQUEST_MAX_BYTES` during admission. A
-Task-artifact reference is verified and materialized per file; a Tool that
-accepts more than one input must include those bytes in the same aggregate
-budget.
+Decoded uploads and verified Task-artifact references are charged to the
+selected Tool's aggregate budget during admission. A Tool that declares
+`limits.input_bytes` also bounds each role separately.
+
+The `mdconvert` family is an opt-in large-input Tool: it turns one GROMACS GRO
+topology and one XTC trajectory into CAVER PDB snapshots. Enabling it requires
+`ENABLED_TOOL_FAMILIES=...,mdconvert`, `TOOL_REQUEST_MAX_BYTES=108000000` (the
+family's own `limits.request_bytes`), `TOOL_STORAGE_MAX_BYTES=268435456`
+(256 MiB, above one call's input plus output headroom), and a gateway
+`TOOL_CLIENT_MAX_BODY_SIZE` of at least `TOOL_REQUEST_MAX_BYTES` plus the 1 MiB
+multipart headroom. Its decoded limits are 100,000,000 bytes for the trajectory,
+8,000,000 bytes for the topology and 108,000,000 bytes in aggregate; these are
+decimal bytes, not MiB. Ordinary Tools keep their 16 MiB budget; a family whose
+declared tier exceeds `TOOL_REQUEST_MAX_BYTES` fails discovery rather than
+starting with a silently smaller budget. Amber,
+CHARMM/NAMD, LAMMPS and OpenMM pairs are not enabled until their unit, atom-order
+and periodic-box contracts have an audited proof, and are refused rather than
+guessed. The family's `requirements.lock` pins the parser and every wheel hash;
+build its SIF directly with Apptainer and do not install that stack into the
+Server image or a Runner SIF.
 
 Use `revocompute-tool-status --json` inside the Tool worker to inspect image identity, COLD/WARM/UNAVAILABLE state, active calls, last use, recent startup failure, cold starts, warm hits, and idle shutdowns. This output contains no user filenames, parameters, sequences, structures, or molecules.
 

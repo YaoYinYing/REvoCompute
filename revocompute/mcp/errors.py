@@ -95,6 +95,9 @@ _DETAIL_CODE_TO_CLASS = {
     "input_role_format": INVALID_PARAMETERS,
     "input_role_unknown": INVALID_PARAMETERS,
     "input_role_cardinality": INVALID_PARAMETERS,
+    "tool_output_reference_invalid": INVALID_PARAMETERS,
+    "tool_output_reference_unavailable": ARTIFACT_NOT_FOUND,
+    "tool_output_reference_mismatch": INVALID_PARAMETERS,
     # ingress_security.Phase.ADMISSION -- the canonical admission reasons.
     # ``gpu_credit_exhausted`` and ``infrastructure_unavailable`` are the
     # response codes the submission boundary emits for the canonical

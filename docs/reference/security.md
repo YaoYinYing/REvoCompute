@@ -133,8 +133,12 @@ anywhere in the API. The trust boundaries:
 Uploaded files pass a Core-owned validator tree before any runner sees them:
 `revocompute/input_validators/`, a shared `common` module plus one reviewed
 validator module per format family (`fasta`, `pdb`, `mmcif`, `json_file`,
-small-molecule formats, and structured data), with a registry that dispatches
-by file extension and fails closed for formats without a Core validator.
+`md` topology/trajectory containers, small-molecule formats, and structured
+data), with a registry that dispatches by file extension and fails closed for
+formats without a Core validator. The `md` validators prove the GRO line count,
+fixed-width coordinate and box fields, and the XTC magic, first-frame atom
+count and minimum encoded size; scientific frame decoding stays with the
+pinned `mdconvert` Tool parser.
 
 > A filename extension identifies serialization, not the complete scientific
 > meaning of an input. Runner task contracts may select a Core-owned logical

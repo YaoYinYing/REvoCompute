@@ -15,6 +15,36 @@ invented release numbers or dates.
 ## [Unreleased]
 
 ### Added
+- MD trajectory conversion Tool:
+  - Add the opt-in `mdconvert` Tool family: one GROMACS GRO topology and one
+    XTC trajectory become a CAVER reference PDB plus at most 50 ordered
+    single-model snapshots and a `conversion_manifest.json`.
+  - Pin MDAnalysis 2.9.0 and every dependency wheel by exact version and hash
+    in the family's isolated image; do not install that stack into the Server
+    or a Runner SIF.
+  - Record source digests, parser identity, the GRO nm-to-Angstrom unit
+    contract, atom map, selection, original frame times, unit cells, periodic
+    treatment, warnings and output hashes. Unsupported format pairs and
+    unwrapping without bond evidence are refused with typed diagnostics.
+  - Add a Tool-scoped input tier: `limits.request_bytes` cannot exceed the
+    deployment `TOOL_REQUEST_MAX_BYTES`, and `limits.input_bytes` bounds each
+    role separately. `mdconvert` admits 100,000,000 decoded trajectory bytes,
+    8,000,000 topology bytes and 108,000,000 bytes in aggregate; ordinary
+    Tools keep the 16 MiB budget.
+  - Charge verified Task-artifact references to the same per-role and aggregate
+    decoded budget as uploads.
+  - Publish a child-declared typed failure as the Tool call's `error_class` and
+    `error`.
+- Task inputs:
+  - Bind a finished, same-user Tool output to a declared input role through
+    `tool_output_references`/`tool_output_roles`; submission verifies it against
+    the Tool result manifest and preserves the Tool call provenance in the
+    immutable input snapshot.
+- Input validation:
+  - Add Core transport validators for GRO and XTC containers; scientific frame
+    decoding remains in the pinned Tool parser. Deploy note: the validator
+    content revision moves, so drain queued/pending submissions before
+    deploying or they fail closed with `input_snapshot_mismatch`.
 - Transport:
   - Accept declared per-file-part `gzip` uploads through a bounded decode path
     that validates the gzip stream, enforces encoded/decoded/per-file/total and

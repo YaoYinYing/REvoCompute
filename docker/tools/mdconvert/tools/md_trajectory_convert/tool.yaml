@@ -1,0 +1,98 @@
+id: md_trajectory_convert
+display_name: Convert MD trajectory snapshots
+summary: Turn one topology and trajectory into fixed-order single-model PDB snapshots for CAVER.
+guidance: >-
+  The release supports one proven pair: a GROMACS GRO topology with a GROMACS XTC trajectory.
+  Coordinates are converted from the MDAnalysis GRO unit contract (nanometres to Angstroms)
+  exactly once, atom order and identity come from the topology, and periodic wrapping is
+  never reconstructed. The reference structure is the first selected frame unless reference_frame
+  names another selected frame; the remaining selected frames follow in source order as
+  snapshot_001.pdb and so on; at most 51 frames are written.
+  Amber, CHARMM/NAMD, LAMMPS and OpenMM pairs are not enabled until an audited
+  unit, atom-order and periodic-box proof exists, and are refused rather than guessed.
+version: "1"
+runtime_family: mdconvert
+inputs:
+  topology:
+    title: MD topology
+    type: md_topology
+    formats: [gro]
+    cardinality: {min: 1, max: 1}
+    description: One GROMACS GRO topology that defines atom order, residue identity and the coordinates of the reference frame.
+  trajectory:
+    title: MD trajectory
+    type: md_trajectory
+    formats: [xtc]
+    cardinality: {min: 1, max: 1}
+    description: One GROMACS XTC trajectory read by the pinned parser; at most 100,000,000 decoded bytes.
+outputs:
+  reference:
+    title: CAVER reference structure
+    type: protein_structure
+    formats: [pdb]
+    cardinality: {min: 1, max: 1}
+    description: Single-model PDB for the selected reference frame; frame 1 of the CAVER snapshot series.
+  snapshots:
+    title: CAVER snapshots
+    type: protein_structure
+    formats: [pdb]
+    cardinality: {min: 0, max: 50}
+    description: Ordered single-model PDB frames after the reference, sharing its atom identity map.
+  manifest:
+    title: Conversion manifest
+    type: conversion_manifest
+    formats: [json]
+    cardinality: {min: 1, max: 1}
+    description: Source digests, parser identity, unit and periodic-boundary policy, selected frame times, atom map digest, warnings and output hashes.
+limits:
+  request_bytes: 108000000
+  input_bytes:
+    topology: 8000000
+    trajectory: 100000000
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    output_adapter:
+      type: string
+      enum: [caver_pdb_snapshots]
+      default: caver_pdb_snapshots
+      description: Output contract; the CAVER snapshot series is the only adapter released in v1.
+    start:
+      type: integer
+      minimum: 0
+      default: 0
+      description: First source frame index selected by the range form.
+    stop:
+      type: integer
+      minimum: 1
+      description: Exclusive source frame bound for the range form; defaults to the trajectory frame count.
+    stride:
+      type: integer
+      minimum: 1
+      maximum: 1000000
+      default: 1
+      description: Source frame step for the range form.
+    frame_indices:
+      type: array
+      minItems: 1
+      maxItems: 51
+      uniqueItems: true
+      items: {type: integer, minimum: 0}
+      description: Explicit strictly increasing source frame indices; mutually exclusive with start, stop and stride.
+    reference_frame:
+      type: integer
+      minimum: 0
+      description: Source frame index written as the reference structure; it must be one of the selected frames and defaults to the first.
+    selection:
+      type: string
+      default: all
+      pattern: ^(all|protein|nucleic|backbone|name [A-Za-z0-9]{1,4}|resname [A-Za-z0-9]{1,5}|resid [0-9]{1,6}(?:-[0-9]{1,6})?(?:,[0-9]{1,6}(?:-[0-9]{1,6})?){0,199})$
+      description: One documented selection term; the selected atoms keep their source order.
+    pbc_treatment:
+      type: string
+      enum: [none]
+      default: none
+      description: Periodic-boundary policy. Only the none baseline is released; the Tool refuses unwrap because this topology carries no bond evidence.
+timeout_seconds: 280

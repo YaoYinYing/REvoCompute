@@ -3033,6 +3033,8 @@
           "input_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding positionally to each multipart files part."},
           "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional relative paths corresponding to files, used by multi-file task types."},
           "file_encodings": {"type": "array", "items": {"type": "string", "enum": ["identity", "gzip"]}, "description": "Optional per-file-part transport encoding aligned 1:1 with files; omitted means identity."},
+          "tool_output_references": {"type": "array", "items": {"type": "string", "pattern": "^@tool_call_[A-Za-z0-9_-]{32}/[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$"}, "description": "Same-user finished Tool call outputs, referenced as @tool_call_<id>/<output path>."},
+          "tool_output_roles": {"type": "array", "items": {"type": "string"}, "description": "Named input role corresponding positionally to each Tool output reference."},
           "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types; omitted when it is supplied by the request path."},
           "execution_mode": {"type": "string", "description": "Manifest-declared execution mode from the Task Type projection; defaults to full."},
           "reuse": {"type": "string", "description": "Optional JSON-encoded object mapping each declared reuse role to {source_task, stage, port, digest}."},

@@ -20,6 +20,7 @@ from revocompute.input_validators import (
     fasta,
     isolated_validation,
     json_file,
+    md,
     mmcif,
     pdb,
     profiles,
@@ -129,6 +130,8 @@ register(".fas", fasta.validate_fasta)
 register(".a3m", fasta.validate_a3m)
 register(".pdb", pdb.validate_pdb)
 register(".ent", pdb.validate_pdb)
+register(".gro", md.validate_gro)
+register(".xtc", md.validate_xtc)
 register(".cif", mmcif.validate_mmcif)
 register(".mmcif", mmcif.validate_mmcif)
 register(".json", json_file.validate_json)

@@ -192,3 +192,35 @@ def test_call_stays_preparing_until_the_family_lease_starts_the_child(tmp_path, 
     record = calls.get(call_id)
     assert record["status"] == "finished"
     assert record["reserved_bytes"] == 0
+
+
+class TypedFailureRuntimeManager(FakeRuntimeManager):
+    def execute(self, _runtime, argv, *, binds, timeout_seconds, output_max_bytes=None, on_child_start=None):
+        del timeout_seconds, output_max_bytes
+        if on_child_start is not None:
+            on_child_start()
+        output = next(source for source, destination, _mode in binds if destination == "/tool/output")
+        (output / ".tool-error.json").write_text(
+            json.dumps({"code": "unsupported_format_pair", "message": "The pair is not enabled"}),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(argv, 2, "", "unsupported_format_pair")
+
+
+def test_child_typed_failure_becomes_the_call_diagnostic(tmp_path, monkeypatch):
+    call_id = new_tool_call_id()
+    runtime_module, config, calls, registry, workspace = _prepared_call(tmp_path, monkeypatch, call_id)
+
+    runtime_module.execute_tool_call(
+        call_id,
+        calls=calls,
+        registry=registry,
+        workspace=workspace,
+        manager=TypedFailureRuntimeManager(),
+        config=config,
+    )
+
+    record = calls.get(call_id)
+    assert record["status"] == "failed"
+    assert record["error_class"] == "unsupported_format_pair"
+    assert record["error"] == "unsupported_format_pair: The pair is not enabled"

@@ -1,0 +1,11 @@
+api_version: 1
+id: mdconvert
+name: Molecular dynamics trajectory conversion
+version: 1.0.0
+runtime:
+  definition: mdconvert.def
+  image: mdconvert.sif
+  entrypoint: [python3, /opt/revocompute-tool/tool_cli.py]
+  health_command: [python3, /opt/revocompute-tool/tool_cli.py, health]
+tools:
+  - tools/md_trajectory_convert/tool.yaml
