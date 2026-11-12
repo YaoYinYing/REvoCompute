@@ -4396,6 +4396,8 @@ def create_clone_plan(md5sum: str):
     """
     if blocked := _reject_guest():
         return blocked
+    if blocked := require_bearer_auth():
+        return blocked
     source = _cloneable_source(md5sum)
     if source is None:
         return _task_not_found(str(md5sum or "").strip().lower())

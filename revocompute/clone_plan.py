@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 #: How long a clone-plan reference stays resolvable. A draft is opened
 #: immediately after the button click; the window only needs to cover that hop.
 DEFAULT_TTL_SECONDS = 900
@@ -175,6 +177,10 @@ def _control_value(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, float) and math.isfinite(value) and value.is_integer():
         return str(int(value))
+    if isinstance(value, (list, dict)):
+        # Structured parameters (arrays/objects) travel through the form as
+        # JSON text, the same representation the form submits.
+        return json.dumps(value, separators=(",", ":"), sort_keys=True)
     return str(value)
 
 
@@ -209,6 +215,10 @@ def _value_matches_type(value: Any, declared: set[str]) -> bool:
         return "number" in declared
     if isinstance(value, str):
         return "string" in declared
+    if isinstance(value, list):
+        return "array" in declared
+    if isinstance(value, dict):
+        return "object" in declared
     if value is None:
         return "null" in declared
     return False
@@ -238,7 +248,10 @@ def _compatible_parameter(
         historical = _ENTITY_JSON_TYPES.get(str(entity_type))
         if historical is None:
             return None, _blocked(name, "parameter_type_unknown", "The recorded parameter type is not understood.")
-        if declared and historical not in declared:
+        # The recorded control type is only a hint: an array parameter is stored
+        # as its form's text control, while its verified value is a list. The
+        # value itself decides whether the current type still fits.
+        if declared and historical not in declared and not _value_matches_type(value, declared):
             # ``integer`` is a valid ``number``: that is a widening, not a change
             # of scientific meaning. Everything else is a type change.
             if not (historical == "integer" and "number" in declared):
@@ -303,6 +316,38 @@ def _compatible_parameter(
         return None, _blocked(
             name, "parameter_format_invalid", "The recorded value is not a calendar date.", value
         )
+    # The checks above name the familiar drift precisely. Everything else the
+    # current schema declares (pattern, string/array length, oneOf, nested
+    # item rules) still applies; a narrowed constraint must block the value
+    # rather than prefill it silently.
+    contract = {key: item for key, item in property_schema.items() if key != "__recorded_type__"}
+    try:
+        errors = list(Draft202012Validator(contract).iter_errors(value))
+    except Exception:
+        return None, _blocked(
+            name,
+            "parameter_constraint_unmet",
+            "The parameter's current constraints could not be checked.",
+            _control_value(value),
+        )
+    if errors:
+        keywords = {error.validator for error in errors}
+        if keywords & {"pattern", "minLength", "maxLength", "format"}:
+            code, message = (
+                "parameter_format_invalid",
+                "The recorded value does not match the current format or length.",
+            )
+        elif keywords & {"minItems", "maxItems", "minProperties", "maxProperties", "multipleOf"}:
+            code, message = (
+                "parameter_range_invalid",
+                "The recorded value is outside the current bounds.",
+            )
+        else:
+            code, message = (
+                "parameter_constraint_unmet",
+                "The recorded value does not satisfy the parameter's current constraints.",
+            )
+        return None, _blocked(name, code, message, _control_value(value))
     return {"name": name, "value": _control_value(value), "source": "recorded"}, None
 
 

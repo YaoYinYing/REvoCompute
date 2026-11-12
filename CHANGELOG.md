@@ -93,9 +93,10 @@ invented release numbers or dates.
     - Add authenticated, read-only `POST /compute/api/tasks/{id}/clone-plan` and
       the owner-scoped `GET /compute/api/clone-plans/{plan_id}` reference. The
       plan resolves only explicitly recorded values against the current schema,
-      reports removed/renamed parameters, unavailable enum choices, type and
-      range changes, missing roles, and unverifiable input snapshots by field,
-      and never mutates the source, derives a Task ID, or reserves resources.
+      reports removed/renamed parameters, unavailable enum choices, and type,
+      choice, range, format, length and array-rule changes, missing roles, and
+      unverifiable input snapshots by field, and never mutates the source,
+      derives a Task ID, or reserves resources.
     - Record optional non-sensitive `cloned_from` provenance on submission after
       checking that the caller can see the source.
     - Validate a reviewed `x-ui-placeholder` schema annotation on optional string

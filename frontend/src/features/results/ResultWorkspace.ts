@@ -760,10 +760,10 @@ export class ResultWorkspace {
       // The URL carries only the opaque reference, never inputs, digests, or a
       // download URL. The Create Task route resolves the plan itself.
       window.location.assign(`/compute/create_task?clone=${encodeURIComponent(plan.plan_id)}`);
-    } catch (error) {
+    } catch {
       control.disabled = false;
       this.nodes.status.hidden = false;
-      this.nodes.status.replaceChildren(element('strong', '', t('results.cloneFailed', { message: (error as Error).message })));
+      this.nodes.status.replaceChildren(element('strong', '', t('results.cloneFailed')));
     }
   }
   private async archiveAction(): Promise<void> {

@@ -454,6 +454,9 @@ export class CreateTask {
   private showClonePanel(plan: ClonePlan, interactive: boolean, baseline?: WorkspacePreset): void {
     this.clonePanel?.remove();
     const reset = (): void => {
+      // Starting over ends the clone relationship: a later submit must not
+      // claim provenance for values the reader has replaced with defaults.
+      this.cloneSource = null;
       this.workspace.apply({ files: new Map(), parameters: {} });
       this.refreshValidation();
       this.setStatus(t('ct.clone.resetDone'), 'ok');
@@ -461,6 +464,9 @@ export class CreateTask {
     const panel = renderClonePanel(plan, interactive ? {
       onReset: reset,
       onRevert: () => {
+        // Reverting is an undo of the clone application, so the reverted draft
+        // is the pre-clone one and carries no clone provenance.
+        this.cloneSource = null;
         if (baseline) this.workspace.restore(baseline);
         else reset();
         this.refreshValidation();

@@ -468,3 +468,59 @@ def test_provenance_naming_an_unavailable_source_is_refused(monkeypatch, tmp_pat
     assert response.status_code == 404
     assert response.get_json()["details"][0]["code"] == "clone_source_unavailable"
     assert module.task_store.list_tasks() == tasks_before
+
+
+def test_current_constraints_block_recorded_values_but_compatible_arrays_are_kept():
+    # A narrowed string constraint is reported by field, not silently prefilled.
+    _, short = clone_plan._compatible_parameter(
+        "mutations", "ABC", {"type": "string", "minLength": 4, "__recorded_type__": "str"}
+    )
+    assert short is not None and short["code"] == "parameter_format_invalid"
+    _, patterned = clone_plan._compatible_parameter(
+        "binder_chain", "AB", {"type": "string", "pattern": "^[A-Za-z0-9]$", "__recorded_type__": "str"}
+    )
+    assert patterned is not None and patterned["code"] == "parameter_format_invalid"
+    _, oversized = clone_plan._compatible_parameter(
+        "label", "too long", {"type": "string", "maxLength": 4, "__recorded_type__": "str"}
+    )
+    assert oversized is not None and oversized["code"] == "parameter_format_invalid"
+
+    # Array values are a list at the verified-value layer even though the form
+    # recorded them through a text control; unchanged constraints are accepted
+    # and the prefilled value is JSON, the form's representation.
+    centres_schema = {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 30,
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["position", "state"],
+            "properties": {"position": {"type": "integer"}, "state": {"type": "string", "enum": ["HIS-P"]}},
+        },
+        "__recorded_type__": "str",
+    }
+    centres, finding = clone_plan._compatible_parameter(
+        "centres", [{"position": 12, "state": "HIS-P"}], centres_schema
+    )
+    assert finding is None
+    assert centres == {"name": "centres", "value": '[{"position":12,"state":"HIS-P"}]', "source": "recorded"}
+    _, too_few = clone_plan._compatible_parameter("centres", [], centres_schema)
+    assert too_few is not None and too_few["code"] == "parameter_range_invalid"
+
+    states_schema = {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "items": {"type": "string", "enum": ["HIS-P", "HIS-S"]},
+        "oneOf": [
+            {"prefixItems": [{"const": "HIS-P"}, {"const": "HIS-S"}]},
+            {"prefixItems": [{"const": "HIS-S"}, {"const": "HIS-P"}]},
+        ],
+        "__recorded_type__": "str",
+    }
+    paired, finding = clone_plan._compatible_parameter("states", ["HIS-P", "HIS-S"], states_schema)
+    assert finding is None
+    assert paired is not None and json.loads(paired["value"]) == ["HIS-P", "HIS-S"]
+    _, unpaired = clone_plan._compatible_parameter("states", ["HIS-P", "HIS-P"], states_schema)
+    assert unpaired is not None and unpaired["code"] == "parameter_constraint_unmet"

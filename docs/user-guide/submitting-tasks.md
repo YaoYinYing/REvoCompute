@@ -87,9 +87,9 @@ Create Task draft seeded from one authorized earlier Task:
   never recorded resolve through the *current* schema and are marked
   **Current default**; the current schema is always authoritative.
 - A value whose parameter was renamed or removed, whose enum choice is no longer
-  offered, or whose type/range no longer fits is reported under **Not carried
-  over** with the recorded value. Nothing is coerced and no other scientific
-  mode is chosen silently.
+  offered, or whose type, range, format, length or array rule no longer fits is
+  reported under **Not carried over** with the recorded value. Nothing is
+  coerced and no other scientific mode is chosen silently.
 - Input files belong to the source Task's immutable snapshot, and a Task
   submission never references another Task's files. Every listed input is
   re-uploaded and validated normally; a file the source snapshot can no longer
@@ -101,7 +101,8 @@ Create Task draft seeded from one authorized earlier Task:
   applied. Both happen only when you choose them.
 - Opening a clone never submits. Preflight and **Run** are still the only
   submission boundary, and the resulting Task carries non-sensitive
-  `cloned_from` provenance for the source Task.
+  `cloned_from` provenance for the source Task. Resetting or reverting ends the
+  clone relationship, so a later submit from that form records no provenance.
 
 API clients can create the same plan explicitly:
 

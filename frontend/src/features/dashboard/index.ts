@@ -560,13 +560,16 @@ export class Dashboard {
       actions.append(progress);
     }
     // Clone opens a fresh draft from this Task's own recorded state; it never
-    // reruns or mutates the source, so it is offered on every visible Task.
-    actions.append(button(t('dashboard.card.clone'), 'clone', 'copy'));
+    // reruns or mutates the source, so it is offered on every visible Task. In
+    // the dense register it joins the existing overflow menu rather than
+    // wrapping the footer onto a second row.
+    const clone = button(t('dashboard.card.clone'), 'clone', 'copy');
+    if (this.query.layout !== 'compact') actions.append(clone);
     if (task.actions.cancel.allowed) actions.append(button(t('dashboard.card.cancel'), 'cancel', 'ban'));
     if (task.actions.delete.allowed) actions.append(button(t('dashboard.card.delete'), 'delete', 'trash-2'));
     const secondary = [...actions.children].filter(node => (node as HTMLElement).dataset.action === 'delete');
     const overflow = document.createElement('details'); overflow.className = 'task-overflow'; const summary = textNode('summary', '···'); summary.setAttribute('aria-label', `${t('dashboard.card.details')}: ${task.display_name}`);
-    const menu = document.createElement('div'); menu.className = 'task-overflow-menu'; menu.append(...secondary);
+    const menu = document.createElement('div'); menu.className = 'task-overflow-menu'; if (this.query.layout === 'compact') menu.append(clone); menu.append(...secondary);
     const facts = document.createElement('dl'); for (const [label, value] of [[t('dashboard.card.submitted'), formatDate(task.submitted_at)], [t('dashboard.card.finished'), formatDate(task.finished_at)], [t('dashboard.card.owner'), task.owner || '—']]) { facts.append(textNode('dt', label!), textNode('dd', value!)); } menu.append(facts); overflow.append(summary, menu); actions.append(overflow);
     return actions;
   }
@@ -620,9 +623,9 @@ export class Dashboard {
         const plan = await createClonePlan(task.task_id);
         // Only the opaque reference travels; the draft re-resolves the plan.
         window.location.assign(`/compute/create_task?clone=${encodeURIComponent(plan.plan_id)}`);
-      } catch (error) {
+      } catch {
         control.disabled = false;
-        this.shell.notify((error as Error).message, 'error');
+        this.shell.notify(t('dashboard.cloneFailed'), 'error');
       }
       return;
     }
