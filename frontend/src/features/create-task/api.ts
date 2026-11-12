@@ -160,6 +160,9 @@ export async function getTaskDefinition(name: string, signal?: AbortSignal): Pro
       }];
     }) : [],
     max_request_bytes: typeof raw.max_request_bytes === 'number' ? raw.max_request_bytes : Number.MAX_SAFE_INTEGER,
+    ...(typeof raw.max_decoded_input_bytes === 'number'
+      ? { max_decoded_input_bytes: raw.max_decoded_input_bytes }
+      : {}),
     ...(raw.file_encodings && typeof raw.file_encodings === 'object' && !Array.isArray(raw.file_encodings)
       && (raw.file_encodings as Record<string, unknown>).version === 1
       && Array.isArray((raw.file_encodings as Record<string, unknown>).supported)

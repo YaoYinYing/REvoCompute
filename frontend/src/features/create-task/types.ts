@@ -100,6 +100,8 @@ export interface TaskFormDefinition {
   execution_modes: ExecutionModeOption[];
   params: ParameterDefinition[];
   max_request_bytes: number;
+  /** Aggregate decoded/original input bytes; absent on a server that predates the projection. */
+  max_decoded_input_bytes?: number;
   /** Per-file-part transport encodings the Server advertises; absent means identity only. */
   file_encodings?: FileEncodingCapability;
 }

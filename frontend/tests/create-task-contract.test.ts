@@ -5,7 +5,7 @@ import { parametersFromSchema, seedConstant } from '../src/features/create-task/
 import { InputWorkspace, selectableExecutionModes } from '../src/features/create-task/input-workspace/InputWorkspace';
 import { HarnessNode, installHarness } from './dom-harness';
 import { buildSubmissionFormData } from '../src/features/create-task/submission';
-import { structureFormat } from '../src/features/create-task/input-workspace/builtins';
+import { maxOriginalBytes, structureFormat } from '../src/features/create-task/input-workspace/builtins';
 import type { ParameterDefinition, TaskFormDefinition } from '../src/features/create-task/types';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -90,6 +90,12 @@ describe('Create Task server contracts', () => {
     const select = root.querySelector('select[data-ct-execution-mode="true"]');
     expect(select?.children.map(option => option.textContent)).toEqual(['Full', 'Prepare only']);
     expect(root.querySelector('.ct-inline-note')?.textContent).toContain('API-only');
+  });
+
+  it('validates originals against the decoded cap, not the encoded body cap', () => {
+    expect(maxOriginalBytes({ max_request_bytes: 100, max_decoded_input_bytes: 500 })).toBe(500);
+    // A server that predates the projection keeps the old single-cap behavior.
+    expect(maxOriginalBytes({ max_request_bytes: 100 })).toBe(100);
   });
 
   it('binds files to named roles and emits the versioned workspace document', () => {
