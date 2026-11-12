@@ -125,8 +125,8 @@ invented release numbers or dates.
     serials, reference digest and coordinate method, and never labels CAVER's
     own residue/group centre as a centre of mass.
   - Add `include_residue_ids`, `include_residue_names` and
-    `include_atom_numbers` filters, verified against the pinned CAVER 3.0.2
-    build, combinable with the existing exclude filters.
+    `include_atom_numbers` filters, verified against the pinned CAVER 3.0.2 JAR,
+    combinable with the existing exclude filters.
 - Release governance:
   - Server:
     - Add the signed-in `GET /compute/api/version` projection and the
