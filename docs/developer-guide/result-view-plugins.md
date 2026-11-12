@@ -106,7 +106,19 @@ pre-existing accessible name `Enter fullscreen` and flips it to
 `Exit fullscreen` while fullscreen is active (both `aria-label` and `title`;
 the visible label stays the mode name). It always requests fullscreen on the
 `.structure-viewport` stage itself, so the toolbar and the mounted viewer stay
-together.
+together. The fullscreen capability is read when the stage mounts; a browser
+whose capability changes afterwards keeps the labelled fallback rather than
+claiming native fullscreen it no longer has.
+
+### Scene ownership and non-goals
+
+The browser presentation plane owns the Mol* lifecycle, overlays, layout,
+selection, and asynchronous cancellation. The Server transmits only the stable
+topology identity and authorized structure bytes; this contract adds no
+scene-processing service and no process-global browser state. CAVER-specific
+controls, trajectory Kabsch fitting, new file-format writers, and a heavyweight
+molecular conversion service remain out of scope and follow in their own
+changes (#153 and #157).
 
 Structure artifacts carry a server-declared `confidence_encoding` when their
 B-factor column holds per-residue pLDDT. The `Confidence` colouring is offered
