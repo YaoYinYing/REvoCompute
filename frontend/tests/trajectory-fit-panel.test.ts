@@ -259,6 +259,7 @@ describe('trajectory fit panel', () => {
     await h.panel.frameDisplayed(0, 2);
     buttonByText(h, 'Fit and preview').fire('click');
     await vi.waitFor(() => expect(statusNode(h).textContent).toContain('periodic box'));
+    expect(statusNode(h).textContent).toContain('2.0 × 2.0 × 2.0 Å');
     expect(statusNode(h).textContent).toContain('No unwrap was performed');
   });
 

@@ -47,7 +47,7 @@ export interface PreviewExportContext {
 }
 
 const STANDARD_RESIDUE = /^[A-Z0-9]{1,3}$/;
-const ELEMENT = /^[A-Z][a-z]?$/;
+const ELEMENT = /^[A-Z]{1,2}$/;
 
 function fixed(value: string, width: number, align: 'left' | 'right' = 'left'): string {
   const text = String(value).slice(0, width);
@@ -58,6 +58,19 @@ function coordinate(value: number, label: string): string {
   if (!Number.isFinite(value)) throw new PdbExportError(`The ${label} coordinate is not finite.`);
   if (Math.abs(value) > 9999.999) throw new PdbExportError(`The ${label} coordinate exceeds the PDB 8.3 field width.`);
   return value.toFixed(3).padStart(8, ' ');
+}
+
+/**
+ * Align an atom name in PDB columns 13-16.
+ *
+ * A one-letter element whose name does not begin with a digit starts in column
+ * 14, so `CA` reads as carbon-alpha rather than calcium; a two-letter element or
+ * a digit-leading name starts in column 13.
+ */
+function atomNameField(name: string, element: string): string {
+  if (name.length >= 4) return name.slice(0, 4);
+  if (element.length === 1 && !/^[0-9]/.test(name)) return name.padEnd(3).padStart(4);
+  return name.padEnd(4);
 }
 
 /**
@@ -104,7 +117,7 @@ export function writePreviewPdb(atoms: readonly SceneAtom[], transform: RigidTra
       'ATOM  '
       + String(serial).padStart(5)
       + ' '
-      + atomName.padStart(4)
+      + atomNameField(atomName, element)
       + (altloc || ' ')
       + fixed(residueName, 3, 'right')
       + ' '

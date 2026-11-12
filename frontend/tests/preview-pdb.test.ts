@@ -49,7 +49,7 @@ describe('preview PDB writer', () => {
     const record = lines[1]!;
     expect(columns(record, 1, 6)).toBe('ATOM  ');
     expect(columns(record, 7, 11)).toBe('    7');
-    expect(columns(record, 13, 16)).toBe('  CA');
+    expect(columns(record, 13, 16)).toBe(' CA ');
     expect(columns(record, 17, 17)).toBe('B');
     expect(columns(record, 18, 20)).toBe('GLY');
     expect(columns(record, 22, 22)).toBe('A');
@@ -63,6 +63,13 @@ describe('preview PDB writer', () => {
     expect(columns(record, 77, 78)).toBe(' C');
     expect(lines.at(-2)).toBe('ENDMDL');
     expect(lines.at(-1)).toBe('END');
+  });
+
+  it('aligns digit-leading and two-letter-element atom names in columns 13-16', () => {
+    const hydrogen = writePreviewPdb([atom(0, 1, '1HG', 'A', 1, 'H', 0, 0, 0)], null).split('\n')[1]!;
+    expect(columns(hydrogen, 13, 16)).toBe('1HG ');
+    const iron = writePreviewPdb([atom(0, 1, 'FE', 'A', 1, 'FE', 0, 0, 0)], null).split('\n')[1]!;
+    expect(columns(iron, 13, 16)).toBe('FE  ');
   });
 
   it('applies the Float64 preview transform to the exported coordinates', () => {

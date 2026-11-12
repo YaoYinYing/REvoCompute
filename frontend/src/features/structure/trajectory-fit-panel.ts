@@ -254,7 +254,9 @@ export function createTrajectoryFitPanel(options: TrajectoryFitPanelOptions): Tr
         atoms: fitAtomCount,
         reference: referenceFrame + 1,
         pbc: pbc.policy === 'periodic'
-          ? (pbc.spanning ? t('results.trajectory.fitPbcSpanning') : t('results.trajectory.fitPbcDeclared'))
+          ? (pbc.spanning
+            ? t('results.trajectory.fitPbcSpanning', { box: boxLabel(pbc.box) })
+            : t('results.trajectory.fitPbcDeclared', { box: boxLabel(pbc.box) }))
           : t('results.trajectory.fitPbcNone'),
       })
       : t('results.trajectory.fitAppliedNoRmsd', { atoms: fitAtomCount, reference: referenceFrame + 1 }));
@@ -480,4 +482,10 @@ function uniqueIndices(atoms: readonly SceneAtom[]): number[] {
 /** The manifest digest when the source exposes one; never invented. */
 function digestOf(file: ResultFile): string | null {
   return 'sha256' in file && typeof file.sha256 === 'string' ? file.sha256 : null;
+}
+
+/** The declared box side lengths, for the preview status only. */
+function boxLabel(box: PeriodicBox | null): string {
+  if (!box) return 'unknown';
+  return `${box.lengths.map((length) => (Number.isFinite(length) ? length.toFixed(1) : '?')).join(' × ')} Å`;
 }
