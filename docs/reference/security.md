@@ -166,7 +166,9 @@ by file extension and fails closed for formats without a Core validator.
   only declared parts through one bounded quarantine reader before format
   validation, digesting, admission and the immutable snapshot, and enforces the
   encoded body cap, the decoded per-file and aggregate caps, a bounded
-  expansion ratio and a decode deadline independently. Strict gzip CRC, EOF,
+  expansion ratio (advertised to clients as `max_expansion_ratio`, so a
+  compressing browser falls back to identity rather than submit a refused
+  representation) and a decode deadline independently. Strict gzip CRC, EOF,
   single-member and no-trailing-data validation applies; nested/double gzip, a
   conflicting
   part/whole-body `Content-Encoding`, and a mislabeled or corrupt payload are

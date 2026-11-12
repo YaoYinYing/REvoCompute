@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import math
 import os
 import time
 
@@ -110,7 +111,29 @@ def test_declarations_are_one_per_part_and_identity_by_default():
 
 
 def test_the_capability_is_versioned_and_explicit():
-    assert capability() == {"version": 1, "supported": ["identity", "gzip"]}
+    assert capability() == {
+        "version": 1,
+        "supported": ["identity", "gzip"],
+        "max_expansion_ratio": 200,
+    }
+
+
+def test_the_capability_advertises_the_ratio_the_decoder_enforces():
+    advertised = capability()["max_expansion_ratio"]
+    assert advertised == DecodeLimits(1024, 1024, 1024).max_expansion_ratio
+    compressed = gzip.compress(PAYLOAD, mtime=0)
+    ratio = len(PAYLOAD) / len(compressed)
+    assert ratio > 1
+
+    accepted = DecodeLimits(1024 * 1024, 1024 * 1024, 1024 * 1024, max_expansion_ratio=math.ceil(ratio))
+    assert _read(compressed, limits=accepted) == PAYLOAD
+
+    floor = math.floor(ratio)
+    refused_ratio = floor if ratio != floor else floor - 1
+    refused = DecodeLimits(1024 * 1024, 1024 * 1024, 1024 * 1024, max_expansion_ratio=refused_ratio)
+    with pytest.raises(UploadEncodingError) as caught:
+        _read(compressed, limits=refused)
+    assert caught.value.code == "input_encoding_limit"
 
 
 def test_a_shared_budget_refuses_the_aggregate_before_yielding_the_overage():

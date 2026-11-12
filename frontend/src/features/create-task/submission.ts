@@ -81,8 +81,18 @@ function eligibleFormats(file: File): string[] {
   return extension === 'cif' ? ['cif', 'mmcif'] : [extension];
 }
 
-function serverOffersGzip(form: TaskFormDefinition): boolean {
-  return form.file_encodings?.version === 1 && form.file_encodings.supported.includes('gzip');
+/**
+ * The decoded/encoded ratio the Server accepts for a declared gzip part.
+ *
+ * The value is projected by the Server's encoding capability; a Server that
+ * does not advertise it is treated as identity-only rather than guessed at,
+ * so the browser never submits a representation the Server refuses.
+ */
+function serverGzipRatio(form: TaskFormDefinition): number | null {
+  const capability = form.file_encodings;
+  if (capability?.version !== 1 || !capability.supported.includes('gzip')) return null;
+  const ratio = capability.max_expansion_ratio;
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : null;
 }
 
 function compressionAvailable(): boolean {
@@ -125,7 +135,8 @@ export async function encodeSubmissionFormData(
   const paths = data.getAll('input_paths');
   const roles = data.getAll('input_roles').map(value => String(value));
   const formats = new Map(form.inputs.map(role => [role.id, new Set(role.formats)]));
-  const canEncode = serverOffersGzip(form) && compressionAvailable();
+  const maxExpansionRatio = serverGzipRatio(form) ?? 0;
+  const canEncode = maxExpansionRatio > 0 && compressionAvailable();
   const encodedFiles: File[] = [];
   const declarations: string[] = [];
   let originalBytes = 0;
@@ -144,7 +155,11 @@ export async function encodeSubmissionFormData(
     if (eligible) {
       try {
         const compressed = await gzipFile(file, signal);
-        if (compressed.size < file.size * WORTHWHILE_RATIO) {
+        // A gzip part is only useful when it saves bytes *and* its decoded/
+        // encoded ratio stays within the Server's advertised bound. The
+        // Server refuses (input_encoding_limit) the rest, so keep identity.
+        const ratio = compressed.size > 0 ? file.size / compressed.size : Infinity;
+        if (compressed.size < file.size * WORTHWHILE_RATIO && ratio <= maxExpansionRatio) {
           encoded = new File([compressed], file.name, { type: file.type, lastModified: file.lastModified });
         }
       } catch (error) {

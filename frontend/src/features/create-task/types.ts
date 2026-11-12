@@ -78,6 +78,8 @@ export interface ExecutionModeOption {
 export interface FileEncodingCapability {
   version: 1;
   supported: Array<'identity' | 'gzip'>;
+  /** Decoded/encoded ratio the Server accepts for a declared gzip part. */
+  max_expansion_ratio: number;
 }
 
 export interface TaskFormDefinition {

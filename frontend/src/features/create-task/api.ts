@@ -166,11 +166,13 @@ export async function getTaskDefinition(name: string, signal?: AbortSignal): Pro
     ...(raw.file_encodings && typeof raw.file_encodings === 'object' && !Array.isArray(raw.file_encodings)
       && (raw.file_encodings as Record<string, unknown>).version === 1
       && Array.isArray((raw.file_encodings as Record<string, unknown>).supported)
+      && typeof (raw.file_encodings as Record<string, unknown>).max_expansion_ratio === 'number'
       ? {
           file_encodings: {
             version: 1 as const,
             supported: ((raw.file_encodings as Record<string, unknown>).supported as unknown[])
               .filter((item): item is 'identity' | 'gzip' => item === 'identity' || item === 'gzip'),
+            max_expansion_ratio: (raw.file_encodings as Record<string, unknown>).max_expansion_ratio as number,
           },
         }
       : {}),

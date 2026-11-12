@@ -103,8 +103,17 @@ class DecodeBudget:
 
 
 def capability() -> dict[str, Any]:
-    """The versioned server capability a client negotiates before encoding."""
-    return {"version": CONTRACT_VERSION, "supported": list(SUPPORTED_ENCODINGS)}
+    """The versioned server capability a client negotiates before encoding.
+
+    ``max_expansion_ratio`` is the same bound :class:`DecodeLimits` enforces, so
+    a compressing client can send identity instead of a part the Server would
+    refuse.
+    """
+    return {
+        "version": CONTRACT_VERSION,
+        "supported": list(SUPPORTED_ENCODINGS),
+        "max_expansion_ratio": MAX_EXPANSION_RATIO,
+    }
 
 
 def parse_declarations(

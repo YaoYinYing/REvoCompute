@@ -2613,12 +2613,17 @@
           },
           "file_encodings": {
             "type": "object",
-            "required": ["version", "supported"],
+            "required": ["version", "supported", "max_expansion_ratio"],
             "properties": {
               "version": {"type": "integer", "const": 1},
               "supported": {
                 "type": "array",
                 "items": {"type": "string", "enum": ["identity", "gzip"]}
+              },
+              "max_expansion_ratio": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Maximum decoded/encoded byte ratio a declared gzip part may expand to; a client must send identity when a compressed part would exceed it."
               }
             },
             "additionalProperties": false,

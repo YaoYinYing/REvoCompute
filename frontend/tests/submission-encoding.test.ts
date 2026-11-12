@@ -1,13 +1,17 @@
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { describe, expect, it } from 'vitest';
 
 import { buildSubmissionFormData, encodeSubmissionFormData } from '../src/features/create-task/submission';
 import type { TaskFormDefinition } from '../src/features/create-task/types';
 
-const GZIP_CAPABILITY = { version: 1 as const, supported: ['identity', 'gzip'] as Array<'identity' | 'gzip'> };
+const GZIP_CAPABILITY = {
+  version: 1 as const,
+  supported: ['identity', 'gzip'] as Array<'identity' | 'gzip'>,
+  max_expansion_ratio: 200,
+};
 
-function form(overrides: Partial<TaskFormDefinition> = {}): TaskFormDefinition {
+function form(overrides: Record<string, unknown> = {}): TaskFormDefinition {
   return {
     name: 'method',
     inputs: [
@@ -31,8 +35,29 @@ function submission(files: File[], roles: string[]): FormData {
   return data;
 }
 
+/** Text-like PDB records that compress normally, well inside the 200:1 bound. */
 function textPdb(bytes: number): File {
-  return new File([new Uint8Array(bytes).fill(65)], 'model.pdb', { type: 'chemical/x-pdb' });
+  const lines: string[] = [];
+  let size = 0;
+  for (let index = 0; size < bytes; index += 1) {
+    const line = `ATOM  ${String(index % 99999).padStart(5)}  CA  ALA A${String(index % 9999).padStart(4)}    `
+      + `${((index * 1.7) % 100).toFixed(3).padStart(8)}${((index * 2.3) % 100).toFixed(3).padStart(8)}`
+      + `${((index * 3.1) % 100).toFixed(3).padStart(8)}  1.00 20.00           C\n`;
+    lines.push(line);
+    size += line.length;
+  }
+  return new File([lines.join('')], 'model.pdb', { type: 'chemical/x-pdb' });
+}
+
+function repetitiveFasta(): File {
+  return new File([`>sample\n${'ACDEFGHIKLMNPQRSTVWY'.repeat(4000)}\n`], 'sample.fasta', { type: 'text/plain' });
+}
+
+function fastaForm(overrides: Record<string, unknown> = {}): TaskFormDefinition {
+  return form({
+    inputs: [{ id: 'sequence', formats: ['fasta'], extensions: ['.fasta'] }],
+    ...overrides,
+  });
 }
 
 describe('per-file-part submission encoding', () => {
@@ -55,6 +80,55 @@ describe('per-file-part submission encoding', () => {
     expect(encoded.data.get('task_type')).toBe('method');
     expect(encoded.data.getAll('input_paths')).toEqual(['model.pdb', 'run.xtc']);
     expect(encoded.data.getAll('input_roles')).toEqual(['structure', 'trajectory']);
+  });
+
+  it('keeps identity for a compressible part above the Server expansion ratio', async () => {
+    const fasta = repetitiveFasta();
+    const compressedSize = gzipSync(Buffer.from(await fasta.arrayBuffer())).length;
+    // The fixture is legitimate but the Server necessarily refuses this ratio.
+    expect(fasta.size / compressedSize).toBeGreaterThan(GZIP_CAPABILITY.max_expansion_ratio);
+    const data = submission([fasta], ['sequence']);
+
+    const encoded = await encodeSubmissionFormData(data, fastaForm());
+
+    expect(encoded.compressedFiles).toBe(0);
+    expect(encoded.data.get('file_encodings')).toBeNull();
+    expect(encoded.data.getAll('files')[0]).toBe(fasta);
+  });
+
+  it('applies gzip at the advertised ratio and keeps identity just above it', async () => {
+    const pdb = textPdb(64 * 1024);
+    const compressedSize = gzipSync(Buffer.from(await pdb.arrayBuffer())).length;
+    const ratio = pdb.size / compressedSize;
+    const acceptedRatio = Math.ceil(ratio);
+    const refusedRatio = ratio === Math.floor(ratio) ? ratio - 1 : Math.floor(ratio);
+
+    const accepted = await encodeSubmissionFormData(
+      submission([pdb], ['structure']),
+      form({ file_encodings: { ...GZIP_CAPABILITY, max_expansion_ratio: acceptedRatio } }),
+    );
+    expect(accepted.compressedFiles).toBe(1);
+    expect(accepted.data.getAll('file_encodings')).toEqual(['gzip']);
+
+    const refused = await encodeSubmissionFormData(
+      submission([pdb], ['structure']),
+      form({ file_encodings: { ...GZIP_CAPABILITY, max_expansion_ratio: refusedRatio } }),
+    );
+    expect(refused.compressedFiles).toBe(0);
+    expect(refused.data.get('file_encodings')).toBeNull();
+  });
+
+  it('does not guess a ratio when the Server omits it', async () => {
+    const pdb = textPdb(64 * 1024);
+    const capability = { version: 1 as const, supported: ['identity', 'gzip'] as Array<'identity' | 'gzip'> };
+
+    const encoded = await encodeSubmissionFormData(
+      submission([pdb], ['structure']),
+      form({ file_encodings: capability }),
+    );
+
+    expect(encoded.compressedFiles).toBe(0);
+    expect(encoded.data.get('file_encodings')).toBeNull();
   });
 
   it('keeps identity for every part when the Server does not advertise gzip', async () => {

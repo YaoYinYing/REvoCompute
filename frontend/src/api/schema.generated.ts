@@ -2614,6 +2614,8 @@ export interface components {
                 /** @constant */
                 version: 1;
                 supported: ("identity" | "gzip")[];
+                /** @description Maximum decoded/encoded byte ratio a declared gzip part may expand to; a client must send identity when a compressed part would exceed it. */
+                max_expansion_ratio: number;
             };
             input_workspace: components["schemas"]["InputWorkspace"];
             /** @description The canonical graph a workflow Task freezes at submission; omitted for single-stage Task Types. */

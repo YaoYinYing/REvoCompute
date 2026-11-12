@@ -28,6 +28,10 @@ from revocompute.task_types import TaskInputRole
 
 REPO = Path(__file__).resolve().parents[2]
 FASTA = (REPO / "tests/data/msa/2KL8.fasta").read_bytes()
+# A legitimate but extremely repetitive protein FASTA: gzip saves more than the
+# Server's advertised 200:1 decoded/encoded bound, so the browser must keep it
+# identity while the Server must still refuse the compressed wire form.
+REPETITIVE_FASTA = b">sample\n" + b"ACDEFGHIKLMNPQRSTVWY" * 4000 + b"\n"
 
 
 def _module(monkeypatch, tmp_path, *, extra_env=None):
@@ -78,7 +82,32 @@ def test_the_task_projection_advertises_the_versioned_encoding_contract(monkeypa
     assert response.get_json()["file_encodings"] == {
         "version": 1,
         "supported": ["identity", "gzip"],
+        "max_expansion_ratio": 200,
     }
+
+
+def test_a_repetitive_legitimate_fasta_declared_as_gzip_is_still_refused(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    queued = _recording_dispatch(module)
+    compressed = gzip.compress(REPETITIVE_FASTA, mtime=0)
+    assert len(REPETITIVE_FASTA) > len(compressed) * 200
+
+    response = _submit(module, payload=compressed, filename="sample.fasta", encodings="gzip")
+
+    assert response.status_code == 400
+    assert response.get_json()["details"][0]["code"] == "input_encoding_limit"
+    _assert_no_side_effects(module, queued)
+
+
+def test_the_same_repetitive_fasta_is_accepted_as_identity(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    queued = _recording_dispatch(module)
+
+    response = _submit(module, payload=REPETITIVE_FASTA, filename="sample.fasta")
+
+    assert response.status_code == 302, response.get_data(as_text=True)[:300]
+    assert len(module.task_store.list_tasks()) == 1
+    assert len(queued) == 1
 
 
 def test_preflight_accepts_a_declared_gzip_part_and_names_the_original(monkeypatch, tmp_path):
