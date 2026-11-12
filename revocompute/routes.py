@@ -24,6 +24,7 @@ import unicodedata
 from collections.abc import Mapping
 from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
@@ -3894,6 +3895,25 @@ def _link_response(payload: dict[str, Any]) -> Response:
     return response
 
 
+def _redact_token_errors(view):
+    """Never let an unhandled error log the token-bearing request path.
+
+    Flask's default 500 log names ``request.path``, which for this route is the
+    bearer token.  The failure is logged without the request line and answered
+    generically instead.
+    """
+
+    @wraps(view)
+    def wrapper(*args: Any, **kwargs: Any):
+        try:
+            return view(*args, **kwargs)
+        except Exception:  # pylint: disable=broad-except
+            logging.exception("Artifact download request failed")
+            return jsonify({"error": "Download link is unavailable"}), 500
+
+    return wrapper
+
+
 @app.route("/compute/api/results/<md5sum>/download-links", methods=["POST"])
 @login_required
 @rate_limit(max_requests=30, window_seconds=60)
@@ -4014,6 +4034,7 @@ def revoke_result_download_links(md5sum: str):
 
 
 @app.route("/compute/api/artifact-downloads/<token>", methods=["GET", "HEAD"])
+@_redact_token_errors
 # A download manager opens many independent single-range requests, so the
 # bearer budget is per-transfer-shaped rather than per-page-view.  A signature
 # cannot be guessed; this limit bounds resource use, not token discovery.
