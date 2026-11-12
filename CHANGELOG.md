@@ -15,6 +15,19 @@ invented release numbers or dates.
 ## [Unreleased]
 
 ### Added
+- Transport:
+  - Accept declared per-file-part `gzip` uploads through a bounded decode path
+    that validates the gzip stream, enforces encoded/decoded/per-file/total and
+    expansion limits, and admits the decoded original bytes under their original
+    SHA-256. Existing clients that send no declaration remain identity.
+  - Advertise the per-file-part encoding contract on the Task Type projection,
+    and let the browser gzip eligible text-like PDB/mmCIF/GRO/specification
+    files with an `AbortSignal` and identity fallback.
+  - Negotiate gateway response `gzip` for text-like types with
+    `Vary: Accept-Encoding`, leaving 206 ranges, binary containers, archives and
+    error responses uncompressed.
+  - Add a per-location `TOOL_CLIENT_MAX_BODY_SIZE` gateway cap for Tool calls,
+    independent of the ordinary 16 MiB Task submission limit.
 - Task history:
   - Server:
     - Paginate `GET /compute/api/tasks` with bounded `limit`, an opaque signed

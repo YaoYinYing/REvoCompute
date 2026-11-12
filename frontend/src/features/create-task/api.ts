@@ -160,6 +160,17 @@ export async function getTaskDefinition(name: string, signal?: AbortSignal): Pro
       }];
     }) : [],
     max_request_bytes: typeof raw.max_request_bytes === 'number' ? raw.max_request_bytes : Number.MAX_SAFE_INTEGER,
+    ...(raw.file_encodings && typeof raw.file_encodings === 'object' && !Array.isArray(raw.file_encodings)
+      && (raw.file_encodings as Record<string, unknown>).version === 1
+      && Array.isArray((raw.file_encodings as Record<string, unknown>).supported)
+      ? {
+          file_encodings: {
+            version: 1 as const,
+            supported: ((raw.file_encodings as Record<string, unknown>).supported as unknown[])
+              .filter((item): item is 'identity' | 'gzip' => item === 'identity' || item === 'gzip'),
+          },
+        }
+      : {}),
     params: parametersFromSchema(schema),
   };
 }
@@ -171,9 +182,19 @@ export async function requestAccess(policyId: string, reason: string): Promise<v
   });
 }
 
-export async function preflightTask(taskType: string, formData: FormData): Promise<TaskPreflight> {
+export interface SubmissionRequestOptions {
+  signal?: AbortSignal;
+}
+
+export async function preflightTask(
+  taskType: string,
+  formData: FormData,
+  options: SubmissionRequestOptions = {},
+): Promise<TaskPreflight> {
   try {
-    return await mutation(`/compute/api/preflight/${encodeURIComponent(taskType)}`, { method: 'POST', body: formData }) as TaskPreflight;
+    return await mutation(`/compute/api/preflight/${encodeURIComponent(taskType)}`, {
+      method: 'POST', body: formData, signal: options.signal,
+    }) as TaskPreflight;
   } catch (error) {
     if (error instanceof CreateTaskApiError && error.payload && typeof error.payload === 'object' && 'valid' in error.payload) {
       return error.payload as TaskPreflight;
@@ -182,6 +203,11 @@ export async function preflightTask(taskType: string, formData: FormData): Promi
   }
 }
 
-export async function submitTask(formData: FormData): Promise<TaskStatus> {
-  return mutation('/compute/api/post', { method: 'POST', body: formData }) as Promise<TaskStatus>;
+export async function submitTask(
+  formData: FormData,
+  options: SubmissionRequestOptions = {},
+): Promise<TaskStatus> {
+  return mutation('/compute/api/post', {
+    method: 'POST', body: formData, signal: options.signal,
+  }) as Promise<TaskStatus>;
 }

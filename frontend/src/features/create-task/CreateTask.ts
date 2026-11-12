@@ -3,7 +3,9 @@ import { fetchDemoFile, getTaskDemos } from './demo';
 import type { TaskDemo } from './demo';
 import { InputWorkspace } from './input-workspace/InputWorkspace';
 import type { PresetApplication, WorkspacePreset } from './input-workspace/InputWorkspace';
-import { buildSubmissionFormData } from './submission';
+import { buildSubmissionFormData, encodeSubmissionFormData } from './submission';
+import type { EncodedSubmission } from './submission';
+import { formatBytes } from './input-workspace/utils';
 import type { TaskCatalog, TaskFormDefinition, TaskPreflight, TaskSummary } from './types';
 import { submissionNotice, submissionRefusal } from '../runners/readiness-copy';
 import { t } from '../../app/i18n';
@@ -81,6 +83,9 @@ export class CreateTask {
   // retry; the run control stays available because the profile endpoint is a
   // label, not the submission boundary.
   private environmentUnresolved = false;
+  // Cancels an in-flight encode/preflight/submit when the view is left or the
+  // generation is replaced. Abort is not a retry: no second POST is sent.
+  private submitController: AbortController | null = null;
 
   constructor(private readonly root: HTMLElement) {
     // The preparation surface owns exactly one visible level-1 heading per state:
@@ -404,14 +409,30 @@ export class CreateTask {
     const errors = this.refreshValidation(); if (errors.length) { this.setStatus(t('ct.fixIssues'), 'error'); return; }
     const generation = this.generation; const revision = this.revision;
     const data = buildSubmissionFormData(this.definition, this.workspace, this.workspace.collect());
+    this.submitController?.abort();
+    const controller = new AbortController();
+    this.submitController = controller;
     this.actionFailed = false;
-    this.setBusy(true); this.setStatus(t('ct.checkingTask'), 'busy');
+    this.setBusy(true); this.setStatus(t('ct.encoding'), 'busy');
     this.checking = true; this.refreshValidation(true);
+    let encoded: EncodedSubmission;
+    try {
+      encoded = await encodeSubmissionFormData(data, this.definition, { signal: controller.signal });
+    } catch (error) {
+      if (generation !== this.generation || controller.signal.aborted) return;
+      this.checking = false; this.preflight = null; this.actionFailed = true; this.setStatus(t('ct.checksFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'); this.setBusy(false); this.refreshValidation(); return;
+    }
+    if (generation !== this.generation || controller.signal.aborted) return;
+    const wire = encoded.data;
+    const transferStatus = encoded.compressedFiles > 0
+      ? t('ct.uploadingCompressed', { encoded: formatBytes(encoded.encodedBytes), original: formatBytes(encoded.originalBytes) })
+      : t('ct.checkingTask');
+    this.setStatus(transferStatus, 'busy');
     let preflight: TaskPreflight;
     try {
-      preflight = await preflightTask(this.definition.name, data);
+      preflight = await preflightTask(this.definition.name, wire, { signal: controller.signal });
     } catch (error) {
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || controller.signal.aborted) return;
       this.checking = false; this.preflight = null; this.actionFailed = true; this.setStatus(t('ct.checksFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'); this.setBusy(false); this.refreshValidation(); return;
     }
     if (generation !== this.generation) return;
@@ -421,12 +442,12 @@ export class CreateTask {
     }
     this.preflight = preflight; this.refreshValidation(true);
     if (!preflight.valid) { this.setStatus(t('ct.checksFailedFix'), 'error'); this.setBusy(false); this.refreshValidation(true); return; }
-    this.setStatus(t('ct.queueing'), 'busy');
+    this.setStatus(encoded.compressedFiles > 0 ? transferStatus : t('ct.queueing'), 'busy');
     try {
-      const task = await submitTask(data);
+      const task = await submitTask(wire, { signal: controller.signal });
       this.actionFailed = false; this.setStatus(t('ct.queued', { id: task.task_id }), 'ok'); window.location.assign('/compute/dashboard');
     } catch (error) {
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || controller.signal.aborted) return;
       this.actionFailed = true; this.setBusy(false); this.preflight = null;
       // A READY preflight is advice, not a reservation. When the admission
       // boundary refuses this POST, adopt that response's own reason and
@@ -605,7 +626,7 @@ export class CreateTask {
   private categoryLabel(name: string): string { return this.catalog?.categories.find(category => category.name === name)?.label || name; }
 
   private showChooser(message: string): void {
-    this.loadController?.abort(); this.generation++; this.definition = null; this.preflight = null; this.setBusy(false); this.checking = false; this.closeDemoDialog(); this.workspace.destroy();
+    this.loadController?.abort(); this.submitController?.abort(); this.generation++; this.definition = null; this.preflight = null; this.setBusy(false); this.checking = false; this.closeDemoDialog(); this.workspace.destroy();
     this.chooser.hidden = false; this.pageHeader.hidden = false; this.workbench.hidden = true;
     // The region and the chooser's methods come home with the state, so the
     // chooser's own status message is always inside the live region, whether or
@@ -618,6 +639,7 @@ export class CreateTask {
 
   destroy(): void {
     this.loadController?.abort();
+    this.submitController?.abort();
     // A route change must not leave a modal in the top layer over the next page,
     // and any await holding it open settles as a cancelled decision.
     this.generation++;

@@ -75,6 +75,11 @@ export interface ExecutionModeOption {
   reuse?: ExecutionModeReuse[];
 }
 
+export interface FileEncodingCapability {
+  version: 1;
+  supported: Array<'identity' | 'gzip'>;
+}
+
 export interface TaskFormDefinition {
   name: string;
   display_name: string;
@@ -95,6 +100,8 @@ export interface TaskFormDefinition {
   execution_modes: ExecutionModeOption[];
   params: ParameterDefinition[];
   max_request_bytes: number;
+  /** Per-file-part transport encodings the Server advertises; absent means identity only. */
+  file_encodings?: FileEncodingCapability;
 }
 
 export interface InputFile {
