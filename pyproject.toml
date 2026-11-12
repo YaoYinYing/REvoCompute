@@ -30,6 +30,7 @@ dependencies = [
 revocompute = "revocompute.__main__:main"
 revocompute-doctor = "revocompute.doctor:main"
 revocompute-publications = "revocompute.publications:main"
+revocompute-release = "revocompute.release_governance:main"
 revocompute-tool-status = "revocompute.tool_status:main"
 revocompute-mcp = "revocompute.mcp.asgi:serve"
 
@@ -64,6 +65,12 @@ revocompute = [
     "static/*.md",
     "legal/*.md",
 ]
+
+# The canonical changelog is a repository-root file, not package data. Install it
+# beside the package so an image that is not beside its source tree can still
+# serve the bounded payload.
+[tool.setuptools.data-files]
+"share/revocompute" = ["CHANGELOG.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
