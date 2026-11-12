@@ -40,8 +40,10 @@ remains a normal disclosure below the result.
 The molecular stage offers three display modes from its toolbar: **Normal**,
 **Expand**, and **Maximize**. Expand presents the same stage as a modal overlay
 that traps focus, closes with Escape, and returns focus to the control that
-opened it. Maximize uses the browser's native fullscreen where it is available;
-where it is not, the page says so and uses the expand overlay instead. All
+opened it. Maximize uses the browser's native fullscreen where it is available, and its
+accessible name changes from **Enter fullscreen** to **Exit fullscreen** while
+active; where native fullscreen is not available, the page says so and uses the
+expand overlay instead. All
 three modes reuse the already-mounted viewer, so the selected candidate,
 representation, colour, camera, trajectory frame, overlays, and scientific
 selection survive when the mode changes. The mode buttons are keyboard

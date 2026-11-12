@@ -15,6 +15,9 @@ export interface DisplayModeLabels {
   maximize: string;
   /** Announced (and visibly labelled) when native fullscreen is unavailable. */
   fullscreenFallback: string;
+  /** Accessible name of the maximize control while native fullscreen is available. */
+  enterFullscreen: string;
+  exitFullscreen: string;
   expanded: string;
   maximized: string;
   collapsed: string;
@@ -321,18 +324,43 @@ export function createDisplayModeControls(options: DisplayModeControlOptions): D
     ['expand', options.labels.expand],
     ['maximize', options.labels.maximize],
   ];
+  // Where native fullscreen exists, the maximize control carries the
+  // pre-existing fullscreen accessibility contract: aria-label/title are
+  // exactly "Enter fullscreen" and flip to "Exit fullscreen" while active.
+  // The visible text stays the mode name, which the DESIGN permits.
+  const nativeFullscreen = canUseFullscreen(documentRef as unknown as FullscreenDocument);
+  const fullscreenActive = (): boolean => documentRef.fullscreenElement === options.stage;
+  const syncFullscreenLabel = (): void => {
+    const button = buttons.get('maximize');
+    if (!button) return;
+    if (!nativeFullscreen) {
+      button.setAttribute('aria-label', options.labels.maximize);
+      button.title = options.labels.maximize;
+      return;
+    }
+    const label = fullscreenActive() ? options.labels.exitFullscreen : options.labels.enterFullscreen;
+    button.setAttribute('aria-label', label);
+    button.title = label;
+  };
   for (const [mode, label] of modes) {
     const button = documentRef.createElement('button');
     button.type = 'button';
     button.className = 'result-button result-button-small';
     button.textContent = label;
     button.setAttribute('aria-pressed', String(mode === 'normal'));
-    button.addEventListener('click', () => { void controller.setMode(mode); });
+    if (mode === 'maximize' && !nativeFullscreen) button.title = options.labels.maximize;
+    button.addEventListener('click', () => {
+      // The same control leaves fullscreen when it is already active.
+      if (mode === 'maximize' && nativeFullscreen && fullscreenActive()) { void controller.setMode('normal'); return; }
+      void controller.setMode(mode);
+    });
     group.append(button);
     buttons.set(mode, button);
   }
+  syncFullscreenLabel();
   const unsubscribe = controller.onChange((mode) => {
     for (const [id, button] of buttons) button.setAttribute('aria-pressed', String(id === mode));
+    syncFullscreenLabel();
   });
   options.container.append(group);
   return {

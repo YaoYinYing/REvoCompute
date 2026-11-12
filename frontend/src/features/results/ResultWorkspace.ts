@@ -649,6 +649,8 @@ export class ResultWorkspace {
         expand: t('results.structure.modeExpand'),
         maximize: t('results.structure.modeMaximize'),
         fullscreenFallback: t('results.structure.fullscreenFallback'),
+        enterFullscreen: t('results.structure.enterFullscreen'),
+        exitFullscreen: t('results.structure.exitFullscreen'),
         expanded: t('results.structure.expanded'),
         maximized: t('results.structure.maximized'),
         collapsed: t('results.structure.collapsed'),

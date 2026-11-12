@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DisplayModeController,
   canUseFullscreen,
+  createDisplayModeControls,
   maximizeSupport,
   normalizeDisplayMode,
 } from '../src/features/structure/display-mode';
@@ -11,6 +12,7 @@ class FakeElement {
   readonly tag: string;
   className = '';
   textContent = '';
+  title = '';
   type = '';
   readonly dataset: Record<string, string> = {};
   readonly children: FakeElement[] = [];
@@ -79,6 +81,8 @@ const labels = {
   expand: 'Expand',
   maximize: 'Maximize',
   fullscreenFallback: 'Fullscreen is unavailable',
+  enterFullscreen: 'Enter fullscreen',
+  exitFullscreen: 'Exit fullscreen',
   expanded: 'Expanded',
   maximized: 'Maximized',
   collapsed: 'Collapsed',
@@ -180,5 +184,33 @@ describe('display mode controller lifecycle', () => {
     controller.destroy();
     expect(element.dataset.displayMode).toBeUndefined();
     expect(doc.body.children).toHaveLength(0);
+  });
+
+  it('keeps the pre-existing accessible fullscreen name on the maximize control', async () => {
+    const element = stage(true);
+    doc = fakeDocument(true);
+    const container = new FakeElement('div');
+    const controls = createDisplayModeControls({
+      stage: element as unknown as HTMLElement,
+      container: container as unknown as HTMLElement,
+      resize: () => undefined,
+      labels,
+      document: doc as unknown as Document,
+      requestFrame: (callback) => { callback(); return 0; },
+    });
+    const button = (controls.element as unknown as FakeElement).children.find(child => child.textContent === labels.maximize)!;
+    expect(button.getAttribute('aria-label')).toBe(labels.enterFullscreen);
+    expect(button.title).toBe(labels.enterFullscreen);
+
+    button.dispatch('click', {});
+    await vi.waitFor(() => expect(doc.fullscreenElement).toBe(element));
+    await vi.waitFor(() => expect(button.getAttribute('aria-label')).toBe(labels.exitFullscreen));
+    expect(button.title).toBe(labels.exitFullscreen);
+
+    button.dispatch('click', {});
+    await vi.waitFor(() => expect(doc.fullscreenElement).toBeNull());
+    await vi.waitFor(() => expect(button.getAttribute('aria-label')).toBe(labels.enterFullscreen));
+    expect(button.title).toBe(labels.enterFullscreen);
+    controls.destroy();
   });
 });

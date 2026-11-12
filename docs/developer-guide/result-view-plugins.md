@@ -101,6 +101,13 @@ ordinary keyboard-reachable buttons with `aria-pressed`; the stage is laid out
 for 390, 834, and 1440 px widths in both themes, and transition motion is
 omitted under `prefers-reduced-motion`.
 
+Where the browser supports native fullscreen, the Maximize control keeps the
+pre-existing accessible name `Enter fullscreen` and flips it to
+`Exit fullscreen` while fullscreen is active (both `aria-label` and `title`;
+the visible label stays the mode name). It always requests fullscreen on the
+`.structure-viewport` stage itself, so the toolbar and the mounted viewer stay
+together.
+
 Structure artifacts carry a server-declared `confidence_encoding` when their
 B-factor column holds per-residue pLDDT. The `Confidence` colouring is offered
 only from that declaration, never from the file extension. See
