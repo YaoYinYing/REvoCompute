@@ -657,7 +657,69 @@ class FrontendFixtureRouter:
         route.fulfill(status=status, headers={"Location": payload["status_url"]}, json=payload)
 
     def _task_list(self, route: Any, query: Any) -> None:
-        return route.fulfill(json={"tasks": self.scenario.summary_payloads()})
+        """Serve the bounded, filtered History response the dashboard now requests."""
+        def first(name: str) -> str:
+            return (query.get(name) or [""])[0]
+
+        tasks = self.scenario.summary_payloads()
+        needle = first("q").strip().lower()
+        if needle:
+            tasks = [
+                task for task in tasks
+                if needle in str(task.get("display_name") or "").lower() or needle in str(task.get("task_id") or "").lower()
+            ]
+        status = first("status")
+        if status == "attention":
+            tasks = [task for task in tasks if task.get("status") in {"failed", "cancelled"}]
+        elif status:
+            tasks = [task for task in tasks if task.get("status") == status]
+        task_type = first("task_type").strip().lower()
+        if task_type:
+            tasks = [task for task in tasks if task_type in str(task.get("task_type") or "").lower()]
+        owner = first("owner").strip().lower()
+        if owner:
+            tasks = [task for task in tasks if owner in str(task.get("owner") or "").lower()]
+        for name, field in (("submitted_from", "submitted_at"), ("submitted_to", "submitted_at"),
+                            ("finished_from", "finished_at"), ("finished_to", "finished_at")):
+            bound = first(name)
+            if not bound:
+                continue
+            end = name.endswith("_to")
+            tasks = [
+                task for task in tasks
+                if task.get(field) and (str(task[field])[:len(bound)] <= bound if end else str(task[field])[:len(bound)] >= bound)
+            ]
+        if first("sort") == "finished":
+            finished = sorted((task for task in tasks if task.get("finished_at")),
+                              key=lambda task: (task["finished_at"], task["task_id"]), reverse=True)
+            unfinished = sorted((task for task in tasks if not task.get("finished_at")),
+                                key=lambda task: task["task_id"], reverse=True)
+            tasks = finished + unfinished
+        else:
+            tasks = sorted(tasks, key=lambda task: (task.get("submitted_at") or "", task["task_id"]), reverse=True)
+        try:
+            limit = max(1, min(int(first("limit") or 30), 100))
+        except ValueError:
+            limit = 30
+        try:
+            start = max(0, int(first("cursor") or 0))
+        except ValueError:
+            start = 0
+        page = tasks[start:start + limit]
+        has_more = len(tasks) > start + limit
+        return route.fulfill(json={
+            "tasks": page,
+            "next_cursor": str(start + limit) if has_more else None,
+            "has_more": has_more,
+            "returned": len(page),
+            "cursor_reset": False,
+            "query": {
+                "q": first("q") or None, "task_type": first("task_type") or None,
+                "status": first("status") or None, "owner": first("owner") or None,
+                "submitted_from": None, "submitted_to": None, "finished_from": None, "finished_to": None,
+                "sort": "finished" if first("sort") == "finished" else "submitted", "limit": limit,
+            },
+        })
 
     def _status(self, route: Any, query: Any, task_id: str = "", **_: str) -> None:
         definition = self.scenario.runner_for_task(task_id)
