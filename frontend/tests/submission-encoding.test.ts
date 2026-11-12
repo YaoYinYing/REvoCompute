@@ -98,7 +98,13 @@ describe('per-file-part submission encoding', () => {
 
   it('applies gzip at the advertised ratio and keeps identity just above it', async () => {
     const pdb = textPdb(64 * 1024);
-    const compressedSize = gzipSync(Buffer.from(await pdb.arrayBuffer())).length;
+    // Measure the encoder's own compression so the boundary is exact.
+    const baseline = await encodeSubmissionFormData(
+      submission([pdb], ['structure']),
+      form({ file_encodings: { ...GZIP_CAPABILITY, max_expansion_ratio: Number.MAX_SAFE_INTEGER } }),
+    );
+    expect(baseline.compressedFiles).toBe(1);
+    const compressedSize = (baseline.data.getAll('files')[0] as File).size;
     const ratio = pdb.size / compressedSize;
     const acceptedRatio = Math.ceil(ratio);
     const refusedRatio = ratio === Math.floor(ratio) ? ratio - 1 : Math.floor(ratio);
