@@ -26,7 +26,7 @@ import secrets
 import time
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
@@ -35,10 +35,10 @@ from revocompute.auth import artifact_link_serializer
 SCOPE = "read-bytes"
 PURPOSE = "artifact-download"
 
-#: The bearer retrieval path prefix.  Its token segment is the only secret this
-#: module ever puts in a URL, and it is redacted from access-log paths.
+#: The bearer route marker.  Its token segment is the only secret this module
+#: ever puts in a URL, and a path carrying this marker is redacted from logs.
 _REDACTED_DOWNLOAD_PATH = "/compute/api/artifact-downloads/[redacted]"
-_DOWNLOAD_PREFIX = "/compute/api/artifact-downloads/"
+_DOWNLOAD_MARKER = "/compute/api/artifact-downloads"
 
 _DEFAULT_TTL_SECONDS = 60 * 60
 _MAX_TTL_SECONDS = 24 * 60 * 60
@@ -165,8 +165,36 @@ def token_id_hash(jti: str) -> str:
     return _jti_hash(jti)
 
 
+def _normalized_log_path(path: str) -> str:
+    """Collapse encodings, separators and dot segments for a log-only match."""
+    value = path
+    # A malformed spelling may carry a doubly encoded separator (``%252F``) or
+    # encoded marker letters (``%2561``); decode until stable, bounded.
+    for _ in range(3):
+        decoded = unquote(value, errors="replace")
+        if decoded == value:
+            break
+        value = decoded
+    segments: list[str] = []
+    for segment in value.replace("\\", "/").split("/"):
+        if segment in {"", "."}:
+            continue
+        if segment == "..":
+            if segments:
+                segments.pop()
+            continue
+        segments.append(segment)
+    return "/" + "/".join(segments)
+
+
 def redacted_request_path(path: str) -> str:
-    """A log-safe form of a request path that may carry a bearer token."""
-    if urlsplit(path).path.startswith(_DOWNLOAD_PREFIX):
+    """A log-safe form of a request path that may carry a bearer token.
+
+    The bearer route is matched on a normalized, case-insensitive form so a
+    request that fails because of a malformed spelling -- case variation,
+    duplicate slashes, dot segments, encoded or double-encoded separators, or a
+    trailing encoded NUL -- still cannot persist the token in a log.
+    """
+    if _DOWNLOAD_MARKER in _normalized_log_path(urlsplit(path).path).lower():
         return _REDACTED_DOWNLOAD_PATH
     return path

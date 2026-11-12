@@ -4108,7 +4108,14 @@ def get_artifact_download(token: str):
     # compressed and keeps the same strong validator as the bytes it serves.
     if response.status_code == 200:
         response.headers["Content-Encoding"] = "identity"
-    response.mimetype = resolved.get("media_type") or "application/octet-stream"
+    # A manifest written before #150 has no projected type; re-project from the
+    # path instead of serving a bearer response as application/octet-stream.
+    declared_media_type = str(resolved.get("media_type") or "")
+    response.mimetype = (
+        declared_media_type
+        if declared_media_type and declared_media_type != "application/octet-stream"
+        else media_type_for_path(str(resolved["path"]))
+    )
     response.headers.set(
         "Content-Disposition",
         "attachment",

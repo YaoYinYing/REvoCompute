@@ -169,6 +169,27 @@ def test_an_active_link_serves_only_its_bound_artifact_without_a_session(monkeyp
     assert "no-transform" in response.headers["Cache-Control"]
 
 
+def test_a_pre_projection_manifest_still_serves_its_projected_type(monkeypatch, tmp_path) -> None:
+    module = _load(monkeypatch, tmp_path)
+    pdb = b"ATOM      1  CA  ALA A   1      11.104   6.134  -6.504  1.00  0.00           C\n"
+    # A manifest written before #150's server-owned projection carries no
+    # ``media_type``; publishing without the projection reproduces it while
+    # keeping the manifest anchored.
+    monkeypatch.setattr(module.task_runtime, "media_type_for_path", lambda _path: None)
+    task_id, _root = _published_task(module, tmp_path, {"model.pdb": pdb})
+    url = _issue(module.app.test_client(), _test_client_auth(module), task_id, "model.pdb").get_json()[
+        "download_url"
+    ]
+
+    response = module.app.test_client().get(url)
+
+    assert response.status_code == 200
+    assert response.headers["Content-Type"].split(";")[0] == "chemical/x-pdb"
+    assert response.headers["Content-Encoding"] == "identity"
+    assert "no-transform" in response.headers["Cache-Control"]
+    assert response.data == pdb
+
+
 def test_the_link_is_not_a_session_credential_and_authorizes_no_other_surface(monkeypatch, tmp_path) -> None:
     module = _load(monkeypatch, tmp_path)
     task_id, _root = _published_task(module, tmp_path)
@@ -576,9 +597,22 @@ def test_bearer_requests_log_a_redacted_path(monkeypatch, tmp_path) -> None:
     assert token not in json.dumps(captured)
     assert logged_paths == ["/compute/api/artifact-downloads/[redacted]"]
     assert token not in logged_paths[0]
-    assert artifact_links.redacted_request_path(f"/compute/api/artifact-downloads/{token}") == (
-        "/compute/api/artifact-downloads/[redacted]"
+    redacted = "/compute/api/artifact-downloads/[redacted]"
+    spellings = (
+        f"/compute/api/artifact-downloads/{token}",
+        f"/Compute/api/artifact-downloads/{token}",
+        f"/compute/api//artifact-downloads/{token}",
+        f"/compute/api/./artifact-downloads/{token}",
+        f"/compute/api/x/../artifact-downloads/{token}",
+        f"/compute/api/artifact-downloads%2F{token}",
+        f"/compute/api/artifact-downloads%252F{token}",
+        f"/compute/api/artifact-downloads/{token}%00",
+        f"/compute/api/%61rtifact-downloads/{token}",
+        f"/compute/api/%2561rtifact-downloads/{token}",
     )
+    for spelling in spellings:
+        assert artifact_links.redacted_request_path(spelling) == redacted, spelling
+        assert token not in artifact_links.redacted_request_path(spelling)
     assert artifact_links.redacted_request_path(f"/compute/api/results/{task_id}") == f"/compute/api/results/{task_id}"
 
 

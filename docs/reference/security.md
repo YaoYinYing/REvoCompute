@@ -250,3 +250,38 @@ by file extension and fails closed for formats without a Core validator.
   CPU, address-space, output-file, descriptor, and wall-clock limits. A timeout,
   resource-limit termination, crash, or malformed worker response is a normal
   validation rejection and cannot create a Task.
+
+### Artifact download links
+
+An authenticated owner may mint a short-lived bearer URL for one published,
+manifest-declared artifact. The URL is a capability for that artifact's bytes,
+never a login credential: it authorizes no Task list, API, or other artifact.
+
+- The signed token binds the Task, artifact path, digest, size, issuing owner,
+  `read-bytes` scope and a hard expiry (default one hour, ceiling 24 hours). The
+  grant row stores only a hash of the token id, never the token or its clear-text
+  id. Rotating `ARTIFACT_LINK_SECRET` (or `AUTH_SECRET_KEY` when it is unset)
+  invalidates every outstanding link; individual and per-Task revocation are
+  explicit.
+- Every `GET`/`HEAD` rechecks the grant, the canonical Task state, the current
+  publication digest and size, and the issuing owner's access. Invalid, expired,
+  revoked, wrong-scope and stale-publication cases share one `404` so a caller
+  cannot enumerate Tasks or artifacts.
+- Bytes come from the same verified snapshot used by the ordinary artifact
+  download route.
+  A replaced inode or a republished digest is refused, an in-flight response may
+  finish from its already-open snapshot, and every later range request needs an
+  active link.
+- The bearer response sends `Content-Disposition: attachment`,
+  `Referrer-Policy: no-referrer`, `Cache-Control: private, no-store,
+  no-transform`, and `X-Content-Type-Options: nosniff`. A full representation is
+  `Content-Encoding: identity`, so a gateway compressor cannot replace the strong
+  content `ETag` with a weak one; `If-Range` is honored only for an exact strong
+  validator, and 206 responses stay byte-exact and uncompressed.
+- The gateway and application access logs redact the token-bearing request
+  path. Redaction normalizes case, separators, dot segments and percent
+  encodings (including double-encoded bytes and an encoded NUL), so a malformed
+  spelling that fails the route cannot persist a token. Gateway error messages
+  for that route are suppressed because nginx error logs embed the raw request
+  line and have no redaction hook; the application still records its own
+  redacted error.

@@ -67,7 +67,9 @@ def _start_request_trace() -> None:
     g.request_started_at = time.monotonic()
     # The gateway and gunicorn access log formats read this environment entry
     # instead of the raw path, so a bearer download token in the URL path is
-    # never persisted in an access log.  Every other path is unchanged.
+    # never persisted in an access log.  The path is normalized first, so a
+    # malformed spelling that fails the route is redacted too.  Every other
+    # path is unchanged.
     request.environ["x-log-path"] = redacted_request_path(request.path)
     emit_event(
         "http.request.started",

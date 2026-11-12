@@ -71,9 +71,26 @@ INCOMPRESSIBLE = ("/xtc", "/dcd", "/zip", "/png")
 BEARER_VALID = "dummy-valid-token-000000000001"
 BEARER_EXPIRED = "dummy-expired-token-00000000001"
 BEARER_TAMPERED = "dummy-tampered-token-0000000001"
-BEARER_PATHS = tuple(
-    f"/compute/api/artifact-downloads/{token}" for token in (BEARER_VALID, BEARER_EXPIRED, BEARER_TAMPERED)
-)
+BEARER_TOKENS = (BEARER_VALID, BEARER_EXPIRED, BEARER_TAMPERED)
+
+
+def _bearer_spellings(token: str) -> tuple[str, ...]:
+    """Every spelling that can carry the bearer path or a hidden marker."""
+    return (
+        f"/compute/api/artifact-downloads/{token}",
+        f"/Compute/api/artifact-downloads/{token}",
+        f"/compute/api//artifact-downloads/{token}",
+        f"/compute/api/./artifact-downloads/{token}",
+        f"/compute/api/x/../artifact-downloads/{token}",
+        f"/compute/api/artifact-downloads%2F{token}",
+        f"/compute/api/artifact-downloads%252F{token}",
+        f"/compute/api/artifact-downloads/{token}%00",
+        f"/compute/api/%61rtifact-downloads/{token}",
+        f"/compute/api/%2561rtifact-downloads/{token}",
+    )
+
+
+BEARER_PATHS = tuple(path for token in BEARER_TOKENS for path in _bearer_spellings(token))
 
 pytestmark = pytest.mark.skipif(
     not (TEMPLATE.is_file() and NGINX),
@@ -227,14 +244,11 @@ def _wait_for_text(path: Path, needle: str, *, timeout: float = 5) -> str:
 def test_bearer_tokens_are_redacted_from_the_access_log(gateway):
     for path in BEARER_PATHS:
         _get(gateway, path)
-    # A differently-cased spelling is not the bearer route, but it must not be
-    # able to smuggle the token into the log either.
-    _get(gateway, f"/Compute/api/artifact-downloads/{BEARER_VALID}")
     _get(gateway, "/normal-log-line")
 
     log = _wait_for_text(gateway.access_log, "GET /normal-log-line")
 
-    for token in (BEARER_VALID, BEARER_EXPIRED, BEARER_TAMPERED):
+    for token in BEARER_TOKENS:
         assert token not in log
     assert '"GET /compute/api/artifact-downloads/[redacted] HTTP/1.1"' in log
     # Ordinary requests are still logged with their real request line.
@@ -245,12 +259,21 @@ def test_bearer_tokens_are_absent_from_the_gateway_error_log(gateway):
     gateway.upstream.shutdown()
     gateway.upstream.server_close()
 
-    _get(gateway, BEARER_PATHS[0])
+    # Include the double-encoded, NUL and hidden-marker forms that the
+    # access-log map has to recognize in the raw or normalized URI.
+    for token in BEARER_TOKENS:
+        for spelling in (
+            f"/compute/api/artifact-downloads%252F{token}",
+            f"/compute/api/artifact-downloads/{token}%00",
+            f"/compute/api/%2561rtifact-downloads/{token}",
+        ):
+            _get(gateway, spelling)
     _get(gateway, "/normal-after-upstream-failure")
 
     log = _wait_for_text(gateway.error_log, "/normal-after-upstream-failure")
 
-    assert BEARER_VALID not in log
+    for token in BEARER_TOKENS:
+        assert token not in log
     assert "/normal-after-upstream-failure" in log
 
 
