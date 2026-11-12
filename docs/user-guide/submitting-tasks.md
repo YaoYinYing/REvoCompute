@@ -94,11 +94,11 @@ Create Task draft seeded from one authorized earlier Task:
   submission never references another Task's files. Every listed input is
   re-uploaded and validated normally; a file the source snapshot can no longer
   verify is called out explicitly.
-- The reconciliation panel states what was pre-uploaded and lists the required
-  re-uploads. **Reset to current defaults** clears the prefilled values;
+- The reconciliation panel names the inputs the source recorded and lists the
+  required re-uploads. **Reset to current defaults** returns every field to the current
+  schema defaults, discarding the cloned values and any later edits;
   **Revert the clone** restores the form state from before the clone was
-  applied. Neither action ever overwrites an edit you made after the panel
-  appeared.
+  applied. Both happen only when you choose them.
 - Opening a clone never submits. Preflight and **Run** are still the only
   submission boundary, and the resulting Task carries non-sensitive
   `cloned_from` provenance for the source Task.
