@@ -453,7 +453,15 @@ def test_search_explains_literal_text_and_offers_no_regex_mode(page: Page, width
     # browser exposes no pattern mode and says what the field does.
     expect(page.locator("[data-toggle-regex]")).to_have_count(0)
     hint = page.locator("#dashboard-search-hint")
-    expect(hint).to_be_visible()
+    expect(hint).to_have_count(1)
     expect(hint).to_contain_text("literal")
+    # The explanation is the field's accessible description at every width; it is
+    # painted on desktop and visually collapsed on a phone so it cannot displace
+    # the first Task identity below the opening viewport.
+    expect(page.locator("#dashboard-search")).to_have_attribute(
+        "aria-describedby", "dashboard-search-hint"
+    )
+    if width > 820:
+        expect(hint).to_be_visible()
     page.locator("[data-filter='search']").fill("[")
     expect(page.locator("[data-query-error]")).to_have_count(0)

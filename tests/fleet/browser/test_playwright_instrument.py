@@ -16,10 +16,24 @@ from werkzeug.serving import make_server
 
 import browser_frontend_assets
 from conftest import _load_fleet_module, _test_client_auth, _upsert_task_for_user
-from test_playwright_application import ORIGIN, TASK_ID, _install_app, _task_summary
+from test_playwright_application import ORIGIN, TASK_ID, _install_app, _task_history, _task_summary
 
 pytestmark = pytest.mark.browser
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def _load_all_pages(page: Page, total: int) -> None:
+    """Walk the bounded register to the last page through its accessible control."""
+    more = page.get_by_role('button', name='Load more', exact=True)
+    while page.locator('.task-card').count() < total:
+        expect(more).to_be_visible()
+        before = page.locator('.task-card').count()
+        if before >= total:
+            break
+        more.click()
+        page.wait_for_function(
+            "before => document.querySelectorAll('.task-card').length > before", arg=before
+        )
 
 
 @pytest.fixture
@@ -116,6 +130,10 @@ def test_dense_task_register_keeps_relevant_operations_direct(page: Page, monkey
         task['result']['page_url'] = f"/compute/results/{task['task_id']}"
         task['result']['manifest_url'] = f"/compute/api/results/{task['task_id']}"
         task['result']['archive_request_url'] = f"/compute/api/results/{task['task_id']}/archive"
+        # Distinct newest-first submission times: the server orders by time and
+        # then Task ID, while this scenario wants model-000 to lead the register.
+        seconds = 119 - index
+        task['submitted_at'] = f'2026-09-29T00:{seconds // 60:02d}:{seconds % 60:02d}Z'
         for action in ('cancel', 'delete'):
             task['actions'][action]['url'] = f"/compute/api/{action}/{task['task_id']}"
         if index % 3 == 0:
@@ -126,10 +144,11 @@ def test_dense_task_register_keeps_relevant_operations_direct(page: Page, monkey
             task.update(status='failed', outcome=None, error='Runner exited with code 1')
             task['result']['available'] = False
         tasks.append(task)
-    page.route(f'{ORIGIN}/compute/api/tasks*', lambda route: route.fulfill(json={'tasks': tasks}))
+    page.route(f'{ORIGIN}/compute/api/tasks*', _task_history(tasks))
     page.set_viewport_size({'width': 1440, 'height': 1080})
     page.goto(f'{ORIGIN}/compute/dashboard')
     page.get_by_role('button', name='Compact', exact=True).click()
+    _load_all_pages(page, 120)
     expect(page.locator('.task-card')).to_have_count(120)
     expect(page.locator('.task-card').first.get_by_role('button', name='Cancel', exact=True)).to_be_visible()
     failed = page.locator('.task-card').filter(has=page.get_by_role('heading', name='model-001.fasta', exact=True))
@@ -144,6 +163,7 @@ def test_dense_task_register_keeps_relevant_operations_direct(page: Page, monkey
     expect(page.locator('.task-card')).to_have_count(1)
     expect(page.locator('.task-card h2')).to_have_text('model-001.fasta')
     search.fill('')
+    _load_all_pages(page, 120)
     page.get_by_role('button', name='Table', exact=True).click()
     expect(page.locator('.task-table tbody tr')).to_have_count(120)
     page.set_viewport_size({'width': 390, 'height': 844})
