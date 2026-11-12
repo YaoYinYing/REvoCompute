@@ -126,7 +126,7 @@ def test_dense_task_register_keeps_relevant_operations_direct(page: Page, monkey
             task.update(status='failed', outcome=None, error='Runner exited with code 1')
             task['result']['available'] = False
         tasks.append(task)
-    page.route(f'{ORIGIN}/compute/api/tasks', lambda route: route.fulfill(json={'tasks': tasks}))
+    page.route(f'{ORIGIN}/compute/api/tasks*', lambda route: route.fulfill(json={'tasks': tasks}))
     page.set_viewport_size({'width': 1440, 'height': 1080})
     page.goto(f'{ORIGIN}/compute/dashboard')
     page.get_by_role('button', name='Compact', exact=True).click()

@@ -304,7 +304,7 @@ def test_a_route_change_during_a_slow_mount_never_shows_the_losing_page(page: Pa
     router = mount_scenario(page, controlled_scenario())
     _probe(page)
     gate: list = []
-    page.route(f"{ORIGIN}/compute/api/tasks", lambda route: gate.append(route))
+    page.route(f"{ORIGIN}/compute/api/tasks*", lambda route: gate.append(route))
 
     page.goto(f"{ORIGIN}/compute/dashboard")
     # A is mounted and awaiting: its own page is staged, its data is held.
@@ -370,7 +370,7 @@ def test_a_late_mount_cannot_become_the_live_view_and_strand_its_successor(page:
     """
     mount_scenario(page, controlled_scenario().with_result("multi_structure"))
     gate: list = []
-    page.route(f"{ORIGIN}/compute/api/tasks", lambda route: gate.append(route))
+    page.route(f"{ORIGIN}/compute/api/tasks*", lambda route: gate.append(route))
 
     page.goto(f"{ORIGIN}/compute/results/{RESULT_ID}")
     expect(page.locator(".structure-host")).to_be_visible()

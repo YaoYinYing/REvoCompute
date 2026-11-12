@@ -1,34 +1,42 @@
-import type { TaskSummary } from '../../api/app-api';
+import type { TaskPageParams } from '../../api/app-api';
 
 export type Layout = 'detailed' | 'compact' | 'table';
+
+/** The dashboard's filter state. Search is literal text, evaluated by the server. */
 export interface TaskQuery {
-  search: string; regex: boolean; taskType: string; status: string; owner: string;
+  search: string; taskType: string; status: string; owner: string;
   submittedFrom: string; submittedTo: string; finishedFrom: string; finishedTo: string;
   sort: 'submitted' | 'finished'; layout: Layout;
 }
-export interface TaskQueryResult { tasks: TaskSummary[]; error: string | null }
-export const initialTaskQuery = (): TaskQuery => ({ search: '', regex: false, taskType: '', status: '', owner: '', submittedFrom: '', submittedTo: '', finishedFrom: '', finishedTo: '', sort: 'submitted', layout: 'detailed' });
 
-function day(value: string | null): string { return value ? value.slice(0, 10) : ''; }
-function matcher(value: string, regex: boolean): ((candidate: string | null) => boolean) | null {
-  if (!value.trim()) return () => true;
-  if (!regex) { const needle = value.trim().toLowerCase(); return candidate => (candidate || '').toLowerCase().includes(needle); }
-  try { const expression = new RegExp(value, 'i'); return candidate => expression.test(candidate || ''); } catch { return null; }
+export const initialTaskQuery = (): TaskQuery => ({
+  search: '', taskType: '', status: '', owner: '',
+  submittedFrom: '', submittedTo: '', finishedFrom: '', finishedTo: '',
+  sort: 'submitted', layout: 'detailed',
+});
+
+/** The server expects exact snake_case parameter names, not the UI's field names. */
+export function historyParams(query: TaskQuery, cursor?: string, limit?: number): TaskPageParams {
+  return {
+    limit,
+    cursor,
+    q: query.search.trim() || undefined,
+    task_type: query.taskType.trim() || undefined,
+    status: query.status || undefined,
+    owner: query.owner.trim() || undefined,
+    submitted_from: query.submittedFrom || undefined,
+    submitted_to: query.submittedTo || undefined,
+    finished_from: query.finishedFrom || undefined,
+    finished_to: query.finishedTo || undefined,
+    sort: query.sort,
+  };
 }
 
-export function queryTasks(tasks: TaskSummary[], query: TaskQuery): TaskQueryResult {
-  const name = matcher(query.search, query.regex), type = matcher(query.taskType, false), owner = matcher(query.owner, false);
-  if (!name) return { tasks: [], error: 'Invalid regular expression' };
-  const filtered = tasks.filter(task => {
-    const submitted = day(task.submitted_at), finished = day(task.finished_at);
-    return (name(task.display_name) || name(task.task_id)) && type!(task.task_type) && owner!(task.owner) && (!query.status || (query.status === 'attention' ? ['failed', 'cancelled'].includes(task.status) : task.status === query.status))
-      && (!query.submittedFrom || submitted >= query.submittedFrom) && (!query.submittedTo || submitted <= query.submittedTo)
-      && (!query.finishedFrom || (finished && finished >= query.finishedFrom)) && (!query.finishedTo || (finished && finished <= query.finishedTo));
-  });
-  filtered.sort((a, b) => {
-    const left = Date.parse(query.sort === 'finished' ? a.finished_at || '' : a.submitted_at || '') || 0;
-    const right = Date.parse(query.sort === 'finished' ? b.finished_at || '' : b.submitted_at || '') || 0;
-    return right - left || a.display_name.localeCompare(b.display_name);
-  });
-  return { tasks: filtered, error: null };
+/** Whether any filter narrows the server query beyond the default submitted order. */
+export function hasActiveFilters(query: TaskQuery): boolean {
+  return Boolean(
+    query.search.trim() || query.taskType.trim() || query.status || query.owner.trim()
+    || query.submittedFrom || query.submittedTo || query.finishedFrom || query.finishedTo
+    || query.sort !== 'submitted',
+  );
 }

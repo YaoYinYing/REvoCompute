@@ -24,7 +24,7 @@ describes (the error rendered, the region reparented) and compares the same
 field/region across the transition rather than asserting a fresh render.
 
 Selector constants are stable hooks the suite already drives (``data-filter``,
-``data-query-error``). Where an element can be reached by role - the searchbox,
+``dashboard-search-hint``). Where an element can be reached by role - the searchbox,
 the method buttons, the "Change method" button - the case uses the role so the
 assertion lands on the computed accessibility tree rather than the markup.
 The class-named hooks (``.ct-feedback``, ``.ct-catalog-status``,
@@ -46,22 +46,9 @@ ORIGIN = "https://revocompute.example"
 # The one field the dashboard search control renders, addressed by the product's
 # own data contract rather than a class name.
 SEARCH = "input[data-filter='search']"
-QUERY_ERROR = "[data-query-error]"
+SEARCH_HINT = "#dashboard-search-hint"
 CHOOSER_STATUS = ".ct-catalog-status"
 FEEDBACK = ".ct-feedback"
-
-
-def _reveal_dashboard_filter(page: Page, selector: str) -> None:
-    """Open the disclosure and advanced panel that hold a filter control.
-
-    The register collapses its filters on a narrow viewport, so a control can be
-    present and correct while it is not on screen; the test opens the state the
-    reader would open rather than asserting against a hidden control.
-    """
-    if not page.locator("[data-filter='status']").is_visible():
-        page.locator(".dashboard-filters > summary").click()
-    if not page.locator(selector).is_visible():
-        page.locator("[data-advanced]").click()
 
 
 def _connected_label_target(region) -> bool:
@@ -77,13 +64,12 @@ def _connected_label_target(region) -> bool:
     )
 
 
-def test_the_dashboard_search_name_survives_its_transient_query_error(page: Page) -> None:
-    """The error is announced, but it never becomes the search field's name.
+def test_the_dashboard_search_is_literal_and_explains_unsupported_regex(page: Page) -> None:
+    """Search stays literal text, and the UI says so instead of offering a regex mode.
 
-    The field is named by the label the chooser renders; triggering the invalid
-    regular expression makes the error visible inside the live region. The name
-    read off the accessibility tree must be the field's own label before and
-    after, and must not contain the error text the reader is being told about.
+    The server evaluates a case-insensitive literal substring over the authorized
+    history. There is no browser regular-expression mode to toggle, and a search
+    string that would have been an invalid pattern is simply a literal query.
     """
     mount_scenario(page, controlled_scenario())
     page.goto(f"{ORIGIN}/compute/dashboard")
@@ -92,31 +78,21 @@ def test_the_dashboard_search_name_survives_its_transient_query_error(page: Page
     search = page.locator(SEARCH)
     expect(search).to_have_role("searchbox")
     # The name the product gives the field, read from the label it renders rather
-    # than a hardcoded copy, and captured before the error exists.
+    # than from hardcoded copy.
     label_text = search.evaluate(
         "node => node.labels && node.labels.length ? node.labels[0].textContent.trim() : ''"
     )
     assert label_text, "the search field renders no label of its own"
     expect(search).to_have_accessible_name(label_text)
-    error = page.locator(QUERY_ERROR)
-    expect(error).to_be_empty()
 
-    _reveal_dashboard_filter(page, "[data-toggle-regex]")
-    page.locator("[data-toggle-regex]").click()
+    expect(page.locator("[data-toggle-regex]")).to_have_count(0)
+    expect(page.locator(SEARCH_HINT)).to_be_visible()
+    expect(page.locator(SEARCH_HINT)).to_contain_text("literal")
+
     search.fill("[")
-    # Non-vacuous: the error is actually rendered and announced before the name is
-    # asserted, so the field is measured in the contaminated state, not a clean one.
-    error_text = error.text_content() or ""
-    assert error_text.strip(), "no query error was rendered to announce"
-    expect(error).to_be_visible()
-    assert error.evaluate("node => node.closest('[aria-live]') !== null"), "the error left its live region"
-
-    # The same name as before, even though the error text now sits beside the
-    # field: the field is still called what its label says and nothing else.
+    # A bracket is literal text the server accepts; it is not an invalid pattern.
+    expect(page.locator("[data-query-error]")).to_have_count(0)
     expect(search).to_have_accessible_name(label_text)
-    assert error_text not in search.evaluate("node => node.labels[0].textContent"), (
-        "the transient error text is inside the field's own label"
-    )
 
 
 def test_the_create_task_feedback_region_survives_the_chooser_transition(page: Page) -> None:

@@ -33,10 +33,10 @@ describe('frontend localization', () => {
   });
 
   it('interpolates params without string concatenation', () => {
-    expect(translate('en', 'dashboard.list.count', { shown: 3, total: 9 })).toBe('3 of 9 tasks');
-    expect(translate('zh-CN', 'dashboard.list.count', { shown: 3, total: 9 })).toBe('共 9 个任务，显示 3 个');
+    expect(translate('en', 'dashboard.list.loadedMore', { count: 9 })).toBe('9 tasks loaded; older history is available');
+    expect(translate('zh-CN', 'dashboard.list.loadedMore', { count: 9 })).toBe('已加载 9 个任务；还有更早的历史');
     // A missing param is left intact rather than becoming "undefined".
-    expect(translate('en', 'dashboard.list.count', { shown: 3 })).toContain('{total}');
+    expect(translate('en', 'dashboard.list.loadedMore', {})).toContain('{count}');
   });
 
   it('prefers an explicit choice, then the browser preference, then English', () => {

@@ -215,7 +215,7 @@ describe('recorded placement facts', () => {
   it('reads the Task register and one admin resource envelope from the declared endpoints', async () => {
     const { requests } = mockApi({ tasks: [task({ placement: cpu(), owner: 'ada' })] });
     await expect(adminApi.listTasks()).resolves.toHaveLength(1);
-    expect(requests[0]!.url).toBe('/compute/api/tasks');
+    expect(requests[0]!.url).toBe('/compute/api/tasks?limit=100');
 
     const { requests: entitlementRequests } = mockApi({
       subject_type: 'user', subject_id: 4, period: '2026-10',

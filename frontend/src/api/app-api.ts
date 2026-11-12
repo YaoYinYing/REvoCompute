@@ -45,13 +45,33 @@ export interface ParameterSchema { properties?: Record<string, ParameterDefiniti
 export type TaskAction = components['schemas']['TaskAction'];
 export type TaskSummary = components['schemas']['TaskSummary'];
 export type TaskList = components['schemas']['TaskList'];
+export type TaskHistoryQuery = components['schemas']['TaskHistoryQuery'];
+export type TaskStatus = components['schemas']['TaskStatus'];
+
+/** The bounded, filtered history request the server understands. */
+export interface TaskPageParams {
+  limit?: number; cursor?: string; q?: string; task_type?: string; status?: string; owner?: string;
+  submitted_from?: string; submitted_to?: string; finished_from?: string; finished_to?: string;
+  sort?: 'submitted' | 'finished';
+}
 
 export const getSession = (signal?: AbortSignal): Promise<CurrentUser> => requestJson('/compute/api/auth/me', { signal });
 export const getTaskCatalog = (signal?: AbortSignal): Promise<TaskCatalog> => requestJson('/compute/api/types', { signal });
 export const getTaskType = (name: string, signal?: AbortSignal): Promise<TaskTypeDetail> => requestJson(`/compute/api/types/${encodeURIComponent(name)}`, { signal });
 export const getParameterSchema = (name: string, signal?: AbortSignal): Promise<ParameterSchema> => requestJson(`/compute/api/task-parameters/${encodeURIComponent(name)}`, { signal });
 export const getReadiness = (signal?: AbortSignal): Promise<InfrastructureReadiness> => requestJson('/compute/api/infrastructure', { signal });
-export const getTasks = (signal?: AbortSignal): Promise<TaskSummary[]> => requestJson<TaskList>('/compute/api/tasks', { signal }).then(data => data.tasks);
+export const getTaskPage = (params: TaskPageParams = {}, signal?: AbortSignal): Promise<TaskList> => {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
+  }
+  const suffix = query.toString();
+  return requestJson<TaskList>(`/compute/api/tasks${suffix ? `?${suffix}` : ''}`, { signal });
+};
+
+/** The bounded status payload for one visible Task, used for live reconciliation. */
+export const getTaskStatus = (taskId: string, signal?: AbortSignal): Promise<components['schemas']['TaskStatus']> =>
+  requestJson(`/compute/api/running/${encodeURIComponent(taskId)}`, { signal });
 
 export async function login(username: string, password: string): Promise<components['schemas']['LoginResponse']> {
   const response = await jsonRequest<components['schemas']['LoginResponse']>('/compute/api/auth/login', { username, password });

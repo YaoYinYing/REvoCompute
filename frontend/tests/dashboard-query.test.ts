@@ -1,47 +1,42 @@
 import { describe, expect, it } from 'vitest';
-import type { TaskSummary } from '../src/api/app-api';
-import { initialTaskQuery, queryTasks } from '../src/features/dashboard/task-query';
+import { hasActiveFilters, historyParams, initialTaskQuery } from '../src/features/dashboard/task-query';
 
-const task = (overrides: Partial<TaskSummary>): TaskSummary => ({
-  task_id: 'a'.repeat(32), task_type: 'example', display_name: 'model.fasta', status: 'finished', terminal: true,
-  submitted_at: '2026-09-20T10:00:00Z', finished_at: '2026-09-20T10:01:00Z', walltime_seconds: 60,
-  owner: 'owner', placement: null, progress: null, outcome: 'SUCCESS', error: null,
-  result: { available: true, publication: 'available', page_url: '/result', manifest_url: '/manifest', archive_ready: false, archive_request_allowed: true, archive_request_url: '/archive', download_url: null },
-  actions: { cancel: { allowed: false, url: '/cancel' }, delete: { allowed: true, url: '/delete' } }, input_preview: null,
-  ...overrides,
-});
-
-describe('dashboard task query', () => {
-  const tasks = [
-    task({ task_id: 'a'.repeat(32), display_name: 'Alpha model', task_type: 'alphafold3', owner: 'ada' }),
-    task({ task_id: 'b'.repeat(32), display_name: 'Docking run', task_type: 'vina', owner: 'grace', status: 'running', terminal: false, submitted_at: '2026-09-22T10:00:00Z', finished_at: null }),
-  ];
-
-  it('combines text, domain, status, owner, and date filters', () => {
-    const query = { ...initialTaskQuery(), search: 'dock', taskType: 'vin', owner: 'gra', status: 'running', submittedFrom: '2026-09-21' };
-    expect(queryTasks(tasks, query).tasks.map(item => item.task_id)).toEqual(['b'.repeat(32)]);
+describe('dashboard history query', () => {
+  it('maps UI fields to the server vocabulary and omits empty filters', () => {
+    expect(historyParams(initialTaskQuery(), undefined, 30)).toEqual({
+      limit: 30,
+      cursor: undefined,
+      q: undefined,
+      task_type: undefined,
+      status: undefined,
+      owner: undefined,
+      submitted_from: undefined,
+      submitted_to: undefined,
+      finished_from: undefined,
+      finished_to: undefined,
+      sort: 'submitted',
+    });
+    expect(historyParams({
+      ...initialTaskQuery(),
+      search: ' Alpha ', taskType: 'alphafold3', status: 'running', owner: 'ada',
+      submittedFrom: '2026-01-01', finishedTo: '2026-02-01', sort: 'finished',
+    }, 'cursor-token', 50)).toMatchObject({
+      limit: 50,
+      cursor: 'cursor-token',
+      q: 'Alpha',
+      task_type: 'alphafold3',
+      status: 'running',
+      owner: 'ada',
+      submitted_from: '2026-01-01',
+      finished_to: '2026-02-01',
+      sort: 'finished',
+    });
   });
 
-  it('supports regular expressions and reports invalid expressions', () => {
-    expect(queryTasks(tasks, { ...initialTaskQuery(), search: '^Alpha', regex: true }).tasks).toHaveLength(1);
-    expect(queryTasks(tasks, { ...initialTaskQuery(), search: '[', regex: true })).toEqual({ tasks: [], error: 'Invalid regular expression' });
-  });
-
-  it('finds an exact Task ID without requiring its display name', () => {
-    expect(queryTasks(tasks, { ...initialTaskQuery(), search: 'b'.repeat(32) }).tasks.map(item => item.display_name)).toEqual(['Docking run']);
-    expect(queryTasks(tasks, { ...initialTaskQuery(), search: '^a{32}$', regex: true }).tasks.map(item => item.display_name)).toEqual(['Alpha model']);
-  });
-
-  it('sorts missing finish dates deterministically', () => {
-    expect(queryTasks(tasks, { ...initialTaskQuery(), sort: 'finished' }).tasks.map(item => item.display_name)).toEqual(['Alpha model', 'Docking run']);
-  });
-
-  it('filters attention without conflating it with a task lifecycle state', () => {
-    const rows = [task({status:'failed'}),task({status:'cancelled'}),task({status:'running'})];
-    expect(queryTasks(rows, {...initialTaskQuery(),status:'attention'}).tasks.map(item=>item.status).sort()).toEqual(['cancelled','failed']);
-  });
-
-  it('defaults to the detailed task layout', () => {
-    expect(initialTaskQuery().layout).toBe('detailed');
+  it('does not offer a client-side regex or sorting path', () => {
+    expect(Object.keys(initialTaskQuery())).not.toContain('regex');
+    expect(hasActiveFilters(initialTaskQuery())).toBe(false);
+    expect(hasActiveFilters({ ...initialTaskQuery(), search: 'x' })).toBe(true);
+    expect(hasActiveFilters({ ...initialTaskQuery(), sort: 'finished' })).toBe(true);
   });
 });

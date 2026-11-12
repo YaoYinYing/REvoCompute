@@ -1079,13 +1079,28 @@
     "/compute/api/tasks": {
       "get": {
         "tags": ["Tasks"],
-        "summary": "List visible tasks",
-        "description": "Ordinary users receive their own non-deleted Tasks. Administrators receive every non-deleted Task and its owner. Values are domain state and capabilities rather than presentation labels.",
+        "summary": "List authorized Task history, one page at a time",
+        "description": "Returns one authorized page of non-deleted Task summaries, newest first. The visibility scope is resolved from the authenticated user before search, sort and limit: ordinary users only query their own Tasks, while administrators query the whole history and may filter by owner. Search (`q`) is a case-insensitive literal substring of the Task's stored input filename (the source of its display name) and its Task ID; regular expressions are not evaluated. Follow `next_cursor` to continue. A cursor is bound to the effective filters, sort, caller and traversal anchor; a malformed, expired, replayed or filter-changed cursor is answered by restarting at page one with `cursor_reset` set. Results are observed-consistency, not an immutable snapshot: Tasks inserted after the first page are excluded from that traversal, while a status change can move a Task between pages.",
         "operationId": "listTasks",
         "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {"name": "limit", "in": "query", "description": "Requested page size. Defaults to 30; invalid or non-positive values fall back to the default and values above the maximum are clamped to 100.", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 30}},
+          {"name": "cursor", "in": "query", "description": "Opaque signed continuation cursor from a previous `next_cursor`.", "schema": {"type": "string", "maxLength": 512}},
+          {"name": "q", "in": "query", "description": "Case-insensitive literal substring of the stored input filename, display-name source, or Task ID; `%` and `_` are literal.", "schema": {"type": "string", "maxLength": 200}},
+          {"name": "task_type", "in": "query", "description": "Case-insensitive literal substring of the Task type.", "schema": {"type": "string", "maxLength": 100}},
+          {"name": "status", "in": "query", "description": "Exact lifecycle status, or `attention` for failed and cancelled Tasks.", "schema": {"type": "string", "maxLength": 50}},
+          {"name": "owner", "in": "query", "description": "Administrator-only case-insensitive substring of the owner username.", "schema": {"type": "string", "maxLength": 100}},
+          {"name": "submitted_from", "in": "query", "description": "Inclusive lower submitted bound: `YYYY-MM-DD` (UTC day start) or an offset ISO 8601 timestamp.", "schema": {"type": "string"}},
+          {"name": "submitted_to", "in": "query", "description": "Inclusive upper submitted bound: `YYYY-MM-DD` (whole UTC day) or an offset ISO 8601 timestamp.", "schema": {"type": "string"}},
+          {"name": "finished_from", "in": "query", "description": "Inclusive lower finished bound: `YYYY-MM-DD` (UTC day start) or an offset ISO 8601 timestamp.", "schema": {"type": "string"}},
+          {"name": "finished_to", "in": "query", "description": "Inclusive upper finished bound: `YYYY-MM-DD` (whole UTC day) or an offset ISO 8601 timestamp.", "schema": {"type": "string"}},
+          {"name": "sort", "in": "query", "description": "`submitted` orders by `uploaded_at DESC, task_id DESC`; `finished` orders by `finished_at DESC NULLS LAST, task_id DESC`.", "schema": {"type": "string", "enum": ["submitted", "finished"], "default": "submitted"}}
+        ],
         "responses": {
-          "200": {"description": "Visible Tasks in descending submission order", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskList"}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}
+          "200": {"description": "One authorized history page with its continuation cursor", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskList"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
         }
       }
     },
@@ -2766,8 +2781,32 @@
       },
       "TaskList": {
         "type": "object",
-        "required": ["tasks"],
-        "properties": {"tasks": {"type": "array", "items": {"$ref": "#/components/schemas/TaskSummary"}}},
+        "required": ["tasks", "next_cursor", "has_more", "returned", "cursor_reset", "query"],
+        "properties": {
+          "tasks": {"type": "array", "items": {"$ref": "#/components/schemas/TaskSummary"}},
+          "next_cursor": {"type": ["string", "null"], "description": "Signed continuation cursor; null when this is the last page."},
+          "has_more": {"type": "boolean", "description": "Whether another page was observed after this one."},
+          "returned": {"type": "integer", "minimum": 0, "description": "Number of summaries in this page, not a full filtered total."},
+          "cursor_reset": {"type": "boolean", "description": "True when a supplied cursor was rejected and this response is page one."},
+          "query": {"$ref": "#/components/schemas/TaskHistoryQuery"}
+        },
+        "additionalProperties": false
+      },
+      "TaskHistoryQuery": {
+        "type": "object",
+        "required": ["q", "task_type", "status", "owner", "submitted_from", "submitted_to", "finished_from", "finished_to", "sort", "limit"],
+        "properties": {
+          "q": {"type": ["string", "null"]},
+          "task_type": {"type": ["string", "null"]},
+          "status": {"type": ["string", "null"]},
+          "owner": {"type": ["string", "null"], "description": "Echoed owner filter; always null for ordinary users."},
+          "submitted_from": {"type": ["string", "null"], "format": "date-time"},
+          "submitted_to": {"type": ["string", "null"], "format": "date-time"},
+          "finished_from": {"type": ["string", "null"], "format": "date-time"},
+          "finished_to": {"type": ["string", "null"], "format": "date-time"},
+          "sort": {"type": "string", "enum": ["submitted", "finished"]},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+        },
         "additionalProperties": false
       },
       "TaskStageItem": {

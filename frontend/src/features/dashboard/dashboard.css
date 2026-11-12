@@ -32,3 +32,9 @@
    reader who has the room never has to open one to reach a filter. The breakpoint is
    the one the register's own disclosure state is synchronized to. */
 @media(min-width:56.0625rem){.dashboard-page .dashboard-filters{grid-column:1/-1;position:static}.dashboard-page .dashboard-filters>summary{display:none}.dashboard-page .dashboard-filter-fields{position:static;left:auto;right:auto;top:auto;min-width:0;width:auto;align-items:end;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}}
+
+/* History pagination: the Load more button is the accessible control, the
+   sentinel below it only lets scrolling trigger the same step. */
+.dashboard-page .list-state { min-height:1.2em; margin:12px 0; font-size:13px; color:var(--app-muted); }
+.dashboard-page .load-more { margin:0 auto 12px; }
+.dashboard-page .list-sentinel { height:1px; }

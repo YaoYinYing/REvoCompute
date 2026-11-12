@@ -444,22 +444,16 @@ def test_card_layouts_keep_the_page_within_the_viewport(page: Page, width: int) 
 
 
 @pytest.mark.parametrize("width", [320, 1280])
-def test_invalid_search_pattern_error_is_announced_by_a_pre_existing_live_region(page: Page, width: int) -> None:
+def test_search_explains_literal_text_and_offers_no_regex_mode(page: Page, width: int) -> None:
     page.set_viewport_size({"width": width, "height": 780})
     mount_scenario(page, controlled_scenario())
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card")).to_be_visible()
-    # The region has to exist before the message so assistive technology
-    # receives the update; a region created alongside its text is silent.
-    region = page.locator("[data-query-error]")
-    expect(region).to_have_count(1)
-    expect(region).to_have_role("status")
-    assert region.evaluate("node => node.closest('[aria-live]') !== null")
-    expect(region).to_be_empty()
-    if not page.locator("[data-filter='status']").is_visible():
-        page.locator(".dashboard-filters > summary").click()
-    if not page.locator("[data-toggle-regex]").is_visible():
-        page.locator("[data-advanced]").click()
-    page.locator("[data-toggle-regex]").click()
+    # Search runs on the server as literal text over the authorized history; the
+    # browser exposes no pattern mode and says what the field does.
+    expect(page.locator("[data-toggle-regex]")).to_have_count(0)
+    hint = page.locator("#dashboard-search-hint")
+    expect(hint).to_be_visible()
+    expect(hint).to_contain_text("literal")
     page.locator("[data-filter='search']").fill("[")
-    expect(region).to_have_text("Invalid regular expression")
+    expect(page.locator("[data-query-error]")).to_have_count(0)

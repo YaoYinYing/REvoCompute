@@ -280,7 +280,7 @@ def _install_app(page: Page) -> list[str]:
         "task_id": TASK_ID, "task_type": "sequence_demo", "display_name": "sample.fasta", "status": "queued",
         "terminal": False, "status_url": f"/compute/api/running/{TASK_ID}", "results_url": f"/compute/api/results/{TASK_ID}", "result_available": False,
     }))
-    page.route(f"{ORIGIN}/compute/api/tasks", lambda route: route.fulfill(json={"tasks": [_task_summary()]}))
+    page.route(f"{ORIGIN}/compute/api/tasks*", lambda route: route.fulfill(json={"tasks": [_task_summary()]}))
     page.route(f"{ORIGIN}/compute/api/running/{TASK_ID}", lambda route: route.fulfill(json={
         "task_id": TASK_ID, "task_type": "sequence_demo", "display_name": "sample.fasta", "status": "finished",
         "terminal": True, "status_url": f"/compute/api/running/{TASK_ID}", "results_url": f"/compute/api/results/{TASK_ID}", "result_available": True,
@@ -722,7 +722,7 @@ def test_admin_dashboard_batch_action_uses_authorized_api(page: Page) -> None:
     )
     admin_task = _task_summary()
     admin_task["owner"] = "tester"
-    page.route(f"{ORIGIN}/compute/api/tasks", lambda route: route.fulfill(json={"tasks": [admin_task]}))
+    page.route(f"{ORIGIN}/compute/api/tasks*", lambda route: route.fulfill(json={"tasks": [admin_task]}))
     deleted: list[str] = []
     page.route(
         f"{ORIGIN}/compute/api/delete",
