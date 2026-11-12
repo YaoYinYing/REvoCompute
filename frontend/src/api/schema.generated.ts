@@ -2607,6 +2607,8 @@ export interface components {
             detail_url: string;
             parameters_url: string;
             max_request_bytes: number;
+            /** @description Aggregate decoded/original input bytes a submission may carry, independent of the encoded multipart body cap. */
+            max_decoded_input_bytes?: number;
             /** @description Versioned per-file-part transport encodings the Server decodes before format validation; an omitted declaration is identity. */
             file_encodings?: {
                 /** @constant */

@@ -172,7 +172,8 @@ by file extension and fails closed for formats without a Core validator.
   rejected. A compressed part is never reinterpreted as a ZIP archive or a
   different scientific format. No archive extraction contract is accepted.
 - The deployed gateway negotiates `gzip` only for text-like response types
-  (JSON, HTML, CSS/JS, SVG, text and PDB/mmCIF/GRO structure media types) with
+  (JSON, HTML, CSS/JS, SVG, text and PDB/mmCIF/GRO structure media types
+  projected by the Server's own scientific media-type table) with
   `Vary: Accept-Encoding`; binary containers, images, archives and
   `application/octet-stream` pass through unchanged, and nginx never compresses
   a 206 ranged response.

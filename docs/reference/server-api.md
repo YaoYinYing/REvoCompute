@@ -470,9 +470,10 @@ contract as `file_encodings: {"version": 1, "supported": ["identity", "gzip"]}`.
 The Server decodes declared parts before format validation and hashes the
 decoded original, so the admitted snapshot and its SHA-256 are the scientific
 file the client holds, not the compressed wire form. `max_request_bytes` remains
-the encoded multipart body cap; the decoded per-file and aggregate limits are
-unchanged. A compressed part is never interpreted as an archive or a different
-scientific format.
+the encoded multipart body cap; `max_decoded_input_bytes` projects the
+aggregate decoded/original cap so a client validates original file sizes against
+the limit the Server actually applies. A compressed part is never interpreted as
+an archive or a different scientific format.
 
 ## Runner Access
 

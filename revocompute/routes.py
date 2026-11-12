@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import mimetypes
 import ntpath
 import os
 import re
@@ -234,12 +233,14 @@ from revocompute.workspace_contracts import (
     validate_selected_residues,
 )
 from revocompute.task_types import workspace_backend
+from revocompute.media_types import media_type_for_path
 from revocompute.tool_calls import ToolAdmissionError, new_tool_call_id, normalize_tool_call_id
 from revocompute.tool_types import canonical_parameters, public_tool
 from revocompute.tool_workspace import ToolWorkspaceError
 from revocompute.upload_encoding import (
     DECLARATION_FIELD,
     MULTIPART_HEADROOM_BYTES,
+    DecodeBudget,
     DecodeLimits,
     DecodedStream,
     UploadEncodingError,
@@ -935,6 +936,7 @@ def submit_tool_call(name):
         decoded_max_bytes=TOOL_CONFIG.request_max_bytes,
         decoded_total_max_bytes=TOOL_CONFIG.request_max_bytes,
     )
+    tool_decode_budget = DecodeBudget(tool_decode_limits.decoded_total_max_bytes)
     submitted_roles = [*upload_roles, *artifact_roles]
     known_roles = {role.name: role for role in tool.inputs}
     if any(role not in known_roles for role in submitted_roles):
@@ -955,7 +957,9 @@ def submit_tool_call(name):
                 tool_workspace.materialize_stream(
                     call_id, role=role_name, filename=uploaded.filename,
                     accepted_formats=role.formats,
-                    stream=DecodedStream(uploaded.stream, encoding, tool_decode_limits),
+                    stream=DecodedStream(
+                        uploaded.stream, encoding, tool_decode_limits, budget=tool_decode_budget
+                    ),
                 )
             )
         for expression, role_name in zip(artifact_refs, artifact_roles, strict=True):
@@ -968,9 +972,9 @@ def submit_tool_call(name):
                 if error:
                     raise ToolWorkspaceError(error)
         tool_workspace.write_request(call_id, tool, inputs, parameters)
-        input_bytes = sum(int(item["size"]) for values in inputs.values() for item in values)
-        if input_bytes > TOOL_CONFIG.request_max_bytes:
-            raise ToolWorkspaceError("Tool request input limit exceeded")
+        # The shared decode budget refused an aggregate overage before its
+        # crossing chunk reached the workspace, so no post-write size check is
+        # relied on here.
         workspace_bytes = tool_workspace.bytes_used(call_id)
         output_headroom = TOOL_CONFIG.output_max_bytes
         required_bytes = workspace_bytes + output_headroom
@@ -1451,6 +1455,7 @@ def task_type_form(name: str):
             for mode in tt.execution_modes
         ],
         "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
+        "max_decoded_input_bytes": current_app.config["MAX_INPUT_TOTAL_BYTES"],
         "file_encodings": file_encoding_capability(),
         "input_workspace": workspace_payload,
     }
@@ -1743,12 +1748,12 @@ def _quarantine_uploaded_inputs(
     metadata = _request_metadata()
     saved: list[dict[str, Any]] = []
     quarantined: list[str] = []
-    total_bytes = 0
     limits = DecodeLimits(
         encoded_max_bytes=int(current_app.config["MAX_CONTENT_LENGTH"]),
         decoded_max_bytes=int(current_app.config["MAX_INPUT_FILE_BYTES"]),
         decoded_total_max_bytes=int(current_app.config["MAX_INPUT_TOTAL_BYTES"]),
     )
+    budget = DecodeBudget(limits.decoded_total_max_bytes)
     try:
         for uploaded, relative_path, role, format_name, encoding in uploads:
             temp_name = f".tmp_{os.urandom(8).hex()}_{os.path.basename(relative_path)}"
@@ -1765,23 +1770,9 @@ def _quarantine_uploaded_inputs(
             file_bytes = 0
             with open(temp_path, "wb") as handle:
                 try:
-                    decoded = DecodedStream(uploaded.stream, encoding, limits)
+                    decoded = DecodedStream(uploaded.stream, encoding, limits, budget=budget)
                     while chunk := decoded.read(65536):
                         file_bytes += len(chunk)
-                        total_bytes += len(chunk)
-                        if file_bytes > int(current_app.config["MAX_INPUT_FILE_BYTES"]):
-                            raise InputPreflightError(
-                                item,
-                                "input_file_size_limit",
-                                f"Input file exceeds the {current_app.config['MAX_INPUT_FILE_BYTES']} byte limit.",
-                            )
-                        if total_bytes > limits.decoded_total_max_bytes:
-                            limit = limits.decoded_total_max_bytes
-                            raise InputPreflightError(
-                                item,
-                                "input_total_size_limit",
-                                f"Combined uploaded inputs exceed the {limit} byte limit.",
-                            )
                         handle.write(chunk)
                         hasher.update(chunk)
                 except UploadEncodingError as exc:
@@ -3763,7 +3754,15 @@ def get_result_artifact(md5sum: str, relative_path: str):
     # delivery therefore replaces the offload on the artifact and archive
     # endpoints.
     response = _verified_payload(stream, int(resolved["size"]))
-    response.mimetype = artifact.get("media_type") or "application/octet-stream"
+    # A manifest written before the server-owned projection carries the old
+    # octet-stream fallback; re-project from the path rather than preserving a
+    # type that made live structures ineligible for gateway compression.
+    declared_media_type = str(artifact.get("media_type") or "")
+    response.mimetype = (
+        declared_media_type
+        if declared_media_type and declared_media_type != "application/octet-stream"
+        else media_type_for_path(str(resolved["path"]))
+    )
     response.headers.set(
         "Content-Disposition",
         "attachment" if as_attachment else "inline",
@@ -4437,7 +4436,7 @@ def task_input_file(md5sum):
     return send_from_directory(
         os.path.dirname(file_path) or ".",
         os.path.basename(file_path),
-        mimetype=mimetypes.guess_type(str(structure.get("relative_path") or ""))[0] or "application/octet-stream",
+        mimetype=media_type_for_path(str(structure.get("relative_path") or "")),
         conditional=True,
     )
 

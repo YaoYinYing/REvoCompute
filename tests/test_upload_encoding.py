@@ -12,6 +12,7 @@ import time
 import pytest
 
 from revocompute.upload_encoding import (
+    DecodeBudget,
     DecodeLimits,
     DecodedStream,
     UploadEncodingError,
@@ -110,6 +111,23 @@ def test_declarations_are_one_per_part_and_identity_by_default():
 
 def test_the_capability_is_versioned_and_explicit():
     assert capability() == {"version": 1, "supported": ["identity", "gzip"]}
+
+
+def test_a_shared_budget_refuses_the_aggregate_before_yielding_the_overage():
+    limits = DecodeLimits(1024 * 1024, 10_000, 1_000)
+    budget = DecodeBudget(limits.decoded_total_max_bytes)
+    first = DecodedStream(io.BytesIO(gzip.compress(b"A" * 600)), "gzip", limits, budget=budget)
+    assert len(first.read(-1)) == 600
+    second = DecodedStream(io.BytesIO(gzip.compress(b"C" * 600)), "gzip", limits, budget=budget)
+
+    delivered = 0
+    with pytest.raises(UploadEncodingError) as caught:
+        while chunk := second.read(7):
+            delivered += len(chunk)
+    assert caught.value.code == "input_total_size_limit"
+    # The second part's decoded chunk was refused before it could be yielded
+    # for writing, so none of its overage reached the output file.
+    assert delivered == 0
 
 
 def test_stale_quarantine_is_swept_without_touching_live_or_unrelated_files(tmp_path):

@@ -70,12 +70,13 @@ class UploadEncodingError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class DecodeLimits:
-    """Independent bounds for one decoded upload part.
+    """Independent bounds for one upload request's decoded file parts.
 
-    ``encoded_max_bytes`` bounds the transport representation of this part,
-    ``decoded_max_bytes`` the original it may expand to, and
-    ``decoded_total_max_bytes`` is enforced by the caller across parts (a
-    single part cannot know what its siblings already consumed).
+    ``encoded_max_bytes`` bounds the transport representation of one part and
+    ``decoded_max_bytes`` the original that part may expand to.  The shared
+    :class:`DecodeBudget` enforces ``decoded_total_max_bytes`` cumulatively
+    across every part as they are decoded, before the crossing chunk is yielded
+    to the caller to write.
     """
 
     encoded_max_bytes: int
@@ -83,6 +84,22 @@ class DecodeLimits:
     decoded_total_max_bytes: int
     max_expansion_ratio: int = MAX_EXPANSION_RATIO
     deadline_seconds: float = DECODE_DEADLINE_SECONDS
+
+
+@dataclass(slots=True)
+class DecodeBudget:
+    """A cumulative decoded-byte budget shared by every part in one request."""
+
+    decoded_total_max_bytes: int
+    decoded_total: int = 0
+
+    def consume(self, count: int) -> None:
+        self.decoded_total += count
+        if self.decoded_total > self.decoded_total_max_bytes:
+            raise UploadEncodingError(
+                "input_total_size_limit",
+                f"Combined decoded inputs exceed the {self.decoded_total_max_bytes} byte limit.",
+            )
 
 
 def capability() -> dict[str, Any]:
@@ -143,7 +160,7 @@ def parse_declarations(
     return declarations
 
 
-def _gzip_chunks(stream: BinaryIO, limits: DecodeLimits) -> Iterator[bytes]:
+def _gzip_chunks(stream: BinaryIO, limits: DecodeLimits, budget: DecodeBudget) -> Iterator[bytes]:
     decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
     encoded_bytes = 0
     decoded_bytes = 0
@@ -186,6 +203,7 @@ def _gzip_chunks(stream: BinaryIO, limits: DecodeLimits) -> Iterator[bytes]:
                             "input_encoding_invalid",
                             "Compressed input contains a nested compressed member.",
                         )
+                budget.consume(len(output))
                 yield output
             pending = decompressor.unconsumed_tail
             if time.monotonic() > deadline:
@@ -214,8 +232,9 @@ def _gzip_chunks(stream: BinaryIO, limits: DecodeLimits) -> Iterator[bytes]:
     # transport contract only proves the gzip member was complete and exact.
 
 
-def _identity_chunks(stream: BinaryIO, limits: DecodeLimits) -> Iterator[bytes]:
+def _identity_chunks(stream: BinaryIO, limits: DecodeLimits, budget: DecodeBudget) -> Iterator[bytes]:
     encoded_bytes = 0
+    decoded_bytes = 0
     head = b""
     deadline = time.monotonic() + limits.deadline_seconds
     while chunk := stream.read(_READ_CHUNK):
@@ -224,6 +243,12 @@ def _identity_chunks(stream: BinaryIO, limits: DecodeLimits) -> Iterator[bytes]:
             raise UploadEncodingError(
                 "request_size_limit",
                 f"Encoded input exceeds the {limits.encoded_max_bytes} byte limit.",
+            )
+        decoded_bytes += len(chunk)
+        if decoded_bytes > limits.decoded_max_bytes:
+            raise UploadEncodingError(
+                "input_file_size_limit",
+                f"Decoded input exceeds the {limits.decoded_max_bytes} byte limit.",
             )
         if len(head) < 2:
             head = (head + chunk)[:2]
@@ -237,14 +262,17 @@ def _identity_chunks(stream: BinaryIO, limits: DecodeLimits) -> Iterator[bytes]:
                 )
         if time.monotonic() > deadline:
             raise UploadEncodingError("input_encoding_limit", "Input took too long to read.")
+        budget.consume(len(chunk))
         yield chunk
 
 
-def _chunks(stream: BinaryIO, encoding: str, limits: DecodeLimits) -> Iterator[bytes]:
+def _chunks(
+    stream: BinaryIO, encoding: str, limits: DecodeLimits, budget: DecodeBudget
+) -> Iterator[bytes]:
     if encoding == IDENTITY:
-        return _identity_chunks(stream, limits)
+        return _identity_chunks(stream, limits, budget)
     if encoding == GZIP:
-        return _gzip_chunks(stream, limits)
+        return _gzip_chunks(stream, limits, budget)
     raise UploadEncodingError("input_encoding_unsupported", f"Unsupported file encoding {encoding!r}.")
 
 
@@ -252,12 +280,21 @@ class DecodedStream:
     """A bounded file-like view of one declared file part.
 
     Reads yield the original bytes for a ``gzip`` part and the wire bytes for
-    an ``identity`` part.  Both pass the same encoded cap, so a caller cannot
-    bypass admission by choosing either declaration.
+    an ``identity`` part.  Both pass the same encoded and decoded caps, and a
+    caller that supplies one :class:`DecodeBudget` for every part gets the
+    cumulative total enforced before the crossing chunk is yielded, so no
+    overage is ever written.
     """
 
-    def __init__(self, stream: BinaryIO, encoding: str, limits: DecodeLimits):
-        self._chunks = _chunks(stream, encoding, limits)
+    def __init__(
+        self,
+        stream: BinaryIO,
+        encoding: str,
+        limits: DecodeLimits,
+        *,
+        budget: DecodeBudget | None = None,
+    ):
+        self._chunks = _chunks(stream, encoding, limits, budget or DecodeBudget(limits.decoded_total_max_bytes))
         self._buffer = bytearray()
         self._done = False
 

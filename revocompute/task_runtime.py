@@ -16,7 +16,6 @@ import fnmatch
 import hashlib
 import json
 import logging
-import mimetypes
 import os
 import re
 import shutil
@@ -97,6 +96,7 @@ from revocompute.result_storyboard import (
     storyboard_declaration,
 )
 from revocompute import storage as storage_module
+from revocompute.media_types import media_type_for_path
 from revocompute.storage import (
     PUBLICATION_AVAILABLE,
     PUBLICATION_QUARANTINE_STATES,
@@ -2761,7 +2761,7 @@ def _publishable_artifact(
             "path": relative_path,
             "size": verified.size,
             "sha256": verified.digest,
-            "media_type": mimetypes.guess_type(relative_path)[0] or "application/octet-stream",
+            "media_type": media_type_for_path(relative_path),
             "preview": preview,
             "capability": artifact_capability(preview),
             "role": _default_artifact_role(relative_path),

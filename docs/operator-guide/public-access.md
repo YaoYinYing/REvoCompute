@@ -13,13 +13,16 @@ no result storage at all.
 
 The gateway negotiates response `gzip` for text-like types (JSON, HTML, CSS/JS,
 SVG, text and PDB/mmCIF/GRO structure media types) and adds
-`Vary: Accept-Encoding`. Binary containers, images, archives and
-`application/octet-stream` are never compressed, and nginx does not compress a
-206 ranged response, so byte-exact range delivery is preserved. Upload bodies
-are not compressed at the gateway: clients may gzip individual file parts under
-the API's per-file-part contract. The Tool call location carries its own
-`TOOL_CLIENT_MAX_BODY_SIZE` (default `17m`) so a larger Tool tier can raise it
-without changing the 16 MiB cap for ordinary Task submissions.
+`Vary: Accept-Encoding`. The structure types come from the Server's own
+scientific media-type projection, so live artifact and structure-input
+downloads carry them even though the runtime image has no host MIME database.
+Binary containers, images, archives and `application/octet-stream` are never
+compressed, and nginx does not compress a 206 ranged response, so byte-exact
+range delivery is preserved. Upload bodies are not compressed at the gateway:
+clients may gzip individual file parts under the API's per-file-part contract.
+The Tool call location carries its own `TOOL_CLIENT_MAX_BODY_SIZE` (default
+`17m`) so a larger Tool tier can raise it without changing the 16 MiB cap for
+ordinary Task submissions.
 
 ## Option A: Cloudflare Tunnel
 

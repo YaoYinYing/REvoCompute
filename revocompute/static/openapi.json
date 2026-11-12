@@ -2607,6 +2607,10 @@
           "detail_url": {"type": "string"},
           "parameters_url": {"type": "string"},
           "max_request_bytes": {"type": "integer"},
+          "max_decoded_input_bytes": {
+            "type": "integer",
+            "description": "Aggregate decoded/original input bytes a submission may carry, independent of the encoded multipart body cap."
+          },
           "file_encodings": {
             "type": "object",
             "required": ["version", "supported"],

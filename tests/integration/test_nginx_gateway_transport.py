@@ -5,10 +5,16 @@
 """The deployed gateway's response negotiation and range passthrough.
 
 Runs the real ``docker/nginx/default.conf.template`` in front of a local
-upstream: gzip is offered only for the allowlisted text-like types, identity
-responses keep their ETag, a 206 range is never compressed and its bytes are
-exact, and the Tool call location carries its own larger body cap while the
-ordinary Task cap stays at 16 MiB.
+upstream whose content types come from the Server's own
+``media_type_for_path`` projection, so the allowlist is exercised against the
+types live artifacts actually carry. gzip is offered only for the projected
+text-like types, identity responses keep their ETag, and a 206 range is never
+compressed and stays byte-exact.
+
+Caveat: this runs the host's nginx binary, not the pinned
+``nginx:1.28-alpine`` image used by Compose. The Docker/Compose gate exercises
+the deployed binary; this test protects the template's negotiation and range
+semantics on whatever nginx the development host provides.
 """
 
 from __future__ import annotations
@@ -26,13 +32,39 @@ from types import SimpleNamespace
 
 import pytest
 
+from revocompute.media_types import media_type_for_path
+
 REPO = Path(__file__).resolve().parents[2]
 TEMPLATE = REPO / "docker" / "nginx" / "default.conf.template"
 NGINX = shutil.which("nginx")
 JSON_BODY = b'{"items":["' + b"a" * 5000 + b'"]}'
 PDB_BODY = b"ATOM      1  CA  ALA A   1      11.104   6.134  -6.504  1.00  0.00           C\n" * 40
+CIF_BODY = (b"data_bench\n#\nloop_\n_atom_site.id\n" + b"ATOM 1 CA ALA A 1 0.0 0.0 0.0\n" * 40)
+GRO_BODY = b"    1ALA      CA    1   0.000   0.000   0.000\n" * 40
+FASTA_BODY = b">model\n" + b"ACDEFGHIKLMNPQRSTVWY\n" * 80
+CSV_BODY = b"id,score\n" + b"1,0.5\n" * 300
 BINARY_BODY = bytes(range(256)) * 16
+ZIP_BODY = b"PK\x03\x04" + b"\x00" * 200
+PNG_BODY = b"\x89PNG\r\n\x1a\n" + b"\x00" * 200
 RANGE_BODY = bytes(range(200))
+
+#: Projected path, file name and payload. The handler asks the Server's own
+#: projection for the content type, so a type missing from the nginx allowlist
+#: fails the compression assertion rather than being hidden by a literal.
+SCIENCE = {
+    "/pdb": ("model.pdb", PDB_BODY),
+    "/cif": ("model.cif", CIF_BODY),
+    "/mmcif": ("model.mmcif", CIF_BODY),
+    "/gro": ("model.gro", GRO_BODY),
+    "/fasta": ("model.fasta", FASTA_BODY),
+    "/csv": ("table.csv", CSV_BODY),
+    "/xtc": ("trajectory.xtc", BINARY_BODY),
+    "/dcd": ("trajectory.dcd", BINARY_BODY),
+    "/zip": ("results.zip", ZIP_BODY),
+    "/png": ("plot.png", PNG_BODY),
+}
+COMPRESSIBLE = ("/pdb", "/cif", "/mmcif", "/gro", "/fasta", "/csv")
+INCOMPRESSIBLE = ("/xtc", "/dcd", "/zip", "/png")
 
 pytestmark = pytest.mark.skipif(
     not (TEMPLATE.is_file() and NGINX),
@@ -61,8 +93,9 @@ class _Upstream(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/json":
             self._send(200, JSON_BODY, "application/json")
-        elif self.path == "/pdb":
-            self._send(200, PDB_BODY, "chemical/x-pdb")
+        elif self.path in SCIENCE:
+            name, body = SCIENCE[self.path]
+            self._send(200, body, media_type_for_path(name))
         elif self.path == "/binary":
             self._send(200, BINARY_BODY, "application/octet-stream")
         elif self.path == "/range":
@@ -70,7 +103,7 @@ class _Upstream(BaseHTTPRequestHandler):
             self._send(
                 206,
                 RANGE_BODY[start:end],
-                "application/octet-stream",
+                media_type_for_path("model.pdb"),
                 {"Content-Range": f"bytes {start}-{end - 1}/{len(RANGE_BODY)}"},
             )
         else:
@@ -179,16 +212,22 @@ def test_gzip_is_negotiated_for_json_and_identity_keeps_its_etag(gateway):
     assert body == JSON_BODY
 
 
-def test_text_like_structures_compress_but_binary_and_archives_do_not(gateway):
-    status, headers, body = _get(gateway, "/pdb", accept_encoding="gzip")
+@pytest.mark.parametrize("path", COMPRESSIBLE)
+def test_projected_text_like_types_compress(gateway, path):
+    _name, expected = SCIENCE[path]
+    status, headers, body = _get(gateway, path, accept_encoding="gzip")
     assert status == 200
     assert headers["content-encoding"] == "gzip"
-    assert gzip.decompress(body) == PDB_BODY
+    assert gzip.decompress(body) == expected
 
-    status, headers, body = _get(gateway, "/binary", accept_encoding="gzip")
+
+@pytest.mark.parametrize("path", INCOMPRESSIBLE)
+def test_binary_and_archive_types_are_not_compressed(gateway, path):
+    _name, expected = SCIENCE[path]
+    status, headers, body = _get(gateway, path, accept_encoding="gzip")
     assert status == 200
     assert "content-encoding" not in headers
-    assert body == BINARY_BODY
+    assert body == expected
 
 
 def test_a_206_range_is_never_compressed_and_stays_byte_exact(gateway):

@@ -36,11 +36,14 @@ http {
         application/json
         application/manifest+json
         application/xml
-        application/x-ndjson
         application/javascript
         text/css
         text/plain
         text/javascript
+        text/x-a3m
+        text/x-fasta
+        text/csv
+        text/tab-separated-values
         image/svg+xml
         chemical/x-pdb
         chemical/x-cif

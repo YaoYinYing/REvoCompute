@@ -16,12 +16,15 @@ import gzip
 import hashlib
 import io
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import conftest
 from conftest import _load_pssm_module, _test_client_auth
+from revocompute.task_types import TaskInputRole
 
 REPO = Path(__file__).resolve().parents[2]
 FASTA = (REPO / "tests/data/msa/2KL8.fasta").read_bytes()
@@ -144,6 +147,49 @@ def test_invalid_encoding_declarations_and_payloads_fail_closed(
 
     assert response.status_code == 400
     assert response.get_json()["details"][0]["code"] == code
+    _assert_no_side_effects(module, queued)
+
+
+def _multi_fasta_task(module):
+    base, runner = module.task_runtime._get_task_type("cpu_runner")
+    conftest._inject_task_type(
+        module,
+        replace(
+            base,
+            name="multi_fasta",
+            inputs=(TaskInputRole("sequence", "Sequence", "protein_sequence", ("fasta",), 1, 2),),
+            params=(),
+        ),
+        runner,
+    )
+
+
+def test_two_parts_cannot_bend_the_aggregate_decoded_total(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    _multi_fasta_task(module)
+    module.app.config["MAX_INPUT_FILE_BYTES"] = 10_000
+    module.app.config["MAX_INPUT_TOTAL_BYTES"] = 1_000
+    queued = _recording_dispatch(module)
+    first = b">one\n" + b"A" * 600 + b"\n"
+    second = b">two\n" + b"C" * 600 + b"\n"
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=_test_client_auth(module),
+        data={
+            "task_type": "multi_fasta",
+            "files": [
+                (io.BytesIO(gzip.compress(first)), "one.fasta"),
+                (io.BytesIO(gzip.compress(second)), "two.fasta"),
+            ],
+            "input_roles": ["sequence", "sequence"],
+            "file_encodings": ["gzip", "gzip"],
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["details"][0]["code"] == "input_total_size_limit"
     _assert_no_side_effects(module, queued)
 
 
