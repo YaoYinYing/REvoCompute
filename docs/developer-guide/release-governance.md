@@ -1,93 +1,192 @@
-# Release Governance — Application Version and Changelog
+# Release Governance — Version, Changelog and Authenticated Version Page
 
-Status: **proposed implementation contract**. The Campaign PR introduces this design and a changelog skeleton. None of the runtime, CI, tag, or deployment behavior below is claimed to exist until its acceptance checks pass.
+Status: **proposed PR-0 implementation contract**. This document and the historical
+changelog backfill are planning artifacts until their APIs, UI, build metadata,
+tests and release gates have been implemented and independently reviewed.
 
-## Baseline and purpose
+## Verified inputs and precedents
 
-As inspected on 2026-11-12 at main commit 2890609942680e29ce17b3d83f546569434c5247:
-- Python project metadata declares version 0.1.0.
-- Frontend package metadata declares version 0.1.0.
-- The root had no CHANGELOG.md, TODO.md or ORIGINAL_DESIGN.md.
-- Existing release/tag records are PR verification-evidence artifacts, not a formal application release series.
-- This proposal makes no retroactive claim that version 0.1.0 has shipped.
+- REvoCompute `main` at `2890609942680e29ce17b3d83f546569434c5247`
+  (2026-11-12) declares `0.1.0` in both `pyproject.toml` and
+  `frontend/package.json`; no formal application release tags were found.
+  Existing `pr-*-evidence` tags/releases are test evidence, not app versions.
+- Required changelog specification:
+  [Keep a Changelog **1.0.0**](https://keepachangelog.com/en/1.0.0/).
+  Follow its `[Unreleased]` header, descending dated version headings,
+  `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`
+  categories as needed, and link reference definitions. Never create empty
+  headings or invent release dates.
+- Workflow/style precedent:
+  [REvoDesign docs/agents/RELEASE.md](https://github.com/YaoYinYing/REvoDesign/blob/main/docs/agents/RELEASE.md).
+  Reuse its concise **module-scoped bullets** (`- Server:`, `- Qt:`, etc.;
+  REvoCompute modules should use `- Server:`, `- Runner:`, `- Frontend:`,
+  `- Workflow:`, `- Security:` as appropriate), its Unreleased-first
+  discipline, and its principle that behavior changes update affected docs in
+  the same PR. A `## TEMPLATE` block may be supplied only if kept completely
+  empty and cannot be parsed as actual release notes.
+- **Do not blindly copy REvoDesign's `make tag` implementation**, which
+  requires the version bump to remain unstaged so an unstaged diff parser can
+  detect it. Provide an explicit version transition/release-cut command that
+  works with normally staged commits, validates the exact tested SHA, and does
+  not publish tags automatically.
 
-A platform version answers which REvoCompute API and frontend build the user is running. A deployment identity answers which exact image was installed where. A Runner identity answers which independent scientific implementation and assets produced one Task. These must never collapse into one number.
+## Identity model — do not conflate three timelines
 
-## Release identity and version source
+**Development snapshot (historic and while base remains at 0.1.0):**
+`0.1.0+<git_commit_sha[:7]>`. E.g., the verified 2026-11-12 main snapshot is
+`0.1.0+2890609`. Every older commit has its own display version derived from
+its actual SHA; this does **not** mean every commit is a tagged release or
+requires its own Changelog section.
 
-1. Use the Python project's version field in pyproject.toml as the **canonical human-facing application version**. Do not create a second editable VERSION file. The current 0.1.0 value is retained until a qualified release decision.
-2. Frontend package.json and package-lock.json must mirror the canonical version. Provide one explicit synchronizer/checker; CI rejects drift, including lockfile drift. Do not add an independently editable frontend version.
-3. Use Semantic Versioning for platform releases. Prior to 1.0.0, incompatible changes may be released in minor versions, but must still be prominent in release notes. Pre-release tags use accepted SemVer suffixes.
-4. Annotated application tags follow vMAJOR.MINOR.PATCH (or vMAJOR.MINOR.PATCH-prerelease). Existing pr-*-evidence tags retain their separate evidence role.
-5. Do not infer or silently modify the product version from Git tags at application runtime. A release gate checks tag-to-metadata equality; an immutable build bakes the verified metadata.
+**Formal application release (future):** maintainer-approved version bump
+following SemVer `MAJOR.MINOR.PATCH` (with optional prerelease), with annotated
+`vX.Y.Z` tags, verified changelog and explicit GitHub Release. The first
+future version is decided during release cut, not retroactively assigned
+to old commits. For non-tagged builds after formal release, use a separately
+recorded commit/revision or a SemVer build suffix without changing the
+canonical released version number in packaging.
 
-### Required build identity
+**Scientific execution provenance:** independently pin Runner family/Task
+schema and execution protocol, SIF/container digests, model weights, resource
+policy and relevant evidence. The platform display version is contextual
+metadata only; it never replaces these identities.
 
-Expose a bounded version projection to the frontend and operators, with fields:
-- app_version: the canonical SemVer value;
-- git_sha: the full source revision captured **at image build**;
-- build_id or image_digest: immutable build provenance, when known;
-- built_at: UTC build timestamp, when known;
-- release_channel: development, prerelease or stable, derived at build/release time.
+### Canonical source and build rules
 
-Use a small server-owned version module and one documented endpoint (proposed: GET /compute/api/version). It must not reveal environment variables, filesystem paths, internal deployment secrets, or Runner/model inventory. Return an explicit unknown build field for a local development build that did not inject provenance. A qualified tagged release must fail its release gate if source/build identity is missing.
+1. The only **editable** base application SemVer source is
+   `[project].version` in `pyproject.toml`. Current baseline remains `0.1.0`.
+2. `frontend/package.json` and package-lock root/package entries mirror
+   the canonical base version; deterministic sync/check and negative CI tests
+   must reject drift. Do not edit them as independent version sources.
+3. The build captures the **full immutable source SHA** once. Generate the
+   display version from base version and that SHA, never from a live
+   mutable `main` ref, current browser cache, wall clock or runtime `git log`.
+   Bake the same fields into frontend and server assets to detect mismatches.
+4. Use OCI image labels for source revision and base version where feasible;
+   image digest, `built_at`, deployment/environment and release channel
+   remain separate fields. For a development build with no trustworthy SHA,
+   report `revision_status: "unknown"` and do not synthesize a false
+   seven-character commit. A qualified release fails if build identity is
+   unavailable.
+5. `app_version` may be the public display string `0.1.0+<sha7>` for
+   development snapshots, while Python/NPM package metadata retains `0.1.0`.
+   Expose `base_version` separately to avoid confusing package management,
+   API compatibility or release automation with a unique build identity.
+6. Existing `pr-*-evidence` tags remain evidence-only and must fail the
+   formal application-release tag gate.
 
-Expose application version and abbreviated revision in an accessible frontend About/Version surface; both browser and server must come from the same deployment build. A mismatch or stale frontend bundle should be observable, not silently presented as a valid coherent release.
+## Logged-in version page and API
 
-Add OCI image labels such as org.opencontainers.image.version and org.opencontainers.image.revision without making Docker labels a second source of truth.
+This is **not** a public about page.
 
-### Independent scientific identities
+### Server
 
-Never map application SemVer directly to:
-- Runner family's scientific Task schema version or Execution Protocol;
-- the exact Apptainer/SIF image digest;
-- model-weight digest or runtime dependency closure;
-- database migration/schema epoch;
-- scheduler policy revision or deployment resource topology.
+- Introduce `GET /compute/api/version` in the curated OpenAPI contract.
+  Require existing authenticated-user policy (`login_required` or
+  equivalent existing session/bearer behavior); no anonymous API response,
+  no admin-only requirement. A signed-out request must receive the standard
+  non-disclosing API authentication response, never a redirect that returns
+  protected data.
+- Return bounded, server-owned version information with at least:
+  `base_version`, `app_version` (display),
+  `git_sha` (full SHA when verified), `revision_status`,
+  `release_channel`, `built_at` (nullable UTC),
+  and immutable `build_id`/image digest when known. Include a bounded,
+  safely represented historical changelog payload (or a typed summary list
+  built from the checked-in CHANGELOG.md) sufficient to render the version
+  page without an unauthenticated second endpoint.
+- Do not expose paths, credentials, internal environment, private git
+  remotes, host details or arbitrary files. Bound changelog length and
+  sanitize/untrust rendered Markdown. Use `Cache-Control: private, no-store`,
+  and keep the version API out of unauthenticated OpenAPI try-it-out success
+  examples. Public source availability is not a substitute for an auth gate.
+- Authentication/authorization tests: unauthenticated, invalid bearer,
+  expired/invalid session, valid regular user and valid admin; both users
+  see the same non-sensitive fields. Contract tests verify no bypass through
+  HTML routing, proxies, cache or static SPA prefetch.
 
-Keep the current manifest/provenance ownership model. A Task receipt should retain the exact immutable scientific evidence that the runtime already generates; a platform version can be added as contextual metadata only when that is authoritative and does not overwrite historic evidence.
+### Frontend
 
-## Changelog contract
+- Introduce a **dedicated route** `/compute/version` protected in both
+  `frontend/src/app/router.ts` and the server's direct-navigation route
+  handler. The existing server-protected account-page pattern can guide the
+  implementation; route and navigation parity tests must cover reload and
+  deep links.
+- Link the page from authenticated navigation or the signed-in shell footer,
+  not only via an obscure dialog. Sign-out redirects using the existing
+  return-to mechanism and does not show cached protected content.
+- Page content: prominent **display version**, short and full commit revision,
+  build time if known, release/development state, and a readable
+  reverse-chronological changelog. Historical baseline must be clearly labeled
+  as a **development snapshot**, not a release. Show absent build fields
+  explicitly instead of inventing values.
+- Render Markdown without executable HTML, perform loading/error/retry states,
+  respect keyboard/screen-reader, dark mode and desktop/tablet/mobile sizing.
+  The page uses the existing app shell/navigation/design system and a single
+  API response; do not create a parallel frontend version registry.
+- Check API identity against baked frontend build identity. If stale/mixed
+  deployment is detected, show a diagnostic and offer refresh rather than
+  quietly asserting the two revisions match.
 
-Root CHANGELOG.md is the human-readable source for release notes:
-- Maintain one Unreleased section at the top.
-- Curate substantive user-visible entries under Added, Changed, Deprecated, Removed, Fixed, Security, and Breaking where appropriate. Do not add empty headings.
-- Technical PRs label a release note as user-facing, internal-only, docs-only, or no-release-note, with a short justification; a rigid release-note fragment framework is not required.
-- On release, move the curated Unreleased entries into an immutable dated version heading and leave a new empty Unreleased section.
-- Release notes must name any deployment migrations, API incompatibilities, data/schema compatibility limits and rollback constraints.
-- Security notes must communicate impact and remediation without publishing exploitable detail prematurely.
-- Do not manufacture historical release entries from merged PRs.
+## Changelog — curated history, not a Git log
 
-GitHub Releases may be generated from the curated version heading plus CI artifacts, but release evidence tags and operational prereleases must never be mistaken for product releases.
+Root `CHANGELOG.md` is the canonical human-readable changelog. It follows
+Keep a Changelog **1.0.0**, *not 1.1.0*. Use only its standard change-type
+headings; `Breaking` and `Notes` are not extra top-level change categories.
+Explain breaking compatibility within `Changed`/`Removed` entries.
 
-## Workflow and gates
+- The first backfill is a **single snapshot** section:
+  `## [0.1.0+2890609] - 2026-11-12`, explicitly labeled historical
+  development snapshot of the source commit.
+- Backfill **only verifiable, high-information user/product changes** from
+  merged PRs and commit history. Summarize modules and major architecture
+  milestones; omit cosmetic polish, CI churn, individual fix-up commits,
+  unmerged PRs, and a one-to-one copy of every commit log.
+- Historical builds before that snapshot continue to display
+  `0.1.0+<their-own-sha7>`; do not retroactively create formal release
+  sections, tags, or fabricated changelog dates for each build.
+- Use the REvoDesign module-scoped style with brief one-line sub-bullets.
+  Write substantive new user-visible changes to `[Unreleased]` when merged.
+  Each PR must declare a release-note disposition; internal-only changes
+  may be omitted if justified.
+- On a formal release cut, move Unreleased changes to one dated
+  `## [X.Y.Z] - YYYY-MM-DD` section, recreate `[Unreleased]`,
+  and add valid version comparison links. Keep historical snapshot links
+  bound to immutable commits.
+- If a historic claim cannot be supported by merged code or the resulting
+  documented product contract, leave it out rather than guessing.
 
-### During development
+## Release cut — adapted from REvoDesign
 
-- Code changes enter through scoped PRs with tests appropriate to the changed boundary.
-- User-visible behavior changes include a proposed changelog entry or a documented reason not to add one.
-- The source version remains unchanged on most feature PRs; it is bumped explicitly by the release-cut PR.
-- Build metadata always records Git SHA even when the source version remains in development.
-
-### Release cut
-
-1. Choose SemVer increment based on behavior and compatibility, not PR count.
-2. Update canonical version, synchronize frontend metadata and lockfile, finalize dated changelog section.
-3. Verify OpenAPI/client generated contract, server/frontend tests, policy and schema checks, security boundaries and immutable image build.
-4. Verify image's baked revision and version, qualified readiness and deployment rollback plan.
-5. Create an annotated vX.Y.Z Git tag pointing at the tested release commit; publish release notes only after gates pass.
-6. Make production deployment a **separate, explicit maintainer decision**. Tagging or merging must not automatically deploy.
-7. Record deployment source SHA, image digest, time, environment and rollback target using the existing operator-owned process.
-
-A simple script and CI contract test should verify metadata equality, valid SemVer, correct changelog headings, and release tag consistency. Do not introduce a new publishing framework or a private version registry merely to satisfy these gates.
+1. Maintainer selects a SemVer version and explicitly approves release scope.
+2. Update `pyproject.toml`; synchronize frontend metadata/lockfile via one
+   command. Prepare a dated section from Unreleased notes.
+3. Update any architecture, developer, operator or agent docs describing
+   changed behavior **in the same PR**.
+4. Validate exact-head source SHA, package version parity, changelog section,
+   tag collision and compatibility; run relevant API, frontend, server, Runner
+   contract and deployment safety tests.
+5. Assemble annotated `vX.Y.Z` tag and notes from the validated changelog.
+   Never auto-`git push --tags` or publish merely because `make tag` was run.
+   Require an explicit maintainer release action and separate deployment action.
+6. Publish the GitHub Release when independently approved; preserve Runner
+   readiness and source/asset evidence for the deployed build. Document a
+   rollback target and any schema/data migration constraints.
 
 ## Acceptance criteria
 
-- Exactly one editable application version; Python, frontend and lockfile agree.
-- A drift test fails when either frontend metadata file is deliberately changed.
-- API reports deterministic app and build identities in deployment, with safe development fallback.
-- Browser About/Version surface matches server metadata for the same build.
-- Root changelog records Unreleased and curated releases; test rejects missing tagged release notes.
-- Evidence-only tags cannot pass for formal releases.
-- Existing Task schema, Runner image/weight provenance, and runtime scheduling behavior remain unchanged by this PR.
-- A release does not occur automatically when the implementation PR is merged; maintainer retains release and squash-merge authority.
+- `pyproject.toml`, frontend package metadata and lockfile remain consistent
+  under drift tests.
+- Historic development snapshots render `0.1.0+<correct SHA7>` and never
+  impersonate real releases; full SHA remains available for audit.
+- One signed-in-only version API and one signed-in-only version page work for
+  ordinary users; bypass/redirect/cache tests reject anonymous reads.
+- Page renders the high-signal Keep a Changelog **1.0.0** historical backfill,
+  reverse chronology and live version/build identity.
+- Unit, OpenAPI, browser and full-page-reload tests confirm auth and
+  frontend/backend consistency at exact head.
+- Release gates accept only explicit SemVer product tags, and never treat
+  evidence tags or historical snapshot section as a formal release.
+- No existing Runner scientific provenance or operational deployment authority
+  is weakened. Draft PR is not merge, tag, GitHub Release or deployment
+  authorization.
