@@ -448,3 +448,27 @@ def test_changelog_parser_caps_section_version_and_category_name():
     section = payload["sections"][0]
     assert len(section["version"]) == 200
     assert len(section["categories"][0]["name"]) == 200
+
+
+def test_tag_gate_rejects_a_calendar_impossible_date(tmp_path):
+    root = _write_repo(tmp_path, "1.2.3", changelog_date="2026-13-45")
+    sha = _commit_repo(root)
+    assert _git(root, "tag", "v1.2.3").returncode == 0
+
+    errors = governance.verify_tag(root, "v1.2.3", sha)
+
+    assert errors and "no dated section" in errors[0]
+
+
+def test_prepare_release_rejects_a_future_date(tmp_path):
+    tomorrow = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+    root = _write_repo(tmp_path, "1.2.3", changelog_date=tomorrow)
+    (root / "CHANGELOG.md").write_text(
+        (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        + f"\n## [1.3.0] - {tomorrow}\n\n### Added\n- Not yet.\n",
+        encoding="utf-8",
+    )
+    sha = _commit_repo(root)
+
+    with pytest.raises(governance.ReleaseError, match="on or before"):
+        governance.prepare_release(root, "1.3.0", sha)

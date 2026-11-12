@@ -220,15 +220,21 @@ def sync(root: Path) -> list[str]:
 
 
 def changelog_section_in_text(text: str, version: str, day: str | None = None) -> bool:
-    date = re.escape(day) if day else r"\d{4}-\d{2}-\d{2}"
-    pattern = re.compile(rf"(?m)^##\s+\[{re.escape(version)}\]\s+-\s+{date}\s*$")
-    return pattern.search(text) is not None
+    """Whether the text holds a real calendar-dated section for one version.
 
-
-def changelog_section_exists(root: Path, version: str, day: str | None = None) -> bool:
-    """Whether CHANGELOG.md holds a dated version section, optionally for one day."""
-    path = root / CHANGELOG
-    return path.is_file() and changelog_section_in_text(path.read_text(encoding="utf-8"), version, day)
+    A heading-shaped date that cannot exist (for example 2026-13-45) is not a
+    release date and is rejected, matching the prepare-release gate. ``day``
+    narrows the match to one date when supplied.
+    """
+    pattern = re.compile(rf"(?m)^##\s+\[{re.escape(version)}\]\s+-\s+(\d{{4}}-\d{{2}}-\d{{2}})\s*$")
+    for candidate in pattern.findall(text):
+        try:
+            date.fromisoformat(candidate)
+        except ValueError:
+            continue
+        if day is None or candidate == day:
+            return True
+    return False
 
 
 def changelog_section_days(root: Path, version: str) -> list[str]:
