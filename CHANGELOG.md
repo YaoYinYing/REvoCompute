@@ -26,6 +26,15 @@ invented release numbers or dates.
   - Negotiate gateway response `gzip` for text-like types with
     `Vary: Accept-Encoding`, leaving 206 ranges, binary containers, archives and
     error responses uncompressed.
+  - Project live scientific artifact media types (PDB/mmCIF/GRO and text-like
+    structures) from one server-owned table so they are eligible for that
+    compression even though the runtime image carries no host MIME database.
+  - Enforce the aggregate decoded upload cap inside the shared decoder before
+    an overage is written, and project the decoded original cap separately from
+    the encoded body cap.
+  - Deploy note: the new input-encoding reason codes move the content-derived
+    `validator_revision`. Drain queued/pending submissions before deploying, or
+    they fail closed with `input_snapshot_mismatch` and need resubmission.
   - Add a per-location `TOOL_CLIENT_MAX_BODY_SIZE` gateway cap for Tool calls,
     independent of the ordinary 16 MiB Task submission limit.
 - Task history:
