@@ -63,6 +63,36 @@ required input roles or outputs need their own Task in the same family. Keep
 the mapping in the owning family; [Runner Family Protocol](runner-family-protocol.md#ownership)
 owns the Core boundary and [Task Contract](task-contract.md) owns the manifest.
 
+### Conditional input cardinality
+
+A parameter can require or forbid a file role when it selects a scientific
+mode. Do not split such a Task merely to get different cardinality, and do not
+implement the rule only in the browser. Declare `presence` on the role:
+
+```yaml
+inputs:
+  starting_structure:
+    type: protein_structure
+    formats: [cif]
+    cardinality: {min: 0, max: 1}
+    presence:
+      parameter: mode
+      required_when: [propagate]
+      forbidden_when: [equilibrium, structure_prediction]
+```
+
+The parameter must be a schema property with an `enum`; every referenced value
+must be one of its choices. The Server applies the effective cardinality before
+it quarantines an upload, on submission and preflight, and projects the same
+rule through `GET /compute/api/types/<task-type>` so the form can show, require,
+or discard the role visibly. A JSON Schema `allOf`/`if`/`then` rule validates
+`params` only and cannot see uploaded files, so this small server-owned
+declaration is the supported exception for file-role cardinality. Use it only
+when the mode genuinely changes which files the same scientific operation
+accepts; different required roles or outputs still need their own manifest.
+BioEmu2 is the proven case: `propagate` requires exactly one starting mmCIF,
+while `equilibrium` and `structure_prediction` refuse one.
+
 For example, suppose the pinned upstream writes `predictions/<id>/scores.json`
 beside its structures, but the Task's `expected_files.yaml` matches only
 `predictions/**/*.cif`. The pinned code produces the scores, but the Task

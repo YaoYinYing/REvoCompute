@@ -108,6 +108,26 @@ cardinality an input role accepts. This is how an `mdconvert` reference/snapshot
 output reaches a downstream structure consumer without a browser download and
 re-upload.
 
+A role may declare parameter-conditioned cardinality when one scientific mode
+changes which files the same operation accepts:
+
+```yaml
+presence:
+  parameter: mode
+  required_when: [propagate]
+  forbidden_when: [equilibrium, structure_prediction]
+```
+
+`parameter` must name a schema property with an `enum`, and every listed value
+must be one of its choices. `required_when` makes the role mandatory;
+`forbidden_when` refuses any file. Values outside both sets keep the role's
+static cardinality. The Server enforces the effective cardinality on submission
+and preflight before quarantining uploads, the API projects it on each input
+role, and the Create Task form shows or discards the role with the selected
+value. Use it for a genuine mode difference, not to avoid declaring distinct
+required roles or outputs. See
+[Adding a Runner](adding-a-runner.md#conditional-input-cardinality).
+
 ## Demo inputs
 
 A family may declare supported, scientist-facing **example inputs** beside a task

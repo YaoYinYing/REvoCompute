@@ -1,0 +1,5 @@
+entities:
+  - entity_type: protein
+    asym_ids: [A]
+    sequence: MEMDIRFRGDLEAFEKALKEMIRQARKFAGTVTYTLDGNDLEIRITGVPEQVRKELAKEAERLAKEFNITVTYTIRLE
+bonds: []

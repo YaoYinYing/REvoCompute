@@ -1,0 +1,38 @@
+# Logical result files published by every mode of the unified BioEmu2 Task.
+#
+# The Runner owns this judgement. Allowed `role:` values are evidence |
+# provenance | diagnostic | artifact. `topology.cif` is upstream's topology for
+# `samples.xtc`; the declared trajectory view reads it as mmCIF. `samples.xtc`,
+# `physicality.json`, and `system.yaml` are written by every upstream sampling
+# command. `command.txt` is upstream's optional diagnostic record.
+result:
+  files:
+    topology:
+      path: topology.cif
+      cardinality: one
+      required: true
+      type: structure
+      role: artifact
+    coordinates:
+      path: samples.xtc
+      cardinality: one
+      required: true
+      role: evidence
+    physicality:
+      path: physicality.json
+      cardinality: one
+      required: true
+      type: json
+      role: diagnostic
+    system:
+      path: system.yaml
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    command:
+      path: command.txt
+      cardinality: one
+      required: false
+      type: text
+      role: diagnostic

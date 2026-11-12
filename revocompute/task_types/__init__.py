@@ -294,6 +294,9 @@ class TaskType:
     input_summary: str = ""
     output_summary: str = ""
     considerations: tuple[str, ...] = ()
+    #: A legacy Task kept registered so historical results, storyboards and
+    #: archive links still resolve. It is never offered as a new submission.
+    deprecated: bool = False
 
     def __post_init__(self) -> None:
         if self.schema:
@@ -405,14 +408,33 @@ def _install_snapshot(snapshot: _RegistryState) -> None:
     _state = snapshot
 
 
-def _load_task_inputs(raw: Any, task_id: str) -> tuple[TaskInputRole, ...]:
+def _load_task_inputs(raw: Any, schema: dict[str, Any], task_id: str) -> tuple[TaskInputRole, ...]:
     """Load the authoritative named input contract from ``task.yaml``."""
-    return load_named_file_roles(
+    roles = load_named_file_roles(
         raw,
         owner=f"Task type {task_id!r}",
         collection="inputs",
         factory=TaskInputRole,
     )
+    properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    for role in roles:
+        if role.presence is None:
+            continue
+        prop = properties.get(role.presence.parameter)
+        choices = prop.get("enum") if isinstance(prop, dict) else None
+        if not isinstance(choices, list) or not choices:
+            raise ValueError(
+                f"Task type {task_id!r} input role {role.name!r} presence parameter "
+                f"{role.presence.parameter!r} must be a schema property with an enum"
+            )
+        declared = {str(value) for value in choices}
+        referenced = set(role.presence.required_when) | set(role.presence.forbidden_when)
+        if not referenced <= declared:
+            raise ValueError(
+                f"Task type {task_id!r} input role {role.name!r} presence names undeclared "
+                f"values {sorted(referenced - declared)}"
+            )
+    return roles
 
 
 #: A reviewed presentation-only annotation. It is deliberately not ``default``:
@@ -757,7 +779,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             owner_plugin_ids.update(
                 descriptor.id for descriptor in manager.workspace_plugins() if descriptor.owner == workspace_owner
             )
-            task_inputs = _load_task_inputs(raw.get("inputs"), task_id)
+            task_inputs = _load_task_inputs(raw.get("inputs"), schema, task_id)
             workflow = _load_workflow(raw.get("workflow"), task_id, dict(raw.get("stage_markers", {})))
             if workflow and raw.get("gpus") and not any(stage.requires_gpu for stage in workflow):
                 # A workflow's accelerator need is per stage; the task-level flag
@@ -799,6 +821,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 input_summary=str(raw.get("input_summary", "")),
                 output_summary=str(raw.get("output_summary", "")),
                 considerations=tuple(raw.get("considerations", ())),
+                deprecated=bool(raw.get("deprecated", False)),
             )
             # Categories are part of the task contribution when the central
             # registry is absent.  Preserve a deterministic fallback order so
@@ -982,8 +1005,8 @@ def list_types() -> list[TaskType]:
 
 
 def default_task_type() -> str:
-    """Return the first discovered task when a caller omits an explicit type."""
-    types = list_types()
+    """Return the first catalog Task when a caller omits an explicit type."""
+    types = [task for task in list_types() if not task.deprecated]
     if not types:
         raise KeyError("No task types are enabled")
     return types[0].name

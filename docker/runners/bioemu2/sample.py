@@ -3,17 +3,24 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""BioEmu2 adapter for equilibrium sampling, structure prediction, and propagation.
+"""BioEmu2 adapter for the unified Task's equilibrium, structure-prediction,
+and propagation modes.
 
-The Task manifest selects the mode; the adapter never infers it from a filename.
-Equilibrium and structure prediction share the sequence-to-system construction
-upstream's Python API does not do for us:
+The Task's ``mode`` parameter selects the upstream command; the adapter never
+infers it from a filename. Every mode requires the named ``system`` YAML role,
+which the pinned upstream parser validates, and ``propagate`` additionally
+requires the named ``starting_structure`` mmCIF. The pinned ``propagate``
+command compares the CIF atoms and their order against that system before it
+loads the model and refuses a mismatch.
 
-* ``equilibrium`` and ``structure`` build the ``System`` from the Task's named
-  ``sequence`` role and call upstream's matching sampling entry point;
-* ``propagate`` runs upstream's own ``bioemu2 propagate`` command against the
-  named ``starting_structure`` CIF, with an optional explicit ``system`` YAML
-  when the CIF's inferred system would not be the submitted molecule.
+Two external assets are resolved before any model work:
+
+* RCSB CCD component CIFs for every modified residue, branched entity, or CCD
+  ligand in the system. Upstream fetches them on demand with a single request
+  and no retry, so the adapter warms the same task-local cache first (#148).
+* The Boltz-1 CCD dictionary read by upstream's ligand steering potentials.
+  Any steered sampler (``edm_gd``, ``edm_fk``, ``edm_fkc``) consults it when the
+  system declares a CCD ligand, in every mode; ``edm`` never does.
 
 Everything else -- MSA acquisition, embedding, denoising, physicality checking,
 ``samples.xtc``/``topology.cif``/``system.yaml``/``physicality.json`` -- is
@@ -25,6 +32,7 @@ copy of its default kept here.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -33,14 +41,19 @@ import sys
 import tempfile
 import time
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
-#: The protein alphabet BioEmu2's ``Protein`` entity accepts. Stricter than the
-#: server's ``validate_fasta`` alphabet, which also admits the ambiguity codes
-#: B, Z, J, and O and the stop/gap spells -- none of which names a residue
-#: BioEmu2 can sample. The Task input role declares this stricter set.
-PROTEIN_CHARS = frozenset("ACDEFGHIKLMNPQRSTVWYX")
+#: The upstream commands each Task mode runs.
+MODE_COMMANDS = {
+    "equilibrium": "sample-equilibrium",
+    "structure_prediction": "predict-structure",
+    "propagate": "propagate",
+}
+
+#: Samplers that build steering potentials and therefore consult the Boltz-1
+#: CCD dictionary for a CCD-specified ligand. ``edm`` is unsteered.
+STEERING_SAMPLERS = frozenset({"edm_gd", "edm_fk", "edm_fkc"})
 
 #: Propagation outputs upstream refuses to overwrite. Clearing exactly these
 #: before the call keeps a re-run in the same directory deterministic without
@@ -49,11 +62,10 @@ PROPAGATION_OUTPUTS = ("samples.xtc", "physicality.json")
 
 #: Upstream fetches public CCD components on the first cache miss with a single
 #: ``requests.get`` and no retry, so one transient TLS/connection failure fails
-#: the Task. The propagation path resolves those components only after the
-#: model is loaded; warming the same cache first bounds that failure without
-#: touching upstream. The cache is task-local by upstream's default, so every
-#: Task gets these attempts rather than sharing mutable cache state between
-#: concurrent Runners.
+#: the Task. Warming the same cache first bounds that failure without touching
+#: upstream. The cache is task-local by upstream's default, so every Task gets
+#: these attempts rather than sharing mutable cache state between concurrent
+#: Runners.
 CCD_FETCH_ATTEMPTS = 3
 CCD_FETCH_BACKOFF_SECONDS = 2.0
 
@@ -63,47 +75,6 @@ CCD_FETCH_BACKOFF_SECONDS = 2.0
 #: lookup through a task-local cache instead of downloading it.
 STEERING_CCD_REVISION = "7c1d83b779e4c65ecc37dfdf0c6b2788076f31e1"
 _STEERING_CCD_REPO = "models--boltz-community--boltz-1"
-
-#: mmCIF categories whose molecular meaning upstream's CIF inference does not
-#: preserve: explicit connections are ignored and branched entities omitted.
-#: Either would propagate a structure other than the one submitted, so the
-#: Runner refuses unless the submission declares the matching system YAML.
-_INFERENCE_LOSS_CATEGORIES = (
-    ("_struct_conn", "explicit _struct_conn connections"),
-    ("_pdbx_entity_branch", "branched entities"),
-    ("_pdbx_entity_branch_list", "branched entity monomers"),
-    ("_pdbx_entity_branch_link", "branched entity links"),
-)
-
-
-def query_sequence(path: Path) -> str:
-    """Return the single protein sequence of a Task FASTA ``sequence`` file.
-
-    Raises ``ValueError`` for anything but exactly one headed, non-empty record:
-    a second ``>`` (even with an empty header) would otherwise fuse two proteins
-    into one chain and sample the wrong molecule without any error.
-    """
-    records = 0
-    residues: list[str] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith(">"):
-            records += 1
-            if records > 1:
-                raise ValueError("BioEmu2 takes exactly one protein sequence")
-            if not line[1:].strip():
-                raise ValueError(f"{path.name} has an empty FASTA header")
-            continue
-        residues.append("".join(line.split()).upper())
-    if not records or not residues:
-        raise ValueError(f"{path.name} holds no FASTA sequence")
-    sequence = "".join(residues)
-    invalid = sorted(set(sequence) - PROTEIN_CHARS)
-    if invalid:
-        raise ValueError(f"BioEmu2 cannot sample residues {', '.join(invalid)}")
-    return sequence
 
 
 def input_path(manifest: dict, role: str) -> Path:
@@ -130,114 +101,17 @@ def optional_input_path(manifest: dict, role: str) -> Path | None:
     return Path(files[0]["path"])
 
 
-def _cif_tokens(text: str) -> Iterator[str]:
-    """Yield lowercase unquoted CIF data names and values.
+def load_system(system_path: Path) -> tuple[object, object]:
+    """Parse the submitted system with the pinned upstream parser.
 
-    Data names are whitespace-delimited tokens, not line prefixes: a legal
-    ``loop_`` may put several on one line. Comments, quoted values, and
-    semicolon text fields cannot carry a data name, so they are skipped.
+    ``load_system_and_contacts`` validates the complete scientific document,
+    including entity syntax, chain IDs, modifications, bonds, and contacts.
+    The Server validates only transport and the logical ``supporting_data``
+    type, so this is the first scientific parse and it fails closed.
     """
-    in_text_field = False
-    for line in text.splitlines():
-        if in_text_field:
-            in_text_field = not line.startswith(";")
-            continue
-        if line.startswith(";"):
-            in_text_field = True
-            continue
-        index = 0
-        while index < len(line):
-            char = line[index]
-            if char.isspace():
-                index += 1
-                continue
-            if char == "#":
-                break
-            if char in "'\"":
-                quote = char
-                index += 1
-                while index < len(line) and not (
-                    line[index] == quote
-                    and (index + 1 == len(line) or line[index + 1].isspace())
-                ):
-                    index += 1
-                index += 1
-                continue
-            start = index
-            while index < len(line) and not line[index].isspace():
-                index += 1
-            yield line[start:index].lower()
+    from bioemu2.data_interface import load_system_and_contacts
 
-
-def inference_losses(cif_path: Path) -> list[str]:
-    """The features upstream's CIF inference would silently omit."""
-    found: list[str] = []
-    text = cif_path.read_text(encoding="utf-8", errors="replace").lstrip("﻿")
-    for token in _cif_tokens(text):
-        for category, label in _INFERENCE_LOSS_CATEGORIES:
-            if token.startswith(category + ".") and label not in found:
-                found.append(label)
-    return found
-
-
-def require_exact_system(cif_path: Path, system_path: Path | None) -> None:
-    """Refuse an inferred system that would not be the submitted molecule.
-
-    A declared system YAML makes the molecular definition explicit, and upstream
-    still compares every starting atom and its order against it.  Without one,
-    upstream drops or ignores these records with only a warning, so the Runner
-    states the limitation before any model work starts.
-    """
-    if system_path is not None:
-        return
-    losses = inference_losses(cif_path)
-    if losses:
-        raise ValueError(
-            "BioEmu2 cannot reproduce this starting CIF exactly: it contains "
-            + ", ".join(losses)
-            + ", which CIF inference does not import. Provide the matching BioEmu2 system "
-            "YAML as the 'system' input, or use a simple protein system."
-        )
-
-
-def sampling_kwargs(params: dict) -> dict:
-    """The resolved task parameters that tune upstream sampling."""
-    kwargs: dict = {"num_samples": int(params["num_samples"])}
-    for key in ("sampler", "physicality_mode", "batch_size", "num_steps", "seed"):
-        if params.get(key) is not None:
-            kwargs[key] = params[key]
-    return kwargs
-
-
-def physicality_summary(path: Path) -> str:
-    """One log line for the per-frame physicality outcome upstream wrote.
-
-    A rejected ensemble is a result with a stated limitation, not a failure, so
-    this only reports: the counts and rejection reasons must be readable without
-    opening ``physicality.json``.
-    """
-    frames = json.loads(path.read_text(encoding="utf-8"))
-    statuses = Counter(str(frame.get("status")) for frame in frames)
-    reasons = Counter(str(frame.get("reason") or "unspecified") for frame in frames if frame.get("status") == "rejected")
-    summary = f"BioEmu2 physicality: {statuses.get('passed', 0)}/{len(frames)} frames accepted"
-    if reasons:
-        summary += " (" + ", ".join(f"{reason}: {count}" for reason, count in sorted(reasons.items())) + ")"
-    for status in ("rejected", "not_checked"):
-        if statuses.get(status):
-            summary += f", {statuses[status]} {status.replace('_', ' ')}"
-    return summary
-
-
-def sample(manifest: dict, output_dir: Path, checkpoint: Path, mode: str) -> None:
-    """Run upstream's equilibrium sampler or folded-structure predictor."""
-    import bioemu2
-
-    sequence = query_sequence(input_path(manifest, "sequence"))
-    system = bioemu2.System.from_description(proteins=[sequence])
-    model = bioemu2.load_model(checkpoint_path=checkpoint)
-    entry_point = bioemu2.sample_equilibrium if mode == "equilibrium" else bioemu2.predict_structure
-    entry_point(system, model=model, output_dir=output_dir, **sampling_kwargs(manifest["params"]))
-    (output_dir / "sequence.fasta").write_text(f">input\n{sequence}\n", encoding="utf-8")
+    return load_system_and_contacts(system_path)
 
 
 def _ccd_codes_in(value: object) -> list[str]:
@@ -260,21 +134,27 @@ def _ccd_codes_in(value: object) -> list[str]:
     return list(dict.fromkeys(codes))
 
 
-def propagation_ccd_codes(starting_structure: Path, declared_system: Path | None) -> list[str]:
-    """The CCD components upstream's ``propagate`` will resolve for this Task.
-
-    Resolving the same ``System`` from the same inputs keeps this list identical
-    to the command's. Upstream's validation rejects invalid codes before any
-    request, so a missing component reaches the fetch as a 404, not a typo.
-    """
-    from bioemu2 import System
-    from bioemu2.data_interface import load_system_and_contacts
-
-    if declared_system is not None:
-        system, _contacts = load_system_and_contacts(declared_system)
-    else:
-        system = System.from_cif(starting_structure)
+def system_ccd_codes(system: object) -> list[str]:
+    """The RCSB CCD components upstream needs to build this system's topology."""
     return _ccd_codes_in(system.model_dump())
+
+
+def steered_ligand_ccd_codes(system: object, sampler: str) -> list[str]:
+    """The CCD ligand codes whose steering constraints this run will resolve.
+
+    Mirrors upstream's ``ligand_ccd_codes_from_system``: only ``ligand``
+    entities carrying an explicit CCD code participate. Modified residues and
+    branched entities use the topology cache above but not the steering
+    dictionary, and ``edm`` never builds steering potentials.
+    """
+    if sampler not in STEERING_SAMPLERS:
+        return []
+    entities = system.model_dump().get("entities", [])
+    return [
+        str(entity["ccd_code"])
+        for entity in entities
+        if entity.get("entity_type") == "ligand" and entity.get("ccd_code")
+    ]
 
 
 def _ccd_url(ccd_code: str) -> str:
@@ -361,6 +241,25 @@ def prefetch_ccd(
                 break
 
 
+def verify_steering_asset(asset: Path, manifest: Path) -> None:
+    """Refuse a missing or modified Boltz-1 CCD dictionary before model work."""
+    if not asset.is_file():
+        raise RuntimeError(f"BioEmu2 steering CCD dictionary is missing: {asset}")
+    try:
+        first_line = manifest.read_text(encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(f"BioEmu2 steering CCD manifest is unreadable: {manifest}") from error
+    declared = next(
+        (parts[0] for line in first_line.splitlines() if (parts := line.split()) and not parts[0].startswith("#")),
+        "",
+    )
+    if not declared or len(declared) != 64 or any(char not in "0123456789abcdef" for char in declared):
+        raise RuntimeError(f"BioEmu2 steering CCD identity is undeclared: {manifest}")
+    digest = hashlib.sha256(asset.read_bytes()).hexdigest()
+    if digest != declared:
+        raise RuntimeError(f"BioEmu2 steering CCD integrity verification failed: {asset}")
+
+
 def configure_steering_cache(
     scratch: Path, source: str | None = None, *, required: bool = False
 ) -> Path | None:
@@ -369,8 +268,6 @@ def configure_steering_cache(
     ``huggingface_hub`` resolves a cached file under ``HF_HOME`` before it
     attempts a network request. A task-local cache entry made from the verified
     read-only asset keeps the lookup offline and leaves no mutable shared state.
-    Propagation requires the dictionary: without it the CLI fails only after
-    loading the model, with an offline cache error from upstream.
     """
     source = source if source is not None else os.environ.get("BIOEMU2_STEERING_CCD")
     if not source:
@@ -397,60 +294,97 @@ def configure_steering_cache(
     return asset
 
 
-def propagate(manifest: dict, output_dir: Path, checkpoint: Path) -> None:
-    """Run upstream's ``bioemu2 propagate`` command from one starting CIF.
+def physicality_summary(path: Path) -> str:
+    """One log line for the per-frame physicality outcome upstream wrote.
 
-    Without a ``system`` input the upstream command infers the molecular system
-    from ``--x0-cif``; that inference ignores explicit connections and branched
-    entities, so those structures are refused unless the submission supplies the
-    matching system YAML. Its CCD components are fetched into upstream's cache
-    first, because upstream resolves them only after loading the model and does
-    not retry a transient request. It saves one independent endpoint per
-    requested sample at a single lag and refuses to overwrite its own coordinate
-    and physicality files, so only those are cleared before the call; every
-    other output is upstream's to replace.
+    A rejected ensemble is a result with a stated limitation, not a failure, so
+    this only reports: the counts and rejection reasons must be readable without
+    opening ``physicality.json``.
     """
-    starting_structure = input_path(manifest, "starting_structure")
-    declared_system = optional_input_path(manifest, "system")
-    require_exact_system(starting_structure, declared_system)
-    prefetch_ccd(propagation_ccd_codes(starting_structure, declared_system))
-    params = manifest["params"]
-    for name in PROPAGATION_OUTPUTS:
-        (output_dir / name).unlink(missing_ok=True)
-    for stale in output_dir.glob("samples_*.xtc"):
-        stale.unlink()
+    frames = json.loads(path.read_text(encoding="utf-8"))
+    statuses = Counter(str(frame.get("status")) for frame in frames)
+    reasons = Counter(
+        str(frame.get("reason") or "unspecified")
+        for frame in frames
+        if frame.get("status") == "rejected"
+    )
+    summary = f"BioEmu2 physicality: {statuses.get('passed', 0)}/{len(frames)} frames accepted"
+    if reasons:
+        summary += " (" + ", ".join(f"{reason}: {count}" for reason, count in sorted(reasons.items())) + ")"
+    for status in ("rejected", "not_checked"):
+        if statuses.get(status):
+            summary += f", {statuses[status]} {status.replace('_', ' ')}"
+    return summary
 
+
+def command_for_mode(mode: str, manifest: dict, system_path: Path, checkpoint: Path,
+                     output_dir: Path, starting_structure: Path | None) -> list[str]:
+    """Build the pinned upstream CLI command for one validated mode."""
+    params = manifest["params"]
     command = [
         os.environ.get("BIOEMU2_CLI", "bioemu2"),
-        "propagate",
-        "--x0-cif",
-        str(starting_structure),
-        *(["--system", str(declared_system)] if declared_system is not None else []),
+        MODE_COMMANDS[mode],
+        "--system",
+        str(system_path),
         "--checkpoint-path",
         str(checkpoint),
         "--out",
         str(output_dir),
         "--num-samples",
         str(int(params["num_samples"])),
-        "--lag-time-ns",
-        f"{float(params['lag_time_ns']):g}",
+        "--sampler",
+        str(params.get("sampler") or "edm"),
     ]
+    if params.get("physicality_mode") is not None:
+        command += ["--physicality-filter", str(params["physicality_mode"])]
     optional_flags = (
         ("--seed", "seed"),
         ("--num-steps", "num_steps"),
         ("--batch-size", "batch_size"),
-        ("--sampler", "sampler"),
     )
     for flag, key in optional_flags:
         if params.get(key) is not None:
             command += [flag, str(params[key])]
-    if params.get("physicality_mode") is not None:
-        command += ["--physicality-filter", str(params["physicality_mode"])]
-    print(
-        "BioEmu2 propagation system: "
-        + ("declared system YAML" if declared_system is not None else "inferred from the starting CIF")
+    if mode == "propagate":
+        if starting_structure is None:
+            raise ValueError("propagate requires the 'starting_structure' input role")
+        command += ["--x0-cif", str(starting_structure), "--lag-time-ns", f"{float(params['lag_time_ns']):g}"]
+    return command
+
+
+def run_mode(mode: str, manifest: dict, output_dir: Path, checkpoint: Path, scratch: Path) -> None:
+    """Validate the system and run one upstream mode."""
+    system_path = input_path(manifest, "system")
+    system, _contacts = load_system(system_path)
+    starting_structure = optional_input_path(manifest, "starting_structure")
+    if mode != "propagate" and starting_structure is not None:
+        raise ValueError(f"mode {mode!r} does not accept a starting_structure")
+    if mode == "propagate":
+        if starting_structure is None:
+            raise ValueError("propagate requires the 'starting_structure' input role")
+        for name in PROPAGATION_OUTPUTS:
+            (output_dir / name).unlink(missing_ok=True)
+        for stale in output_dir.glob("samples_*.xtc"):
+            stale.unlink()
+        print("BioEmu2 propagation: upstream compares the starting CIF atoms and order before model load")
+
+    prefetch_ccd(system_ccd_codes(system))
+    steering_codes = steered_ligand_ccd_codes(system, str(manifest["params"].get("sampler") or "edm"))
+    if steering_codes:
+        asset = os.environ.get("BIOEMU2_STEERING_CCD")
+        manifest_path = os.environ.get("BIOEMU2_STEERING_CCD_MANIFEST")
+        if not asset or not manifest_path:
+            raise RuntimeError(
+                "BioEmu2 steering CCD dictionary is not configured; set "
+                "BIOEMU2_STEERING_CCD and BIOEMU2_STEERING_CCD_MANIFEST"
+            )
+        verify_steering_asset(Path(asset), Path(manifest_path))
+        configure_steering_cache(scratch, required=True)
+
+    subprocess.run(
+        command_for_mode(mode, manifest, system_path, checkpoint, output_dir, starting_structure),
+        check=True,
     )
-    subprocess.run(command, check=True)
 
 
 def main() -> int:
@@ -458,13 +392,15 @@ def main() -> int:
     parser.add_argument("--task-manifest", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--checkpoint-dir", required=True, type=Path)
-    parser.add_argument("--mode", required=True, choices=("equilibrium", "structure", "propagate"))
     args = parser.parse_args()
 
     manifest = json.loads(args.task_manifest.read_text(encoding="utf-8"))
     checkpoint = args.checkpoint_dir / "checkpoint.ckpt"
     if not checkpoint.is_file():
         raise SystemExit(f"BioEmu2 checkpoint not found: {checkpoint}")
+    mode = str(manifest.get("params", {}).get("mode") or "equilibrium")
+    if mode not in MODE_COMMANDS:
+        raise SystemExit(f"Unknown BioEmu2 mode: {mode}")
 
     # Keep the raw ColabFold response in task-local scratch: a cache in the
     # weight namespace would be mutable shared state. Every mode queries the
@@ -472,11 +408,7 @@ def main() -> int:
     scratch = Path(tempfile.mkdtemp(prefix="revodesign-bioemu2."))
     os.environ["BIOEMU2_MSA_CACHE"] = str(scratch / "colabfold_msa")
     try:
-        if args.mode == "propagate":
-            configure_steering_cache(scratch, required=True)
-            propagate(manifest, args.output_dir, checkpoint)
-        else:
-            sample(manifest, args.output_dir, checkpoint, args.mode)
+        run_mode(mode, manifest, args.output_dir, checkpoint, scratch)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 

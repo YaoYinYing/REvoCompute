@@ -7,7 +7,12 @@ It is not synthetic: the bytes are exactly the payload upstream's
 `sample_equilibrium` wrote, decoded with Latin-1, 57760 bytes, sha256
 `9387643c18139995991d57991ec1521ecdb46f26b06e91a7a060714e9c4a15dd`.
 
-It is used as the starting structure for the propagation smoke case. Its atoms
-must match the system BioEmu2 infers from it; the fixture is a 79-residue
-protein from a single-chain equilibrium run on this host, so it is a minimal
-contract demonstration rather than a scientific trajectory.
+It is used as the starting structure for the propagation smoke case with
+`propagation_start.yaml`, which declares the same 79-residue single chain as a
+BioEmu2 System. Both YAML fixtures here (`propagation_start.yaml` and
+`equilibrium_system.yaml`) were serialized by the pinned JAAG `jaag-core`
+builder (`bioemu2` target, JAAG commit
+`6bc0ff50d6dbe98093b08d3f4287afa2e799d415`); the propagation sequence was read
+from the captured CIF. The fixture is a minimal contract demonstration rather
+than a scientific trajectory. Pinned-upstream `validate_x0` compares its atoms
+and their order against the declared system before loading the model.

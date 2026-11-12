@@ -2817,6 +2817,11 @@ export interface components {
                 min: number;
                 max: number;
             };
+            presence?: {
+                parameter: string;
+                required_when: string[];
+                forbidden_when: string[];
+            };
             description?: string;
         };
         RunnerAccess: {

@@ -64,6 +64,8 @@ def discover_tasks() -> dict[str, Any]:
     manage_db = web.app.config.get("manage_db")
     entries = []
     for task_type in list_types():
+        if task_type.deprecated:
+            continue
         if manage_db is not None and manage_db.task_type_is_enabled(task_type.name) is False:
             continue
         entries.append(_catalog_entry(task_type))
@@ -117,6 +119,7 @@ def inspect_task(task_type: str) -> dict[str, Any]:
                 "type": role.type,
                 "formats": list(role.formats),
                 "cardinality": {"min": role.minimum, "max": role.maximum},
+                **({"presence": role.presence.to_dict()} if role.presence else {}),
                 "description": role.description,
             }
             for role in tt.inputs
@@ -172,7 +175,7 @@ def _resolve_task_type(task_type: Any) -> Any:
     manage_db = state.web.app.config.get("manage_db")
     if manage_db is not None and manage_db.task_type_is_enabled(tt.name) is False:
         raise McpError(TASK_NOT_FOUND, f"Task type {tt.name!r} is not enabled")
-    if tt.name not in {item.name for item in list_types()}:
+    if tt.deprecated:
         raise McpError(TASK_NOT_FOUND, f"Task type {tt.name!r} is not available")
     return tt
 

@@ -26,6 +26,10 @@ mkdir -p "$output_dir"
 asset_root="${BIOEMU2_ASSET_ROOT:-/mnt/db/weights/bioemu2}"
 checkpoint_dir="${BIOEMU2_CHECKPOINT_ROOT:-$asset_root/checkpoints/bioemu2-preview}"
 asset_manifest="${BIOEMU2_ASSET_MANIFEST:-$runtime_root/bioemu2/model-assets.sha256}"
+steering_ccd="${BIOEMU2_STEERING_CCD:-$asset_root/steering/boltz-1-ccd.pkl}"
+steering_manifest="${BIOEMU2_STEERING_CCD_MANIFEST:-$runtime_root/bioemu2/steering-ccd.sha256}"
+export BIOEMU2_STEERING_CCD="$steering_ccd"
+export BIOEMU2_STEERING_CCD_MANIFEST="$steering_manifest"
 
 # shellcheck source=/dev/null
 source "${MODEL_ASSET_VERIFY_SRC:-$runtime_root/common/runtime/verify_model_asset.sh}"
@@ -33,46 +37,34 @@ for relative in checkpoints/bioemu2-preview/checkpoint.ckpt checkpoints/bioemu2-
   verify_model_asset "$asset_manifest" "$asset_root" "$relative" BioEmu2 || exit 1
 done
 
-# The Task manifest's own type selects the adapter mode; nothing here looks at
-# an input filename.
-task_type="${TASK_TYPE:-bioemu2_equilibrium}"
-case "$task_type" in
-  bioemu2_equilibrium) mode=equilibrium ;;
-  bioemu2_structure_prediction) mode=structure ;;
-  bioemu2_propagate) mode=propagate ;;
-  *) echo "Unknown BioEmu2 task type: $task_type" >&2; exit 2 ;;
-esac
-
-# Ligand steering resolves its CCD dictionary through Hugging Face's local
-# cache, which stays offline. Only propagation uses steering, and only
-# propagation may require the dictionary.
-if [[ "$mode" == propagate ]]; then
-  steering_ccd="${BIOEMU2_STEERING_CCD:-$asset_root/steering/boltz-1-ccd.pkl}"
-  steering_manifest="${BIOEMU2_STEERING_CCD_MANIFEST:-$runtime_root/bioemu2/steering-ccd.sha256}"
-  [[ -s "$steering_ccd" ]] || { echo "BioEmu2 steering CCD dictionary is missing: $steering_ccd" >&2; exit 1; }
-  steering_sha=$(awk 'NF && $1 !~ /^#/ { print $1; exit }' "$steering_manifest")
-  [[ "$steering_sha" =~ ^[0-9a-f]{64}$ ]] || {
-    echo "BioEmu2 steering CCD identity is undeclared: $steering_manifest" >&2
-    exit 1
-  }
-  printf '%s  %s\n' "$steering_sha" "$steering_ccd" | sha256sum --strict --check --status || {
-    echo "BioEmu2 steering CCD integrity verification failed: $steering_ccd" >&2
-    exit 1
-  }
-  export BIOEMU2_STEERING_CCD="$steering_ccd"
+# The Task's scientific mode is a parameter, not a Task identity. Reading it
+# from the immutable manifest keeps one dispatch path for all three modes.
+task_type="${TASK_TYPE:-bioemu2}"
+if [[ "$task_type" != "bioemu2" ]]; then
+  # The legacy equilibrium/structure/propagation descriptors stay registered
+  # only so historical results resolve. They carry no `mode` parameter, so
+  # executing one would silently guess its science; refuse instead.
+  echo "BioEmu2 Task ${task_type} is retired; resubmit it as bioemu2" >&2
+  exit 2
 fi
+mode=$("${BIOEMU2_PYTHON:-python}" -c '
+import json, sys
+print(json.load(open(sys.argv[1])).get("params", {}).get("mode") or "equilibrium")
+' "$task_file") || { echo "BioEmu2 could not read the Task mode" >&2; exit 1; }
+case "$mode" in
+  equilibrium|structure_prediction|propagate) ;;
+  *) echo "Unknown BioEmu2 mode: $mode" >&2; exit 2 ;;
+esac
 
 echo "REVODESIGN_STAGE:${task_type}"
 "${BIOEMU2_PYTHON:-python}" "${BIOEMU2_SAMPLE_SCRIPT:-$runtime_root/bioemu2/sample.py}" \
   --task-manifest "$task_file" \
   --output-dir "$output_dir" \
-  --checkpoint-dir "$checkpoint_dir" \
-  --mode "$mode"
+  --checkpoint-dir "$checkpoint_dir"
 
 # The task's own contract is the single list of required outputs; the server
 # repeats this check, so a success here must mean the server's check will pass.
-# A Task-scoped contract wins; equilibrium and structure prediction share the
-# family-scoped one.
+# A Task-scoped contract wins; every mode of the unified Task shares it.
 contract="${runtime_root}/bioemu2/tasks/${task_type}/expected_files.yaml"
 [[ -f "$contract" ]] || contract="${runtime_root}/bioemu2/expected_files.yaml"
 required=$("${BIOEMU2_PYTHON:-python}" -c '

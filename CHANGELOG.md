@@ -192,6 +192,20 @@ invented release numbers or dates.
     - Pin the existing Task Snapshot submit rail to the visible viewport bottom,
       respecting safe-area insets, the mobile visual viewport, and reduced
       motion, without adding a second submit control.
+- BioEmu2:
+  - Replace the three selectable equilibrium, structure-prediction and
+    propagation Tasks with one **BioEmu2** Task (`bioemu2`) that takes a required
+    System YAML, an optional starting mmCIF, and a `mode` parameter. Legacy Task
+    ids stay registered only so historical results and storyboards still resolve.
+  - Add declarative `presence` rules on named input roles, enforced by the Server
+    at submission and preflight and projected into the Create Task form. The
+    starting mmCIF is required for `propagate` and refused for the other modes.
+  - Run all three modes through the pinned upstream CLI, validate the System YAML
+    with the pinned parser, and generalize #148 CCD retry, steering-asset
+    verification, and ligand-steering dependency handling to every mode.
+  - Publish the common `topology.cif`, `samples.xtc`, `system.yaml` and
+    `physicality.json` result files; `command.txt` is an optional diagnostic and
+    the FASTA echo is removed.
 
 ### Fixed
 - Tools:
