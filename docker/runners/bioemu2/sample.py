@@ -323,9 +323,10 @@ def prefetch_ccd(
     """Warm upstream's CCD cache, retrying only transient request failures.
 
     A missing component (404), an invalid code, or any other permanent error is
-    raised immediately. A connection, TLS, timeout, 429, or 5xx failure is
-    retried with exponential backoff up to *attempts* total; the final error
-    names the component, URL, and attempt count.
+    raised immediately. A connection, TLS, timeout, a body dropped mid-transfer
+    (`ChunkedEncodingError`), 429, or 5xx failure is retried with exponential
+    backoff up to *attempts* total; the final error names the component, URL,
+    and attempt count.
     """
     import requests
 

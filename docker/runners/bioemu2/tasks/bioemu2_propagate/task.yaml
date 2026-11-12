@@ -20,6 +20,10 @@ considerations:
   declares them. A ligand that CIF inference represents is kept; presence of a ligand
   alone is not a reason for refusal. Exactly one starting structure is accepted per
   run.
+- A protein declared by sequence uses BioEmu2's residue templates, which omit the
+  terminal `OXT` atom. A full all-atom CIF that includes `OXT` must be reconciled
+  explicitly before submission; the Runner refuses the atom mismatch rather than
+  altering the structure.
 - Physicality checking reports per-endpoint results in physicality.json; every endpoint
   is retained and none is removed because of the report.
 - BioEmu2 queries the public ColabFold MMseqs2 service (api.colabfold.com) for the

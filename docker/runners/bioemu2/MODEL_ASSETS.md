@@ -12,7 +12,7 @@ Inference requires these immutable files:
 | `checkpoints/bioemu2-preview/config.yaml` | `90326e3b77e524420f5aad68a777355ecbbbe07bc006ddf88f7ee921b0f772e3` | Model configuration |
 
 The Runner verifies both against `model-assets.sha256` before dispatching the
-task, and publishes that manifest with every result.
+task.
 
 ## Ligand steering dictionary
 
