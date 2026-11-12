@@ -57,6 +57,13 @@ PROPAGATION_OUTPUTS = ("samples.xtc", "physicality.json")
 CCD_FETCH_ATTEMPTS = 3
 CCD_FETCH_BACKOFF_SECONDS = 2.0
 
+#: Upstream's ligand steering loads the Boltz-1 CCD dictionary through
+#: ``huggingface_hub``, which under ``HF_HUB_OFFLINE=1`` only checks its local
+#: cache. The dictionary is mounted read-only, so the adapter exposes it to that
+#: lookup through a task-local cache instead of downloading it.
+STEERING_CCD_REVISION = "7c1d83b779e4c65ecc37dfdf0c6b2788076f31e1"
+_STEERING_CCD_REPO = "models--boltz-community--boltz-1"
+
 #: mmCIF categories whose molecular meaning upstream's CIF inference does not
 #: preserve: explicit connections are ignored and branched entities omitted.
 #: Either would propagate a structure other than the one submitted, so the
@@ -342,6 +349,34 @@ def prefetch_ccd(
                 break
 
 
+def configure_steering_cache(scratch: Path, source: str | None = None) -> Path | None:
+    """Expose the mounted steering dictionary to upstream's offline HF lookup.
+
+    ``huggingface_hub`` resolves a cached file under ``HF_HOME`` before it
+    attempts a network request. A task-local cache entry made from the verified
+    read-only asset keeps the lookup offline and leaves no mutable shared state.
+    """
+    source = source if source is not None else os.environ.get("BIOEMU2_STEERING_CCD")
+    if not source:
+        return None
+    asset = Path(source)
+    if not asset.is_file():
+        raise RuntimeError(f"BioEmu2 steering CCD dictionary not found: {asset}")
+    cache = scratch / "huggingface"
+    repo = cache / "hub" / _STEERING_CCD_REPO
+    snapshot = repo / "snapshots" / STEERING_CCD_REVISION
+    snapshot.mkdir(parents=True)
+    (snapshot / "ccd.pkl").symlink_to(asset)
+    refs = repo / "refs"
+    refs.mkdir()
+    # ``try_to_load_from_cache`` reads this file verbatim, so it must not carry
+    # a trailing newline.
+    (refs / "main").write_text(STEERING_CCD_REVISION, encoding="utf-8")
+    os.environ["HF_HOME"] = str(cache)
+    print(f"BioEmu2 steering CCD: {asset}")
+    return asset
+
+
 def propagate(manifest: dict, output_dir: Path, checkpoint: Path) -> None:
     """Run upstream's ``bioemu2 propagate`` command from one starting CIF.
 
@@ -417,6 +452,7 @@ def main() -> int:
     scratch = Path(tempfile.mkdtemp(prefix="revodesign-bioemu2."))
     os.environ["BIOEMU2_MSA_CACHE"] = str(scratch / "colabfold_msa")
     try:
+        configure_steering_cache(scratch)
         if args.mode == "propagate":
             propagate(manifest, args.output_dir, checkpoint)
         else:

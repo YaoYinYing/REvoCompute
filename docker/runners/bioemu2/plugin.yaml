@@ -15,6 +15,7 @@ runtime:
   - bioemu2/run.sh
   - bioemu2/sample.py
   - bioemu2/model-assets.sha256
+  - bioemu2/steering-ccd.sha256
   - bioemu2/expected_files.yaml
   - bioemu2/tasks/bioemu2_propagate/expected_files.yaml
   entrypoint:

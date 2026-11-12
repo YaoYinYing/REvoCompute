@@ -852,3 +852,55 @@ def test_bioemu2_sequence_framing(tmp_path):
 def test_bioemu2_optional_parameters_keep_upstream_defaults():
     adapter = _adapter()
     assert adapter.sampling_kwargs({"num_samples": 4}) == {"num_samples": 4}
+
+
+def test_configure_steering_cache_exposes_the_asset_to_the_offline_hf_lookup(tmp_path, monkeypatch):
+    adapter = _adapter()
+    asset = tmp_path / "ccd.pkl"
+    asset.write_bytes(b"steering dictionary")
+    monkeypatch.delenv("HF_HOME", raising=False)
+
+    assert adapter.configure_steering_cache(tmp_path / "scratch", str(asset)) == asset
+
+    repo = tmp_path / "scratch" / "huggingface" / "hub" / "models--boltz-community--boltz-1"
+    snapshot = repo / "snapshots" / adapter.STEERING_CCD_REVISION
+    assert (snapshot / "ccd.pkl").resolve() == asset.resolve()
+    # ``try_to_load_from_cache`` reads this file verbatim; a trailing newline
+    # would stop it resolving the snapshot directory.
+    assert (repo / "refs" / "main").read_text(encoding="utf-8") == adapter.STEERING_CCD_REVISION
+    assert os.environ["HF_HOME"] == str(tmp_path / "scratch" / "huggingface")
+
+
+def test_configure_steering_cache_is_optional_and_rejects_a_missing_asset(tmp_path, monkeypatch):
+    adapter = _adapter()
+    monkeypatch.delenv("BIOEMU2_STEERING_CCD", raising=False)
+    assert adapter.configure_steering_cache(tmp_path / "unused") is None
+
+    with pytest.raises(RuntimeError, match="steering CCD dictionary not found"):
+        adapter.configure_steering_cache(tmp_path / "scratch", str(tmp_path / "missing.pkl"))
+
+
+def test_bioemu2_runner_verifies_the_steering_ccd_identity(tmp_path):
+    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
+    steering = tmp_path / "ccd.pkl"
+    steering.write_bytes(b"steering dictionary")
+    steering_manifest = tmp_path / "steering.sha256"
+    steering_manifest.write_text(
+        f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  {steering}\n", encoding="utf-8"
+    )
+    env = {
+        "BIOEMU2_STEERING_CCD": str(steering),
+        "BIOEMU2_STEERING_CCD_MANIFEST": str(steering_manifest),
+    }
+
+    completed, _output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, fasta, {"num_samples": 1}, env
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    steering.write_bytes(b"tampered")
+    completed, _output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, fasta, {"num_samples": 1}, env
+    )
+    assert completed.returncode != 0
+    assert "steering CCD integrity verification failed" in completed.stderr

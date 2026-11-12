@@ -24,6 +24,10 @@ considerations:
   is retained and none is removed because of the report.
 - BioEmu2 queries the public ColabFold MMseqs2 service (api.colabfold.com) for the
   system alignment on every run.
+- Ligand steering uses the pinned Boltz-1 CCD dictionary. A ligand code absent from
+  that dictionary, such as a novel predicted ligand, is sampled without
+  ligand-specific steering constraints; the rest of the system and the physicality
+  check are unchanged.
 - The released checkpoint is a preview; upstream tested it with an 80 GB A100 as the
   smallest device.
 requires_network: true

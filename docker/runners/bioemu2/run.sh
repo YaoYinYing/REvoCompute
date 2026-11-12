@@ -33,6 +33,23 @@ for relative in checkpoints/bioemu2-preview/checkpoint.ckpt checkpoints/bioemu2-
   verify_model_asset "$asset_manifest" "$asset_root" "$relative" BioEmu2 || exit 1
 done
 
+# Ligand steering resolves its CCD dictionary through Hugging Face's local
+# cache, which stays offline. Verify the mounted dictionary before exposing it.
+steering_ccd="${BIOEMU2_STEERING_CCD:-}"
+if [[ -n "$steering_ccd" ]]; then
+  steering_manifest="${BIOEMU2_STEERING_CCD_MANIFEST:-$runtime_root/bioemu2/steering-ccd.sha256}"
+  [[ -s "$steering_ccd" ]] || { echo "BioEmu2 steering CCD dictionary is missing: $steering_ccd" >&2; exit 1; }
+  steering_sha=$(awk 'NF && $1 !~ /^#/ { print $1; exit }' "$steering_manifest")
+  [[ "$steering_sha" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "BioEmu2 steering CCD identity is undeclared: $steering_manifest" >&2
+    exit 1
+  }
+  printf '%s  %s\n' "$steering_sha" "$steering_ccd" | sha256sum --strict --check --status || {
+    echo "BioEmu2 steering CCD integrity verification failed: $steering_ccd" >&2
+    exit 1
+  }
+fi
+
 # The Task manifest's own type selects the adapter mode; nothing here looks at
 # an input filename.
 task_type="${TASK_TYPE:-bioemu2_equilibrium}"
