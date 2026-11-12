@@ -22,7 +22,7 @@
 .version-fact dt { color: var(--app-muted); font-size: .8rem; }
 .version-fact dd { margin: .2rem 0 0; font: 500 .92rem/1.45 var(--font-mono); overflow-wrap: anywhere; }
 .version-build-warning,
-.version-build-note { margin: 1.25rem 0 0; padding: .8rem 1rem; border-radius: var(--r-md); font-size: .9rem; line-height: 1.5; }
+.version-build-note { margin: 1.25rem 0 0; padding: .8rem 1rem; border-radius: var(--r-surface); font-size: .9rem; line-height: 1.5; }
 .version-build-warning { border: 1px solid var(--app-warning, var(--app-danger)); background: color-mix(in srgb, var(--app-warning, var(--app-danger)) 10%, transparent); }
 .version-build-warning p { margin: 0 0 .6rem; }
 .version-build-note { border: 1px solid var(--app-line); background: var(--app-raised); color: var(--app-muted); }
