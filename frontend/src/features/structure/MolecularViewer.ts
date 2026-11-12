@@ -401,7 +401,9 @@ export class MolecularViewer implements MolecularScene {
       if (!structure) return;
       const state = this.plugin.state.data;
       const root = structure.cell.transform.ref;
-      const existing = state.selectQ((query: any) => query.byRef(root).subtree().withTransformer(StateTransforms.Model.TransformStructureConformation))[0];
+      const existing = state.selectQ((query: any) => query.byRef(root).subtree()
+        .withTag(PREVIEW_TRANSFORM_TAG)
+        .withTransformer(StateTransforms.Model.TransformStructureConformation))[0];
       if (matrix === null) {
         if (!existing) return;
         const params = { transform: { name: 'matrix' as const, params: { data: Mat4.identity(), transpose: false } } };

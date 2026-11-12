@@ -27,10 +27,14 @@ export const FIT_MAX_TRANSFER_BYTES = 128 * 1024 * 1024;
 /** Reject a job whose bounded memory envelope would be exceeded. */
 export function assertFitJobSize(atomCount: number, frameCount: number): void {
   if (!Number.isInteger(atomCount) || atomCount < 3 || atomCount > FIT_MAX_ATOMS) {
-    throw new TrajectoryFitError(`A browser fit supports 3 to ${FIT_MAX_ATOMS} selected atoms.`);
+    throw new TrajectoryFitError(
+      `A browser fit supports 3 to ${FIT_MAX_ATOMS} selected atoms. Use a validated server Tool for a larger selection, conversion, or unwrapping.`,
+    );
   }
   if (!Number.isInteger(frameCount) || frameCount < 1 || frameCount > FIT_MAX_FRAMES) {
-    throw new TrajectoryFitError(`A browser fit supports 1 to ${FIT_MAX_FRAMES} frames.`);
+    throw new TrajectoryFitError(
+      `A browser fit supports 1 to ${FIT_MAX_FRAMES} frames. Convert a longer trajectory with a validated server Tool.`,
+    );
   }
   if (atomCount * frameCount * 3 * 8 > FIT_MAX_TRANSFER_BYTES) {
     throw new TrajectoryFitError(

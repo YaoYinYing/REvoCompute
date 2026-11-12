@@ -54,16 +54,20 @@ frame or the current typed selection), a reference frame, and either **Center
 only** or **Fit and preview**. The browser fits each frame to the reference with
 a weighted rigid-body least-squares transform in a background worker and applies
 a reversible display transform; **Reset preview** restores the exact source
-coordinates. The reported RMSD is a preview metric on the fit selection, not
-simulation dynamics or a stability claim. A periodic box declared by the source
-is shown, with a warning when positions span it; the browser never unwraps
-coordinates, reconstructs chains, or changes topology, and such a wrapped
-preview carries no scientific claim. **Export aligned frame (PDB)** writes the
-current aligned frame and a JSON sidecar with the source artifact digests and the
-transform. The export is a new local derived artifact, not a server-published
-result and not authenticated Tool output, and a text PDB is never given a binary
-trajectory extension. A topology the fixed PDB columns cannot represent is
-refused rather than truncated.
+coordinates and **Cancel fit** stops a running job. The reference and selection
+controls stay locked for the duration of a fit, and a completed preview is
+always labelled and exported with the reference it was actually fitted to. The
+reported RMSD is a preview metric on the fit selection, not simulation dynamics
+or a stability claim. A periodic box declared by the source is shown, with a
+warning when positions span it; the periodic check covers the whole topology at
+the reference frame and the fit selection on every frame. The browser never
+unwraps coordinates, reconstructs chains, or changes topology, and such a
+wrapped preview carries no scientific claim. **Export PDB + sidecar** writes the
+current aligned frame and the JSON provenance record together. The export is a
+new local derived artifact, not a server-published result and not authenticated
+Tool output, and a text PDB is never given a binary trajectory extension. A
+topology the fixed PDB columns cannot represent is refused rather than
+truncated.
 
 The manifest records a *technical* output check: configured files are present,
 non-empty, and structurally mappable. That check does not establish scientific

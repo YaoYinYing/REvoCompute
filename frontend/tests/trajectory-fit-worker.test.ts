@@ -83,8 +83,8 @@ describe('bounded fit session', () => {
 
   it('enforces the transfer envelope before any chunk is read', () => {
     expect(() => assertFitJobSize(2, 10)).toThrow('3 to');
-    expect(() => assertFitJobSize(20001, 10)).toThrow('3 to');
-    expect(() => assertFitJobSize(10, FIT_MAX_FRAMES + 1)).toThrow('frames');
+    expect(() => assertFitJobSize(20001, 10)).toThrow('validated server Tool');
+    expect(() => assertFitJobSize(10, FIT_MAX_FRAMES + 1)).toThrow('validated server Tool');
     expect(() => assertFitJobSize(20000, 50000)).toThrow('too large');
     expect(FIT_MAX_TRANSFER_BYTES).toBeLessThan(20000 * 50000 * 24);
     expect(() => assertFitJobSize(100, 100)).not.toThrow();

@@ -65,6 +65,20 @@ describe('preview PDB writer', () => {
     expect(lines.at(-1)).toBe('END');
   });
 
+  it('refuses negative coordinates below the 8.3 field lower bound', () => {
+    expect(() => writePreviewPdb([atom(0, 1, 'CA', 'A', 1, 'C', -1000, 0, 0)], null))
+      .toThrow('8.3 field width');
+    expect(() => writePreviewPdb([atom(0, 1, 'CA', 'A', 1, 'C', 10000, 0, 0)], null))
+      .toThrow('8.3 field width');
+    const lower = writePreviewPdb([atom(0, 1, 'CA', 'A', 1, 'C', -999.999, 0, 0)], null).split('\n')[1]!;
+    expect(columns(lower, 31, 38)).toBe('-999.999');
+    const upper = writePreviewPdb([atom(0, 1, 'CA', 'A', 1, 'C', 9999.999, 0, 0)], null).split('\n')[1]!;
+    expect(columns(upper, 31, 38)).toBe('9999.999');
+    // The following columns must not shift.
+    expect(columns(lower, 39, 46)).toBe('   0.000');
+    expect(columns(lower, 77, 78)).toBe(' C');
+  });
+
   it('aligns digit-leading and two-letter-element atom names in columns 13-16', () => {
     const hydrogen = writePreviewPdb([atom(0, 1, '1HG', 'A', 1, 'H', 0, 0, 0)], null).split('\n')[1]!;
     expect(columns(hydrogen, 13, 16)).toBe('1HG ');
@@ -109,7 +123,9 @@ describe('preview PDB writer', () => {
       rmsd: 1.234,
       pbcPolicy: 'periodic',
       pbcSpanning: true,
-      box: { lengths: [10, 11, 12] },
+      pbcSpanningFrames: [2, 5],
+      pbcCheck: 'Whole topology at the reference frame and the fit selection on every frame.',
+      box: { lengths: [10, 11, 12], angles: [1.5707963267948966, 1.5707963267948966, 1.5707963267948966] },
       source: {
         taskId: 'a'.repeat(32),
         topologyPath: 'topology.pdb',
@@ -128,6 +144,10 @@ describe('preview PDB writer', () => {
     expect(metadata.fit.rmsdNote).toContain('Preview metric');
     expect(metadata.fit.rmsdNote).toContain('not simulation dynamics');
     expect(metadata.periodicBoundary.positionsSpanBoundary).toBe(true);
+    expect(metadata.periodicBoundary.spanningFrames).toEqual([2, 5]);
+    expect(metadata.periodicBoundary.check).toContain('fit selection on every frame');
+    expect(metadata.periodicBoundary.box.anglesUnit).toBe('radians');
+    expect(metadata.periodicBoundary.box.anglesInRadians).toHaveLength(3);
     expect(metadata.periodicBoundary.note).toContain('No unwrapping');
     expect(metadata.source.coordinates.sha256).toBe('c'.repeat(64));
     expect(metadata.source.taskId).toBe('a'.repeat(32));

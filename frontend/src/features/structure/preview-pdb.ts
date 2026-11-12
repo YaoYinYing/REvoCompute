@@ -42,6 +42,10 @@ export interface PreviewExportContext {
   rmsd: number | null;
   pbcPolicy: PbcPolicy;
   pbcSpanning: boolean;
+  /** Frames whose fit selection spans the declared box, zero-based. */
+  pbcSpanningFrames: readonly number[];
+  /** What the periodic check covered; stated so the claim is not broader than it is. */
+  pbcCheck: string;
   box: PeriodicBox | null;
   source: PreviewExportSource;
 }
@@ -56,7 +60,11 @@ function fixed(value: string, width: number, align: 'left' | 'right' = 'left'): 
 
 function coordinate(value: number, label: string): string {
   if (!Number.isFinite(value)) throw new PdbExportError(`The ${label} coordinate is not finite.`);
-  if (Math.abs(value) > 9999.999) throw new PdbExportError(`The ${label} coordinate exceeds the PDB 8.3 field width.`);
+  // The PDB 8.3 field holds [-999.999, 9999.999]; a negative value outside the
+  // lower bound would be nine characters and shift every later column.
+  if (value > 9999.999 || value < -999.999) {
+    throw new PdbExportError(`The ${label} coordinate exceeds the PDB 8.3 field width.`);
+  }
   return value.toFixed(3).padStart(8, ' ');
 }
 
@@ -160,7 +168,15 @@ export function writePreviewMetadata(context: PreviewExportContext, transform: R
     periodicBoundary: {
       policy: context.pbcPolicy,
       positionsSpanBoundary: context.pbcSpanning,
-      box: context.box ? { lengths: [...context.box.lengths], angles: context.box.angles ? [...context.box.angles] : null } : null,
+      spanningFrames: [...context.pbcSpanningFrames],
+      check: context.pbcCheck,
+      box: context.box
+        ? {
+          lengths: [...context.box.lengths],
+          anglesInRadians: context.box.angles ? [...context.box.angles] : null,
+          anglesUnit: 'radians',
+        }
+        : null,
       note: 'No unwrapping or chain reconstruction was performed. Wrapped coordinates may invalidate a rigid fit; unwrap with a validated server Tool for analysis.',
     },
     source: {

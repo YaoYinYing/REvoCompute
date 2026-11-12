@@ -82,6 +82,8 @@ interface Harness {
 interface HarnessOptions {
   rejection?: number[];
   box?: { lengths: [number, number, number] };
+  run?: (input: FitJobInput) => Promise<FitJobResult>;
+  coordinates?: (frame: number, indices: readonly number[]) => Float64Array;
 }
 
 function harness(options: HarnessOptions = {}): Harness {
@@ -95,7 +97,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const download = vi.fn();
   let sceneListener: ((event: { type: string }) => void) | null = null;
   const cell = options.box ?? null;
-  const run = vi.fn(async (input: FitJobInput): Promise<FitJobResult> => {
+  const defaultRun = async (input: FitJobInput): Promise<FitJobResult> => {
     const transforms = new Float64Array(input.frameCount * 16);
     const rmsd = new Float64Array(input.frameCount);
     for (let frame = 0; frame < input.frameCount; frame += 1) {
@@ -104,7 +106,8 @@ function harness(options: HarnessOptions = {}): Harness {
       rmsd[frame] = result.rmsd;
     }
     return { transforms, rmsd, rejectedFrames: options.rejection ?? [] };
-  });
+  };
+  const run = vi.fn(options.run ?? defaultRun);
   const controller = {
     supportsTrajectoryFitting: () => true,
     allAtoms: () => BASE.map(sceneAtom),
@@ -118,7 +121,7 @@ function harness(options: HarnessOptions = {}): Harness {
       sceneListener = listener;
       return () => { sceneListener = null; };
     },
-    readTrajectoryFrame: (frame: number, indices: readonly number[]) => coordinatesOf(frame, indices),
+    readTrajectoryFrame: (frame: number, indices: readonly number[]) => (options.coordinates ?? coordinatesOf)(frame, indices),
     trajectoryFrameCell: () => cell,
     applyPreviewTransform: apply,
     setSelectionMode: selectMode,
@@ -261,6 +264,7 @@ describe('trajectory fit panel', () => {
     await vi.waitFor(() => expect(statusNode(h).textContent).toContain('periodic box'));
     expect(statusNode(h).textContent).toContain('2.0 × 2.0 × 2.0 Å');
     expect(statusNode(h).textContent).toContain('No unwrap was performed');
+    expect(statusNode(h).textContent).toContain('Periodic check');
   });
 
   it('exports the aligned frame as a local PDB preview with sidecar metadata', async () => {
@@ -268,7 +272,7 @@ describe('trajectory fit panel', () => {
     await h.panel.frameDisplayed(1, 3);
     buttonByText(h, 'Fit and preview').fire('click');
     await fitted(h);
-    buttonByText(h, 'Export aligned frame (PDB)').fire('click');
+    buttonByText(h, 'Export PDB + sidecar').fire('click');
     expect(h.download).toHaveBeenCalledTimes(2);
     const [pdbName, pdbText, pdbType] = h.download.mock.calls[0]!;
     const [metaName, metaText, metaType] = h.download.mock.calls[1]!;
@@ -292,7 +296,7 @@ describe('trajectory fit panel', () => {
   it('refuses to export before a preview fit exists', async () => {
     const h = harness();
     await h.panel.frameDisplayed(0, 2);
-    buttonByText(h, 'Export aligned frame (PDB)').fire('click');
+    buttonByText(h, 'Export PDB + sidecar').fire('click');
     expect(h.download).not.toHaveBeenCalled();
     expect(statusNode(h).textContent).toContain('Apply a preview fit');
   });
@@ -306,5 +310,107 @@ describe('trajectory fit panel', () => {
     h.emitScene({ type: 'selection' });
     expect(h.apply).toHaveBeenCalledWith(null);
     expect(statusNode(h).textContent).toContain('Selection changed');
+  });
+
+  it('binds a completed fit and its sidecar to the reference captured at start', async () => {
+    let release: (() => void) | null = null;
+    const h = harness({
+      run: (input) => new Promise<FitJobResult>((resolve) => {
+        release = () => {
+          const transforms = new Float64Array(input.frameCount * 16);
+          const rmsd = new Float64Array(input.frameCount);
+          for (let frame = 0; frame < input.frameCount; frame += 1) {
+            const result = fitFrame(input.reference, input.readFrame(frame), { mode: input.mode });
+            transforms.set(toColumnMajorMatrix(result.transform), frame * 16);
+            rmsd[frame] = result.rmsd;
+          }
+          resolve({ transforms, rmsd, rejectedFrames: [] });
+        };
+      }),
+    });
+    await h.panel.frameDisplayed(0, 12);
+    const reference = h.node((node) => node.className === 'trajectory-fit-reference');
+    reference.value = '11';
+    reference.fire('change');
+    buttonByText(h, 'Fit and preview').fire('click');
+    await vi.waitFor(() => expect(h.run).toHaveBeenCalledTimes(1));
+
+    // A frame change during the fit must not re-enable the reference/scope
+    // controls, and the completed result stays bound to reference index 10.
+    expect(reference.disabled).toBe(true);
+    await h.panel.frameDisplayed(1, 12);
+    expect(reference.disabled).toBe(true);
+    expect(buttonByText(h, 'Fit and preview').disabled).toBe(true);
+
+    release!();
+    await fitted(h);
+    expect(statusNode(h).textContent).toContain('to frame 11');
+
+    buttonByText(h, 'Export PDB + sidecar').fire('click');
+    const metadata = JSON.parse(h.download.mock.calls[1]![1]);
+    expect(metadata.referenceFrame.index).toBe(10);
+    expect(metadata.frame.index).toBe(1);
+  });
+
+  it('aborts a running fit when the reference changes rather than relabelling it', async () => {
+    let release: (() => void) | null = null;
+    const h = harness({
+      run: () => new Promise<FitJobResult>((resolve) => {
+        release = () => resolve({
+          transforms: new Float64Array(16), rmsd: new Float64Array(1), rejectedFrames: [],
+        });
+      }),
+    });
+    await h.panel.frameDisplayed(0, 3);
+    buttonByText(h, 'Fit and preview').fire('click');
+    await vi.waitFor(() => expect(h.run).toHaveBeenCalledTimes(1));
+    const reference = h.node((node) => node.className === 'trajectory-fit-reference');
+    reference.value = '2';
+    reference.fire('change');
+    expect(statusNode(h).textContent).toContain('cancelled because the reference');
+    expect(buttonByText(h, 'Fit and preview').disabled).toBe(false);
+    release!();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(h.apply.mock.calls.some((call) => call[0] !== null)).toBe(false);
+  });
+
+  it('offers an in-panel cancel action while a fit runs', async () => {
+    let release: (() => void) | null = null;
+    const h = harness({
+      run: () => new Promise<FitJobResult>((resolve) => {
+        release = () => resolve({
+          transforms: new Float64Array(16), rmsd: new Float64Array(1), rejectedFrames: [],
+        });
+      }),
+    });
+    await h.panel.frameDisplayed(0, 3);
+    buttonByText(h, 'Fit and preview').fire('click');
+    await vi.waitFor(() => expect(h.run).toHaveBeenCalledTimes(1));
+    const cancel = buttonByText(h, 'Cancel fit');
+    expect(cancel.disabled).toBe(false);
+    cancel.fire('click');
+    expect(statusNode(h).textContent).toContain('cancelled');
+    expect(cancel.disabled).toBe(true);
+    release!();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(h.apply.mock.calls.some((call) => call[0] !== null)).toBe(false);
+  });
+
+  it('warns when a fitted frame other than the reference spans the box', async () => {
+    const compact = new Float64Array([0, 0, 0, 0.5, 0, 0, 0, 0.5, 0, 0, 0, 0.5]);
+    const spread = new Float64Array([0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0, 4]);
+    const h = harness({
+      box: { lengths: [2, 2, 2] },
+      coordinates: (frame) => (frame === 0 ? compact : spread),
+    });
+    await h.panel.frameDisplayed(0, 2);
+    buttonByText(h, 'Fit and preview').fire('click');
+    await fitted(h);
+    expect(statusNode(h).textContent).toContain('Frames whose fit selection spans the box: 2');
+    expect(statusNode(h).textContent).toContain('Periodic check');
+    buttonByText(h, 'Export PDB + sidecar').fire('click');
+    const metadata = JSON.parse(h.download.mock.calls[1]![1]);
+    expect(metadata.periodicBoundary.spanningFrames).toEqual([1]);
+    expect(metadata.periodicBoundary.check).toContain('fit selection on every frame');
   });
 });
