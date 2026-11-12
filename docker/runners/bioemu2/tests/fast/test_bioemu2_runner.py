@@ -39,6 +39,15 @@ class System:
         _capture("system", kwargs)
         return cls()
 
+    @classmethod
+    def from_cif(cls, path):
+        _capture("system_from_cif", str(path))
+        return cls()
+
+    def model_dump(self):
+        codes = [code for code in os.environ.get("BIOEMU2_FAKE_CCD_CODES", "").split(",") if code]
+        return {"entities": [{"entity_type": "ligand", "ccd_code": code} for code in codes]}
+
 
 def _capture(key, value):
     path = Path(os.environ["BIOEMU2_CALL"])
@@ -87,6 +96,45 @@ def predict_structure(system, *, model, output_dir, **kwargs):
     return _publish("predict_structure", output_dir, kwargs)
 """
 
+FAKE_DATA_INTERFACE = """
+from bioemu2 import System
+
+
+def load_system_and_contacts(path):
+    return System(), None
+"""
+
+FAKE_TEMPLATES = """
+import json
+import os
+from pathlib import Path
+
+import requests
+
+_CCD_URL = "https://files.rcsb.org/ligands/download/{ccd_code}.cif"
+
+
+class CCDTemplateError(Exception):
+    pass
+
+
+def _get_ccd_path(ccd_code):
+    capture = os.environ.get("BIOEMU2_CCD_CAPTURE")
+    attempts = 0
+    if capture:
+        path = Path(capture)
+        seen = json.loads(path.read_text()) if path.exists() else {}
+        attempts = seen.get(ccd_code, 0) + 1
+        seen[ccd_code] = attempts
+        path.write_text(json.dumps(seen))
+    failure = os.environ.get("BIOEMU2_CCD_FAIL")
+    if failure == "missing":
+        raise CCDTemplateError(f"CCD component {ccd_code!r} was not found at RCSB")
+    if failure == "transient" and attempts <= int(os.environ.get("BIOEMU2_CCD_FAIL_TIMES", "1")):
+        raise requests.exceptions.SSLError("EOF occurred in violation of protocol")
+    return Path(f"{ccd_code}.cif")
+"""
+
 FAKE_CLI = """
 import json
 import os
@@ -133,8 +181,13 @@ def _workspace(tmp_path, *, with_cli=False):
         encoding="utf-8",
     )
     modules = tmp_path / "modules"
-    (modules / "bioemu2").mkdir(parents=True)
-    (modules / "bioemu2" / "__init__.py").write_text(FAKE_BIOEMU2, encoding="utf-8")
+    package = modules / "bioemu2"
+    (package / "data_interface").mkdir(parents=True)
+    (package / "structure").mkdir()
+    (package / "__init__.py").write_text(FAKE_BIOEMU2, encoding="utf-8")
+    (package / "data_interface" / "__init__.py").write_text(FAKE_DATA_INTERFACE, encoding="utf-8")
+    (package / "structure" / "__init__.py").write_text("", encoding="utf-8")
+    (package / "structure" / "templates.py").write_text(FAKE_TEMPLATES, encoding="utf-8")
     fasta = tmp_path / "input.fasta"
     fasta.write_text(">2KL8\nMEMDIRFRG\n", encoding="utf-8")
     if with_cli:
@@ -478,6 +531,170 @@ def test_bioemu2_propagation_reports_an_atom_mismatch(tmp_path):
     assert completed.returncode != 0
     assert "atoms do not match the system" in completed.stderr
     assert not (output_dir / "task_finished").exists()
+
+
+def test_bioemu2_propagation_prewarms_ccd_components_before_the_cli(tmp_path):
+    asset_root, manifest, modules, _argv, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "starting.cif"
+    starting.write_text("data_test\n", encoding="utf-8")
+    ccd_capture = tmp_path / "ccd.json"
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1},
+        {
+            **env,
+            "BIOEMU2_FAKE_CCD_CODES": "A1L3H,NAG",
+            "BIOEMU2_CCD_CAPTURE": str(ccd_capture),
+        },
+        role="starting_structure",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    # One bounded fetch per distinct component, before the command runs.
+    assert json.loads(ccd_capture.read_text(encoding="utf-8")) == {"A1L3H": 1, "NAG": 1}
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu2_propagation_retries_a_transient_ccd_failure(tmp_path):
+    asset_root, manifest, modules, _argv, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "starting.cif"
+    starting.write_text("data_test\n", encoding="utf-8")
+    ccd_capture = tmp_path / "ccd.json"
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1},
+        {
+            **env,
+            "BIOEMU2_FAKE_CCD_CODES": "A1L3H",
+            "BIOEMU2_CCD_FAIL": "transient",
+            "BIOEMU2_CCD_FAIL_TIMES": "1",
+            "BIOEMU2_CCD_CAPTURE": str(ccd_capture),
+        },
+        role="starting_structure",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(ccd_capture.read_text(encoding="utf-8")) == {"A1L3H": 2}
+    assert "attempt 1/3" in completed.stderr
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu2_propagation_does_not_retry_a_missing_ccd_component(tmp_path):
+    asset_root, manifest, modules, _argv, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "starting.cif"
+    starting.write_text("data_test\n", encoding="utf-8")
+    ccd_capture = tmp_path / "ccd.json"
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1},
+        {
+            **env,
+            "BIOEMU2_FAKE_CCD_CODES": "A1L3H",
+            "BIOEMU2_CCD_FAIL": "missing",
+            "BIOEMU2_CCD_CAPTURE": str(ccd_capture),
+        },
+        role="starting_structure",
+    )
+
+    assert completed.returncode != 0
+    assert json.loads(ccd_capture.read_text(encoding="utf-8")) == {"A1L3H": 1}
+    assert "A1L3H" in completed.stderr
+    assert "https://files.rcsb.org/ligands/download/A1L3H.cif" in completed.stderr
+    assert "not retried" in completed.stderr
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_bioemu2_ccd_codes_are_collected_and_deduplicated():
+    adapter = _adapter()
+    system = {
+        "entities": [
+            {"entity_type": "ligand", "ccd_code": "A1L3H"},
+            {"entity_type": "protein", "mods": [{"res_id": 3, "ccd_code": "SEP"}]},
+            {"entity_type": "branched", "mon_seq": [{"ccd_code": "NAG"}, {"ccd_code": "A1L3H"}]},
+            {"entity_type": "ligand", "smiles": "CC"},
+        ],
+        "bonds": [],
+    }
+
+    assert adapter._ccd_codes_in(system) == ["A1L3H", "SEP", "NAG"]
+
+
+def test_bioemu2_ccd_prefetch_retries_transient_failures_with_backoff(monkeypatch):
+    import requests
+
+    adapter = _adapter()
+    monkeypatch.setattr(adapter, "_ccd_url", lambda code: f"https://example.test/{code}.cif")
+    calls: list[str] = []
+
+    def fetch(code):
+        calls.append(code)
+        raise requests.exceptions.SSLError("EOF occurred in violation of protocol")
+
+    sleeps: list[float] = []
+    with pytest.raises(RuntimeError, match="after 3 attempts") as failure:
+        adapter.prefetch_ccd(["A1L3H"], fetch, sleep=sleeps.append)
+
+    assert calls == ["A1L3H"] * 3
+    assert sleeps == [2.0, 4.0]
+    assert "A1L3H" in str(failure.value)
+    assert "https://example.test/A1L3H.cif" in str(failure.value)
+
+
+def test_bioemu2_ccd_prefetch_stops_retrying_once_a_component_is_cached(monkeypatch):
+    import requests
+
+    adapter = _adapter()
+    monkeypatch.setattr(adapter, "_ccd_url", lambda code: f"https://example.test/{code}.cif")
+    calls: list[str] = []
+
+    def fetch(code):
+        calls.append(code)
+        if calls.count("A1L3H") == 1:
+            raise requests.exceptions.ConnectionError("reset by peer")
+
+    adapter.prefetch_ccd(["A1L3H", "NAG"], fetch, sleep=lambda _: None)
+
+    assert calls == ["A1L3H", "A1L3H", "NAG"]
+
+
+def test_bioemu2_ccd_prefetch_does_not_retry_permanent_http_errors(monkeypatch):
+    import requests
+
+    adapter = _adapter()
+    monkeypatch.setattr(adapter, "_ccd_url", lambda code: f"https://example.test/{code}.cif")
+    response = requests.Response()
+    response.status_code = 403
+    calls: list[str] = []
+
+    def fetch(code):
+        calls.append(code)
+        raise requests.exceptions.HTTPError("forbidden", response=response)
+
+    with pytest.raises(RuntimeError, match="not retried"):
+        adapter.prefetch_ccd(["A1L3H"], fetch, sleep=lambda _: pytest.fail("must not sleep"))
+
+    assert calls == ["A1L3H"]
+
+
+def test_bioemu2_ccd_prefetch_reports_upstream_errors_without_retry(monkeypatch):
+    adapter = _adapter()
+    monkeypatch.setattr(adapter, "_ccd_url", lambda code: f"https://example.test/{code}.cif")
+    calls: list[str] = []
+
+    class CCDTemplateError(Exception):
+        pass
+
+    def fetch(code):
+        calls.append(code)
+        raise CCDTemplateError(f"CCD component {code!r} was not found at RCSB")
+
+    with pytest.raises(RuntimeError, match="not retried"):
+        adapter.prefetch_ccd(["A1L3H"], fetch, sleep=lambda _: pytest.fail("must not sleep"))
+
+    assert calls == ["A1L3H"]
 
 
 def test_bioemu2_propagation_requires_the_starting_structure_role(tmp_path):

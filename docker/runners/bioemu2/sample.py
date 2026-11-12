@@ -31,8 +31,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 
 #: The protein alphabet BioEmu2's ``Protein`` entity accepts. Stricter than the
@@ -45,6 +46,16 @@ PROTEIN_CHARS = frozenset("ACDEFGHIKLMNPQRSTVWYX")
 #: before the call keeps a re-run in the same directory deterministic without
 #: deleting anything the Server published.
 PROPAGATION_OUTPUTS = ("samples.xtc", "physicality.json")
+
+#: Upstream fetches public CCD components on the first cache miss with a single
+#: ``requests.get`` and no retry, so one transient TLS/connection failure fails
+#: the Task. The propagation path resolves those components only after the
+#: model is loaded; warming the same cache first bounds that failure without
+#: touching upstream. The cache is task-local by upstream's default, so every
+#: Task gets these attempts rather than sharing mutable cache state between
+#: concurrent Runners.
+CCD_FETCH_ATTEMPTS = 3
+CCD_FETCH_BACKOFF_SECONDS = 2.0
 
 #: mmCIF categories whose molecular meaning upstream's CIF inference does not
 #: preserve: explicit connections are ignored and branched entities omitted.
@@ -222,20 +233,132 @@ def sample(manifest: dict, output_dir: Path, checkpoint: Path, mode: str) -> Non
     (output_dir / "sequence.fasta").write_text(f">input\n{sequence}\n", encoding="utf-8")
 
 
+def _ccd_codes_in(value: object) -> list[str]:
+    """CCD codes named anywhere in a serialized system, in first-seen order."""
+    codes: list[str] = []
+
+    def visit(node: object) -> None:
+        if isinstance(node, dict):
+            code = node.get("ccd_code")
+            if isinstance(code, str) and code:
+                codes.append(code)
+            for key, item in node.items():
+                if key != "ccd_code":
+                    visit(item)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                visit(item)
+
+    visit(value)
+    return list(dict.fromkeys(codes))
+
+
+def propagation_ccd_codes(starting_structure: Path, declared_system: Path | None) -> list[str]:
+    """The CCD components upstream's ``propagate`` will resolve for this Task.
+
+    Resolving the same ``System`` from the same inputs keeps this list identical
+    to the command's. Upstream's validation rejects invalid codes before any
+    request, so a missing component reaches the fetch as a 404, not a typo.
+    """
+    from bioemu2 import System
+    from bioemu2.data_interface import load_system_and_contacts
+
+    if declared_system is not None:
+        system, _contacts = load_system_and_contacts(declared_system)
+    else:
+        system = System.from_cif(starting_structure)
+    return _ccd_codes_in(system.model_dump())
+
+
+def _ccd_url(ccd_code: str) -> str:
+    """Upstream's CCD download URL, imported so the diagnostic cannot drift."""
+    from bioemu2.structure.templates import _CCD_URL
+
+    return _CCD_URL.format(ccd_code=ccd_code)
+
+
+def _fetch_ccd(ccd_code: str) -> None:
+    """Populate upstream's on-disk CCD cache for one component code."""
+    from bioemu2.structure.templates import _get_ccd_path
+
+    _get_ccd_path(ccd_code)
+
+
+def _transient_request_error(error: Exception) -> bool:
+    """Whether a failed CCD request can be retried without changing its meaning."""
+    import requests
+
+    if isinstance(error, requests.exceptions.HTTPError):
+        response = error.response
+        return response is None or response.status_code == 429 or response.status_code >= 500
+    return isinstance(error, requests.exceptions.RequestException)
+
+
+def prefetch_ccd(
+    ccd_codes: Iterable[str],
+    fetch: Callable[[str], object] = _fetch_ccd,
+    *,
+    attempts: int = CCD_FETCH_ATTEMPTS,
+    backoff: float = CCD_FETCH_BACKOFF_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Warm upstream's CCD cache, retrying only transient request failures.
+
+    A missing component (404), an invalid code, or any other permanent error is
+    raised immediately. A connection, TLS, timeout, 429, or 5xx failure is
+    retried with exponential backoff up to *attempts* total; the final error
+    names the component, URL, and attempt count.
+    """
+    import requests
+
+    for ccd_code in ccd_codes:
+        url = _ccd_url(ccd_code)
+        for attempt in range(1, attempts + 1):
+            try:
+                fetch(ccd_code)
+            except requests.exceptions.RequestException as error:
+                if not _transient_request_error(error):
+                    raise RuntimeError(
+                        f"BioEmu2 CCD component {ccd_code!r} could not be fetched from {url} "
+                        f"(attempt 1 of {attempts}, not retried): {error}"
+                    ) from error
+                if attempt == attempts:
+                    raise RuntimeError(
+                        f"BioEmu2 CCD component {ccd_code!r} could not be fetched from {url} "
+                        f"after {attempts} attempts: {error}"
+                    ) from error
+                print(
+                    f"BioEmu2 CCD fetch for {ccd_code!r} failed "
+                    f"(attempt {attempt}/{attempts}): {error}",
+                    file=sys.stderr,
+                )
+                sleep(backoff * 2 ** (attempt - 1))
+            except Exception as error:
+                raise RuntimeError(
+                    f"BioEmu2 CCD component {ccd_code!r} could not be prepared from {url} "
+                    f"(attempt 1 of {attempts}, not retried): {error}"
+                ) from error
+            else:
+                break
+
+
 def propagate(manifest: dict, output_dir: Path, checkpoint: Path) -> None:
     """Run upstream's ``bioemu2 propagate`` command from one starting CIF.
 
     Without a ``system`` input the upstream command infers the molecular system
     from ``--x0-cif``; that inference ignores explicit connections and branched
     entities, so those structures are refused unless the submission supplies the
-    matching system YAML. It saves one independent endpoint per requested sample
-    at a single lag and refuses to overwrite its own coordinate and physicality
-    files, so only those are cleared before the call; every other output is
-    upstream's to replace.
+    matching system YAML. Its CCD components are fetched into upstream's cache
+    first, because upstream resolves them only after loading the model and does
+    not retry a transient request. It saves one independent endpoint per
+    requested sample at a single lag and refuses to overwrite its own coordinate
+    and physicality files, so only those are cleared before the call; every
+    other output is upstream's to replace.
     """
     starting_structure = input_path(manifest, "starting_structure")
     declared_system = optional_input_path(manifest, "system")
     require_exact_system(starting_structure, declared_system)
+    prefetch_ccd(propagation_ccd_codes(starting_structure, declared_system))
     params = manifest["params"]
     for name in PROPAGATION_OUTPUTS:
         (output_dir / name).unlink(missing_ok=True)
