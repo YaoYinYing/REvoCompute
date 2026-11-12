@@ -145,6 +145,11 @@ def test_dense_task_register_keeps_relevant_operations_direct(page: Page, monkey
             task['result']['available'] = False
         tasks.append(task)
     page.route(f'{ORIGIN}/compute/api/tasks*', _task_history(tasks))
+    # The observer and the button are two triggers for the same traversal. This
+    # case exercises the accessible Load more control, so it keeps the observer
+    # out of the way: scrolling the button into view would otherwise start the
+    # same page load and hide the button mid-click.
+    page.add_init_script('delete window.IntersectionObserver;')
     page.set_viewport_size({'width': 1440, 'height': 1080})
     page.goto(f'{ORIGIN}/compute/dashboard')
     page.get_by_role('button', name='Compact', exact=True).click()
