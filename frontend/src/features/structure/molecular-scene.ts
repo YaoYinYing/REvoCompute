@@ -233,20 +233,6 @@ export function isAxisAlignedBox(value: unknown): value is AxisAlignedBox {
     && value.lengths.z >= 0;
 }
 
-export function isSceneAtom(value: unknown): value is SceneAtom {
-  if (!isRecord(value) || !isRecord(value.identity) || !isXYZ(value.position)) return false;
-  const identity = value.identity;
-  return typeof identity.authChain === 'string'
-    && typeof identity.labelChain === 'string'
-    && isFiniteNumber(identity.authSeqId)
-    && isFiniteNumber(identity.labelSeqId)
-    && typeof identity.residueName === 'string'
-    && typeof identity.atomName === 'string'
-    && isFiniteNumber(identity.atomSerial)
-    && isFiniteNumber(identity.modelIndex)
-    && isFiniteNumber(identity.index);
-}
-
 export function assertFiniteXYZ(value: unknown, label = 'Coordinate'): XYZ {
   if (!isXYZ(value)) throw new InvalidCoordinateError(label);
   return { x: value.x, y: value.y, z: value.z };
@@ -422,11 +408,6 @@ export function axisAlignedBoxOf(atoms: readonly SceneAtom[]): AxisAlignedBox {
   };
 }
 
-/** A box around an explicit centre, for callers that initialized a COM themselves. */
-export function boxAt(center: XYZ, lengths: XYZ): AxisAlignedBox {
-  return assertAxisAlignedBox({ center, lengths });
-}
-
 // ---------------------------------------------------------------------------
 // Selection/event contract and form/viewer synchronization.
 // ---------------------------------------------------------------------------
@@ -591,10 +572,6 @@ export class SceneState {
     return { ...this.topology };
   }
 
-  coordinateFrame(): number {
-    return this.frame;
-  }
-
   lastEvent(): MolecularSceneEvent | null {
     return this.latest;
   }
@@ -751,10 +728,6 @@ export class SceneState {
     await Promise.resolve();
     if (!this.pickGate.isCurrent(token)) throw new DOMException('Atom pick was superseded.', 'AbortError');
     return atoms;
-  }
-
-  cancelPicks(): void {
-    this.pickGate.cancel();
   }
 
   private assertCurrent(expected?: SceneTopologyReference): void {
