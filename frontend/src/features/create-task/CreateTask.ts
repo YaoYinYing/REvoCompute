@@ -97,6 +97,10 @@ export class CreateTask {
   // with the route's lifetime: leaving the view must not leave a listener that
   // writes to a root the route no longer owns.
   private viewportCleanup: (() => void) | null = null;
+  // The sticky rail grows when validation rows appear, so its own rendered
+  // height - not a constant - is what a focused control must reserve. One
+  // observer per mounted rail writes the measurement as a CSS variable.
+  private railObserver: ResizeObserver | null = null;
 
   constructor(private readonly root: HTMLElement) {
     // The preparation surface owns exactly one visible level-1 heading per state:
@@ -337,6 +341,19 @@ export class CreateTask {
     const actions = node('div', 'ct-actions'); actions.append(this.clear, this.action);
     snapshotPanel.append(label, this.feedback, actions, review);
     main.append(protocol, snapshotPanel); this.workbench.append(header, facts); if (access) this.workbench.append(access); this.workbench.append(main);
+    this.observeRail(snapshotPanel);
+  }
+
+  /** Reserve the sticky rail's current rendered height for focused controls. */
+  private observeRail(rail: HTMLElement): void {
+    this.railObserver?.disconnect();
+    const apply = (): void => {
+      this.root.style.setProperty('--ct-rail-space', `${Math.ceil(rail.getBoundingClientRect().height)}px`);
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(rail);
+    this.railObserver = observer;
   }
 
   private renderAccess(): HTMLElement | null {
@@ -750,6 +767,7 @@ export class CreateTask {
 
   private showChooser(message: string): void {
     this.loadController?.abort(); this.submitController?.abort(); this.generation++; this.definition = null; this.preflight = null; this.setBusy(false); this.checking = false; this.closeDemoDialog(); this.workspace.destroy();
+    this.railObserver?.disconnect(); this.railObserver = null; this.root.style.removeProperty('--ct-rail-space');
     this.clonePanel?.remove(); this.clonePanel = null; this.cloneSource = null;
     this.chooser.hidden = false; this.pageHeader.hidden = false; this.workbench.hidden = true;
     // The region and the chooser's methods come home with the state, so the
@@ -765,6 +783,7 @@ export class CreateTask {
     this.loadController?.abort();
     this.submitController?.abort();
     this.viewportCleanup?.(); this.viewportCleanup = null;
+    this.railObserver?.disconnect(); this.railObserver = null;
     this.clonePanel?.remove(); this.clonePanel = null;
     // A route change must not leave a modal in the top layer over the next page,
     // and any await holding it open settles as a cancelled decision.

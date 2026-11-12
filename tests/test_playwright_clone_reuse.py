@@ -61,33 +61,55 @@ def test_result_failed_clone_returns_focus_to_the_clone_control(page: Page) -> N
     expect(clone).to_be_focused()
 
 
-def _four_or_five_parameter_detail(count: int) -> tuple[dict, dict]:
-    """Return a workbench contract with ``count`` plain optional parameters."""
+def _parameter_detail(count: int, required: int = 0) -> tuple[dict, dict]:
+    """Return a workbench contract with ``count`` parameters, the first ``required`` required.
+
+    An empty required field renders a validation row, which grows the sticky
+    rail after it mounts: the state the constant reservation missed.
+    """
     detail = copy.deepcopy(_detail())
     detail["parameters_url"] = "/compute/api/task-parameters/sequence_demo"
+    names = [f"p{index}" for index in range(1, count + 1)]
     properties = {
-        f"p{index}": {"type": "integer", "title": f"Parameter {index}"}
-        for index in range(1, count + 1)
+        name: {"type": "integer", "title": f"Parameter {name[1:]}"}
+        for name in names
     }
     schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": False,
         "properties": properties,
+        "required": names[:required],
     }
     return detail, schema
 
 
 @pytest.mark.parametrize(
-    ("width", "height", "count"),
-    [(834, 560, 4), (390, 520, 5), (1440, 900, 4)],
-    ids=["834x560-4", "390x520-5", "1440x900-4"],
+    ("width", "height", "count", "required"),
+    [
+        (834, 560, 4, 0),
+        (390, 520, 5, 0),
+        (1440, 900, 4, 0),
+        (834, 560, 5, 1),
+        (834, 560, 5, 2),
+        (834, 560, 5, 3),
+        (390, 520, 5, 2),
+    ],
+    ids=[
+        "834x560-4",
+        "390x520-5",
+        "1440x900-4",
+        "834x560-5-1-required",
+        "834x560-5-2-required",
+        "834x560-5-3-required",
+        "390x520-5-2-required",
+    ],
 )
 def test_focused_last_parameter_is_visible_above_the_sticky_rail(
-    page: Page, width: int, height: int, count: int
+    page: Page, width: int, height: int, count: int, required: int
 ) -> None:
     _install_app(page)
-    detail, schema = _four_or_five_parameter_detail(count)
+    detail, schema = _parameter_detail(count, required)
     page.route(
         f"{ORIGIN}/compute/api/types/sequence_demo",
         lambda route: route.fulfill(json=detail),
@@ -100,6 +122,11 @@ def test_focused_last_parameter_is_visible_above_the_sticky_rail(
     page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
     expect(page.locator(".ct-workbench")).to_be_visible()
     expect(page.locator("[data-ct-parameter]")).to_have_count(count)
+    if required:
+        # The empty required fields are exactly what makes the rail taller than
+        # the old constant reservation: the rows are the fixture's premise. The
+        # one extra row is the fixture's own required sequence input.
+        expect(page.locator(".ct-validation-row.error")).to_have_count(required + 1)
 
     # Put the last field just under the rail's lower edge while it is still fully
     # inside the viewport. This is the state that used to be left un-scrolled:
@@ -122,7 +149,7 @@ def test_focused_last_parameter_is_visible_above_the_sticky_rail(
     field = last.bounding_box()
     assert rail is not None and field is not None
     print(
-        f"viewport={width}x{height} parameters={count} "
+        f"viewport={width}x{height} parameters={count} required={required} "
         f"focused={field['y']:.1f}..{field['y'] + field['height']:.1f} "
         f"rail={rail['y']:.1f}..{rail['y'] + rail['height']:.1f}"
     )

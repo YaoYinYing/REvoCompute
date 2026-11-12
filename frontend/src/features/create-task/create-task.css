@@ -63,9 +63,10 @@
    duplicate; --ct-vv-offset lifts it above a mobile virtual keyboard. */
 .ct-snapshot-panel { position:sticky; bottom:calc(var(--ct-vv-offset, 0px) + env(safe-area-inset-bottom, 0px)); z-index:4; max-height:calc(100dvh - 32px); overflow:auto; overscroll-behavior:contain; box-shadow:var(--shadow-surface); display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px 28px; margin-top:28px; padding:20px 24px calc(20px + env(safe-area-inset-bottom, 0px)); background:var(--app-soft); border:1px solid var(--ct-line); border-radius:6px; }
 /* The browser scrolls the focused control, not its field wrapper, into view;
-   reserve the sticky rail's own height on the control so the last field is
-   never left underneath it. */
-.create-task :is(input,select,textarea,button,summary) { scroll-margin-bottom:calc(13rem + env(safe-area-inset-bottom, 0px)); }
+   reserve the sticky rail's rendered height on the control so the last field is
+   never left underneath it. The height is measured, not assumed: validation
+   rows grow the rail after it mounts. */
+.create-task :is(input,select,textarea,button,summary) { scroll-margin-bottom:calc(var(--ct-rail-space, 0px) + 16px + env(safe-area-inset-bottom, 0px)); }
 /* A cloned draft states its reconciliation above the input columns. */
 .ct-clone { display:grid; gap:10px; margin-top:24px; padding:18px 20px; border:1px solid var(--ct-line); border-left:3px solid var(--ct-accent); border-radius:6px; background:var(--app-soft); }
 .ct-clone h2 { margin:0; font:500 21px/1.25 var(--font-display); letter-spacing:-.3px; }
