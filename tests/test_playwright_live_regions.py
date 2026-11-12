@@ -8,20 +8,20 @@ read from the accessibility tree, the live-region ancestry of the message the
 reader is being told about, and whether the region node is connected, visible,
 and still the same node across a state transition.
 
-* The dashboard's transient query error used to share the search field's
-  ``<label>``. A wrapping label is the field's accessible-name source, so the
-  error text became part of the field's name ("Search" plus the message) for as
-  long as the error showed. The field must stay named by its own visible label
-  while the error text stays announced from the live region that carries it.
+* The dashboard search is server-side literal text and offers no browser
+  regular-expression mode. The field must stay named by its own visible label,
+  and the UI must explain the supported search rather than presenting a pattern
+  toggle whose input the server does not honour. A bracket is literal text.
 * The create-task feedback region was appended only inside the workbench, so in
   the chooser state it was not in the document at all. The region must be
   connected, visible, and reachable in both states; the chooser's own status
   message must live inside it; and the one region - never two - must still carry
   the workbench validation summary after the transition.
 
-Each case is non-vacuous: it first drives the product into the state the defect
-describes (the error rendered, the region reparented) and compares the same
-field/region across the transition rather than asserting a fresh render.
+Each case is non-vacuous: it first drives the product into the state it names
+(the search populated with text that would have been an invalid pattern, the
+region reparented) and compares the same field/region across the transition
+rather than asserting a fresh render.
 
 Selector constants are stable hooks the suite already drives (``data-filter``,
 ``dashboard-search-hint``). Where an element can be reached by role - the searchbox,

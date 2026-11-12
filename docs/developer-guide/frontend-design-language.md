@@ -648,7 +648,9 @@ fixed navigation. A closed disclosure must state when its filters are active;
 closing it or changing view must preserve their effect. Desktop exposes those
 controls directly.
 
-Date bounds and regular expressions enter an **Advanced search** mode.
+Date bounds enter an **Advanced search** mode. Search is case-insensitive
+literal text evaluated by the server across the authorized history; the
+register exposes no browser regular-expression mode.
 
 Search/filter controls should align as a system rather than looking like a row
 of unrelated form fields.

@@ -110,7 +110,8 @@ export const adminApi = {
   listTasks: async (maxTasks = 2000): Promise<TaskSummary[]> => {
     const tasks: TaskSummary[] = [];
     let cursor: string | undefined;
-    while (tasks.length < maxTasks) {
+    // A page-count bound keeps a misbehaving `has_more` from looping forever.
+    for (let page = 0; page <= Math.ceil(maxTasks / 100) && tasks.length < maxTasks; page += 1) {
       const query = new URLSearchParams({ limit: '100' });
       if (cursor) query.set('cursor', cursor);
       const data = await authorizedJson<components['schemas']['TaskList']>(`/compute/api/tasks?${query.toString()}`);

@@ -1682,6 +1682,8 @@ class TaskDatabase:
         normalized and returned.
         """
         table = self.tasks_table
+        if owner and not is_admin:
+            raise ValueError("owner filter requires administrator scope")
         conditions: list[Any] = [table.c.status.notin_(tuple(self.HISTORY_HIDDEN_STATUSES))]
         if not is_admin:
             conditions.append(table.c.submitted_by_user_id == visible_user_id)
