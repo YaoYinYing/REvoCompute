@@ -17,6 +17,36 @@ http {
     uwsgi_temp_path /tmp/uwsgi_temp;
     scgi_temp_path /tmp/scgi_temp;
 
+    # Response compression is negotiated at the deployed gateway so the
+    # application continues to serve exact identity bytes and never has to
+    # enforce a decoded limit for a response.  The allowlist is text-like
+    # only: archives, images, binary structure containers and
+    # application/octet-stream never match, so XTC/DCD/ZIP and already
+    # compressed bytes pass through unchanged.  nginx does not compress a 206
+    # Partial Content response, so a byte-exact range download survives the
+    # proxy; gzip_vary preserves the negotiated representation in caches and
+    # nginx weakens an upstream strong ETag to a weak validator when it
+    # rewrites the body, so a conditional client never matches the wrong one.
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types
+        application/json
+        application/manifest+json
+        application/xml
+        application/x-ndjson
+        application/javascript
+        text/css
+        text/plain
+        text/javascript
+        image/svg+xml
+        chemical/x-pdb
+        chemical/x-cif
+        chemical/x-mmcif
+        chemical/x-gro;
+
     # Password-reset and email-verification links carry their one-time token in
     # the ``c=`` query parameter.  The default access log would persist it
     # verbatim, so a request bearing one is not logged.
@@ -52,6 +82,23 @@ http {
             internal;
             default_type text/html;
             add_header Retry-After 120 always;
+        }
+
+        # Tool calls share the /compute/api/tools/<name>/call transport with the
+        # ordinary Task submission API but may opt into a larger multipart body.
+        # The application cap (TOOL_REQUEST_MAX_BYTES) and this location cap are
+        # the same tier; the gateway value carries multipart headroom above it.
+        # Ordinary Task submissions keep the 16m http-level cap.
+        location ~ ^/compute/api/tools/[^/]+/call$ {
+            if (-f /srv/deployment/.maintenance) { return 503; }
+            client_max_body_size ${TOOL_CLIENT_MAX_BODY_SIZE};
+            proxy_pass http://web:${UPSTREAM_PORT};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $origin_proto;
         }
 
         # The agent MCP surface, when (and only when) the deployment opted in.
