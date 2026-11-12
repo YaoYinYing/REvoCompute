@@ -17,6 +17,14 @@ integer properties and asks browser clients to add concrete random-seed generati
 Its optional `random.minimum` and `random.maximum` define the browser-generation
 domain separately from the API-valid range, so sentinels remain manually valid but
 are never generated. The registry rejects invalid controls or generation bounds.
+The separate `x-ui-placeholder` annotation supplies example text for an optional
+string control. Declare it only on a property that is not in `required` and whose
+type is `string`; the registry rejects a required, non-string, empty, or
+over-200-character placeholder. It is presentation only — never `default`,
+`required`, a stored form value, or a submitted parameter — and an empty optional
+field stays absent. It travels with the canonical schema returned by
+`GET /compute/api/task-parameters/<task-type>` and the generated client types, so
+browser clients render it without a hardcoded placeholder map.
 Do not generate descriptions mechanically from names. The server returns this
 same Draft 2020-12 schema anonymously from
 `GET /compute/api/task-parameters/<task-type>`. The TaskType detail links to

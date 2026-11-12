@@ -101,8 +101,11 @@ Create Task draft seeded from one authorized earlier Task:
   applied. Both happen only when you choose them.
 - Opening a clone never submits. Preflight and **Run** are still the only
   submission boundary, and the resulting Task carries non-sensitive
-  `cloned_from` provenance for the source Task. Resetting or reverting ends the
-  clone relationship, so a later submit from that form records no provenance.
+  `cloned_from` provenance for the source Task. A cloned submission therefore
+  gets its own Task identity instead of deduplicating onto the source; sending
+  the identical clone draft again still returns the Task it already created.
+  Resetting or reverting ends the clone relationship, so a later submit from
+  that form records no provenance.
 
 API clients can create the same plan explicitly:
 

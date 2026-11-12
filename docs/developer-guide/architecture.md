@@ -137,6 +137,20 @@ FASTA task therefore stays small, while a task can declare a guided structure
 workflow without task-name conditionals in the page orchestrator. Specialized
 varieties, such as the RFdiffusion region/contig builder, remain separate
 statically loaded plugins.
+
+The Task Snapshot rail is the same in-flow panel, not a second submit action:
+it is `position: sticky` at the viewport bottom, its rendered height is written
+to a CSS variable and reserved through `scroll-margin-bottom` on focusable
+controls, and the `visualViewport` offset lifts it above a mobile keyboard. The
+route releases the rail observer and viewport listeners when it leaves. Clone &
+reuse from the dashboard or a Result page navigates with only an opaque,
+owner-scoped plan reference; Create Task re-resolves that plan against the
+current Task contract, applies one `WorkspacePreset` before the reader can edit
+anything, and consumes the reference so a refresh opens an ordinary draft. The
+server's plan store keeps only the source Task ID and caller and rebuilds the
+typed plan on every read, so it never becomes a second copy of the parameter
+schema.
+
 The anonymous `GET /compute/api/task-parameters/<task-type>` route exposes the
 canonical Draft 2020-12 parameter schema directly from the owning
 `task.yaml`; clients should consume it instead of maintaining parameter names,
