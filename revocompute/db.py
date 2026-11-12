@@ -873,6 +873,7 @@ class TaskDatabase:
             Column("revoked_by_user_id", Integer, nullable=True),
         )
         Index("idx_artifact_download_links_task", self.artifact_download_links_table.c.task_id)
+        Index("idx_artifact_download_links_expires", self.artifact_download_links_table.c.expires_at)
         self._initialize()
 
     def _initialize(self) -> None:
@@ -3476,6 +3477,20 @@ class TaskDatabase:
                     self.artifact_download_links_table.c.task_id == task_id
                 )
             )
+
+    def purge_expired_artifact_download_links(self, cutoff: float) -> int:
+        """Delete grants that expired before *cutoff*, returning how many went.
+
+        Expired rows are retained for a bounded audit window and then removed by
+        the next issuance; a Task's deletion removes its rows immediately.
+        """
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                self.artifact_download_links_table.delete().where(
+                    self.artifact_download_links_table.c.expires_at < cutoff
+                )
+            )
+            return int(result.rowcount or 0)
 
     def charge_data_ownership(
         self, task_id: str, *, user_id: int, logical_bytes: int = 0, at: float | None = None

@@ -63,6 +63,11 @@ def default_ttl_seconds() -> int:
     return min(_env_seconds("ARTIFACT_LINK_TTL_SECONDS", _DEFAULT_TTL_SECONDS), max_ttl_seconds())
 
 
+def retention_seconds() -> int:
+    """How long an expired grant stays auditable before cleanup."""
+    return _env_seconds("ARTIFACT_LINK_RETENTION_SECONDS", 7 * 24 * 60 * 60)
+
+
 def _jti_hash(jti: str) -> str:
     return hashlib.sha256(jti.encode("utf-8")).hexdigest()
 

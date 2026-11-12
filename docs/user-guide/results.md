@@ -42,7 +42,9 @@ absolute URL is copied for use in an external download manager.
   sent.
 - Links are signed with their own salt and secret. Rotating
   `ARTIFACT_LINK_SECRET` (or `AUTH_SECRET_KEY` when it is unset) invalidates every
-  outstanding link immediately.
+  outstanding link immediately. Expired grant records are kept for a bounded
+  audit window (`ARTIFACT_LINK_RETENTION_SECONDS`, seven days by default) and
+  then cleaned up; deleting the Task removes its records immediately.
 - A local result folder and a demo replay have no Server Task to authorize, so
   they do not offer expiring links.
 

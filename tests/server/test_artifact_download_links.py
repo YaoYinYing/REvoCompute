@@ -530,6 +530,26 @@ def test_ttl_is_bounded_and_reported(monkeypatch, tmp_path) -> None:
     assert unknown.status_code == 400
 
 
+def test_expired_grants_are_retained_for_an_audit_window_then_cleaned(monkeypatch, tmp_path) -> None:
+    module = _load(monkeypatch, tmp_path)
+    task_id, _root = _published_task(module, tmp_path)
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    _issue(client, headers, task_id)
+    retention = artifact_links.retention_seconds()
+    with module.task_store.engine.begin() as conn:
+        conn.execute(
+            sa.update(module.task_store.artifact_download_links_table).values(
+                expires_at=time.time() - retention - 60
+            )
+        )
+
+    # A new issuance is the bounded cleanup point; the audit row must outlive
+    # its own expiry by the retention window.
+    assert _issue(client, headers, task_id).status_code == 201
+    assert len(_all_grants(module)) == 1
+
+
 def test_token_purpose_and_expiry_are_validated_independently(monkeypatch, tmp_path) -> None:
     module = _load(monkeypatch, tmp_path)
     now = 1_700_000_000

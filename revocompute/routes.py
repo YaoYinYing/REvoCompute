@@ -3964,6 +3964,9 @@ def create_result_download_link(md5sum: str):
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        task_store.purge_expired_artifact_download_links(
+            time.time() - artifact_links.retention_seconds()
+        )
         task_store.create_artifact_download_link(
             token_id_hash=link["token_id_hash"],
             task_id=md5sum,
