@@ -64,6 +64,12 @@ upstream change alters scientific semantics, re-evaluate old goldens and
 output selectors against observed data rather than editing an expected string
 or weakening the result contract.
 
+The same rule applies to external assets and network-backed branches: a case
+whose input never triggers the fetch does not verify that dependency. Add a
+small case that reaches it. For an offline contract, run the case with the
+asset present and with it absent, so a missing cache entry fails before
+scientific work starts rather than after model load.
+
 ## Evidence
 
 Changing the plan, a case, or a fixture digest changes the test-definition

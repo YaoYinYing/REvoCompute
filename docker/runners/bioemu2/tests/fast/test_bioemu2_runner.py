@@ -39,6 +39,15 @@ class System:
         _capture("system", kwargs)
         return cls()
 
+    @classmethod
+    def from_cif(cls, path):
+        _capture("system_from_cif", str(path))
+        return cls()
+
+    def model_dump(self):
+        codes = [code for code in os.environ.get("BIOEMU2_FAKE_CCD_CODES", "").split(",") if code]
+        return {"entities": [{"entity_type": "ligand", "ccd_code": code} for code in codes]}
+
 
 def _capture(key, value):
     path = Path(os.environ["BIOEMU2_CALL"])
@@ -87,6 +96,45 @@ def predict_structure(system, *, model, output_dir, **kwargs):
     return _publish("predict_structure", output_dir, kwargs)
 """
 
+FAKE_DATA_INTERFACE = """
+from bioemu2 import System
+
+
+def load_system_and_contacts(path):
+    return System(), None
+"""
+
+FAKE_TEMPLATES = """
+import json
+import os
+from pathlib import Path
+
+import requests
+
+_CCD_URL = "https://files.rcsb.org/ligands/download/{ccd_code}.cif"
+
+
+class CCDTemplateError(Exception):
+    pass
+
+
+def _get_ccd_path(ccd_code):
+    capture = os.environ.get("BIOEMU2_CCD_CAPTURE")
+    attempts = 0
+    if capture:
+        path = Path(capture)
+        seen = json.loads(path.read_text()) if path.exists() else {}
+        attempts = seen.get(ccd_code, 0) + 1
+        seen[ccd_code] = attempts
+        path.write_text(json.dumps(seen))
+    failure = os.environ.get("BIOEMU2_CCD_FAIL")
+    if failure == "missing":
+        raise CCDTemplateError(f"CCD component {ccd_code!r} was not found at RCSB")
+    if failure == "transient" and attempts <= int(os.environ.get("BIOEMU2_CCD_FAIL_TIMES", "1")):
+        raise requests.exceptions.SSLError("EOF occurred in violation of protocol")
+    return Path(f"{ccd_code}.cif")
+"""
+
 FAKE_CLI = """
 import json
 import os
@@ -133,8 +181,13 @@ def _workspace(tmp_path, *, with_cli=False):
         encoding="utf-8",
     )
     modules = tmp_path / "modules"
-    (modules / "bioemu2").mkdir(parents=True)
-    (modules / "bioemu2" / "__init__.py").write_text(FAKE_BIOEMU2, encoding="utf-8")
+    package = modules / "bioemu2"
+    (package / "data_interface").mkdir(parents=True)
+    (package / "structure").mkdir()
+    (package / "__init__.py").write_text(FAKE_BIOEMU2, encoding="utf-8")
+    (package / "data_interface" / "__init__.py").write_text(FAKE_DATA_INTERFACE, encoding="utf-8")
+    (package / "structure" / "__init__.py").write_text("", encoding="utf-8")
+    (package / "structure" / "templates.py").write_text(FAKE_TEMPLATES, encoding="utf-8")
     fasta = tmp_path / "input.fasta"
     fasta.write_text(">2KL8\nMEMDIRFRG\n", encoding="utf-8")
     if with_cli:
@@ -147,13 +200,17 @@ def _workspace(tmp_path, *, with_cli=False):
 
 def _run(
     tmp_path, asset_root, manifest, modules, input_file, params, extra_env=None,
-    role="sequence", extra_inputs=None, empty_roles=(),
+    role="sequence", extra_inputs=None, empty_roles=(), provide_steering=True,
 ):
     from runner_protocol import run_with_manifest
 
     output_dir = tmp_path / "outputs"
     capture = tmp_path / "calls.json"
+    extra_env = dict(extra_env or {})
     env = os.environ.copy()
+    # Steering is a propagation-only dependency; no other mode gets a fixture.
+    env.pop("BIOEMU2_STEERING_CCD", None)
+    env.pop("BIOEMU2_STEERING_CCD_MANIFEST", None)
     env.update(
         {
             "BIOEMU2_PYTHON": sys.executable,
@@ -164,7 +221,20 @@ def _run(
             "PYTHONPATH": str(modules),
         }
     )
-    env.update(extra_env or {})
+    if (
+        provide_steering
+        and extra_env.get("TASK_TYPE") == "bioemu2_propagate"
+        and "BIOEMU2_STEERING_CCD" not in extra_env
+    ):
+        steering = tmp_path / "steering.pkl"
+        steering.write_bytes(b"steering dictionary")
+        steering_manifest = tmp_path / "steering.sha256"
+        steering_manifest.write_text(
+            f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  {steering}\n", encoding="utf-8"
+        )
+        env["BIOEMU2_STEERING_CCD"] = str(steering)
+        env["BIOEMU2_STEERING_CCD_MANIFEST"] = str(steering_manifest)
+    env.update(extra_env)
     completed = run_with_manifest(
         RUNNER, input_file, output_dir, env, params=params, role=role,
         extra_inputs=extra_inputs, empty_roles=empty_roles,
@@ -480,6 +550,170 @@ def test_bioemu2_propagation_reports_an_atom_mismatch(tmp_path):
     assert not (output_dir / "task_finished").exists()
 
 
+def test_bioemu2_propagation_prewarms_ccd_components_before_the_cli(tmp_path):
+    asset_root, manifest, modules, _argv, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "starting.cif"
+    starting.write_text("data_test\n", encoding="utf-8")
+    ccd_capture = tmp_path / "ccd.json"
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1},
+        {
+            **env,
+            "BIOEMU2_FAKE_CCD_CODES": "A1L3H,NAG",
+            "BIOEMU2_CCD_CAPTURE": str(ccd_capture),
+        },
+        role="starting_structure",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    # One bounded fetch per distinct component, before the command runs.
+    assert json.loads(ccd_capture.read_text(encoding="utf-8")) == {"A1L3H": 1, "NAG": 1}
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu2_propagation_retries_a_transient_ccd_failure(tmp_path):
+    asset_root, manifest, modules, _argv, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "starting.cif"
+    starting.write_text("data_test\n", encoding="utf-8")
+    ccd_capture = tmp_path / "ccd.json"
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1},
+        {
+            **env,
+            "BIOEMU2_FAKE_CCD_CODES": "A1L3H",
+            "BIOEMU2_CCD_FAIL": "transient",
+            "BIOEMU2_CCD_FAIL_TIMES": "1",
+            "BIOEMU2_CCD_CAPTURE": str(ccd_capture),
+        },
+        role="starting_structure",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(ccd_capture.read_text(encoding="utf-8")) == {"A1L3H": 2}
+    assert "attempt 1/3" in completed.stderr
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu2_propagation_does_not_retry_a_missing_ccd_component(tmp_path):
+    asset_root, manifest, modules, _argv, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "starting.cif"
+    starting.write_text("data_test\n", encoding="utf-8")
+    ccd_capture = tmp_path / "ccd.json"
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1},
+        {
+            **env,
+            "BIOEMU2_FAKE_CCD_CODES": "A1L3H",
+            "BIOEMU2_CCD_FAIL": "missing",
+            "BIOEMU2_CCD_CAPTURE": str(ccd_capture),
+        },
+        role="starting_structure",
+    )
+
+    assert completed.returncode != 0
+    assert json.loads(ccd_capture.read_text(encoding="utf-8")) == {"A1L3H": 1}
+    assert "A1L3H" in completed.stderr
+    assert "https://files.rcsb.org/ligands/download/A1L3H.cif" in completed.stderr
+    assert "not retried" in completed.stderr
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_bioemu2_ccd_codes_are_collected_and_deduplicated():
+    adapter = _adapter()
+    system = {
+        "entities": [
+            {"entity_type": "ligand", "ccd_code": "A1L3H"},
+            {"entity_type": "protein", "mods": [{"res_id": 3, "ccd_code": "SEP"}]},
+            {"entity_type": "branched", "mon_seq": [{"ccd_code": "NAG"}, {"ccd_code": "A1L3H"}]},
+            {"entity_type": "ligand", "smiles": "CC"},
+        ],
+        "bonds": [],
+    }
+
+    assert adapter._ccd_codes_in(system) == ["A1L3H", "SEP", "NAG"]
+
+
+def test_bioemu2_ccd_prefetch_retries_transient_failures_with_backoff(monkeypatch):
+    import requests
+
+    adapter = _adapter()
+    monkeypatch.setattr(adapter, "_ccd_url", lambda code: f"https://example.test/{code}.cif")
+    calls: list[str] = []
+
+    def fetch(code):
+        calls.append(code)
+        raise requests.exceptions.SSLError("EOF occurred in violation of protocol")
+
+    sleeps: list[float] = []
+    with pytest.raises(RuntimeError, match="after 3 attempts") as failure:
+        adapter.prefetch_ccd(["A1L3H"], fetch, sleep=sleeps.append)
+
+    assert calls == ["A1L3H"] * 3
+    assert sleeps == [2.0, 4.0]
+    assert "A1L3H" in str(failure.value)
+    assert "https://example.test/A1L3H.cif" in str(failure.value)
+
+
+def test_bioemu2_ccd_prefetch_stops_retrying_once_a_component_is_cached(monkeypatch):
+    import requests
+
+    adapter = _adapter()
+    monkeypatch.setattr(adapter, "_ccd_url", lambda code: f"https://example.test/{code}.cif")
+    calls: list[str] = []
+
+    def fetch(code):
+        calls.append(code)
+        if calls.count("A1L3H") == 1:
+            raise requests.exceptions.ConnectionError("reset by peer")
+
+    adapter.prefetch_ccd(["A1L3H", "NAG"], fetch, sleep=lambda _: None)
+
+    assert calls == ["A1L3H", "A1L3H", "NAG"]
+
+
+def test_bioemu2_ccd_prefetch_does_not_retry_permanent_http_errors(monkeypatch):
+    import requests
+
+    adapter = _adapter()
+    monkeypatch.setattr(adapter, "_ccd_url", lambda code: f"https://example.test/{code}.cif")
+    response = requests.Response()
+    response.status_code = 403
+    calls: list[str] = []
+
+    def fetch(code):
+        calls.append(code)
+        raise requests.exceptions.HTTPError("forbidden", response=response)
+
+    with pytest.raises(RuntimeError, match="not retried"):
+        adapter.prefetch_ccd(["A1L3H"], fetch, sleep=lambda _: pytest.fail("must not sleep"))
+
+    assert calls == ["A1L3H"]
+
+
+def test_bioemu2_ccd_prefetch_reports_upstream_errors_without_retry(monkeypatch):
+    adapter = _adapter()
+    monkeypatch.setattr(adapter, "_ccd_url", lambda code: f"https://example.test/{code}.cif")
+    calls: list[str] = []
+
+    class CCDTemplateError(Exception):
+        pass
+
+    def fetch(code):
+        calls.append(code)
+        raise CCDTemplateError(f"CCD component {code!r} was not found at RCSB")
+
+    with pytest.raises(RuntimeError, match="not retried"):
+        adapter.prefetch_ccd(["A1L3H"], fetch, sleep=lambda _: pytest.fail("must not sleep"))
+
+    assert calls == ["A1L3H"]
+
+
 def test_bioemu2_propagation_requires_the_starting_structure_role(tmp_path):
     asset_root, manifest, modules, fasta, cli = _workspace(tmp_path, with_cli=True)
 
@@ -635,3 +869,190 @@ def test_bioemu2_sequence_framing(tmp_path):
 def test_bioemu2_optional_parameters_keep_upstream_defaults():
     adapter = _adapter()
     assert adapter.sampling_kwargs({"num_samples": 4}) == {"num_samples": 4}
+
+
+def test_configure_steering_cache_exposes_the_asset_to_the_offline_hf_lookup(tmp_path, monkeypatch):
+    adapter = _adapter()
+    asset = tmp_path / "ccd.pkl"
+    asset.write_bytes(b"steering dictionary")
+    monkeypatch.delenv("HF_HOME", raising=False)
+
+    assert adapter.configure_steering_cache(tmp_path / "scratch", str(asset)) == asset
+
+    repo = tmp_path / "scratch" / "huggingface" / "hub" / "models--boltz-community--boltz-1"
+    snapshot = repo / "snapshots" / adapter.STEERING_CCD_REVISION
+    assert (snapshot / "ccd.pkl").resolve() == asset.resolve()
+    # ``try_to_load_from_cache`` reads this file verbatim; a trailing newline
+    # would stop it resolving the snapshot directory.
+    assert (repo / "refs" / "main").read_text(encoding="utf-8") == adapter.STEERING_CCD_REVISION
+    assert os.environ["HF_HOME"] == str(tmp_path / "scratch" / "huggingface")
+
+
+def test_configure_steering_cache_is_optional_and_rejects_a_missing_asset(tmp_path, monkeypatch):
+    adapter = _adapter()
+    monkeypatch.delenv("BIOEMU2_STEERING_CCD", raising=False)
+    assert adapter.configure_steering_cache(tmp_path / "unused") is None
+    with pytest.raises(RuntimeError, match="steering CCD dictionary is not configured"):
+        adapter.configure_steering_cache(tmp_path / "scratch", required=True)
+
+    with pytest.raises(RuntimeError, match="steering CCD dictionary not found"):
+        adapter.configure_steering_cache(tmp_path / "scratch", str(tmp_path / "missing.pkl"))
+
+
+def test_bioemu2_runner_verifies_the_steering_ccd_identity(tmp_path):
+    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "starting.cif"
+    starting.write_text("data_x\n_atom_site.id\n1\n", encoding="utf-8")
+    steering = tmp_path / "ccd.pkl"
+    steering.write_bytes(b"steering dictionary")
+    steering_manifest = tmp_path / "steering.sha256"
+    steering_manifest.write_text(
+        f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  {steering}\n", encoding="utf-8"
+    )
+    env.update(
+        {
+            "BIOEMU2_STEERING_CCD": str(steering),
+            "BIOEMU2_STEERING_CCD_MANIFEST": str(steering_manifest),
+        }
+    )
+
+    completed, _output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    steering.write_bytes(b"tampered")
+    completed, _output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
+    )
+    assert completed.returncode != 0
+    assert "steering CCD integrity verification failed" in completed.stderr
+
+
+def test_bioemu2_propagation_fails_early_when_the_steering_dictionary_is_missing(tmp_path):
+    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "protein.cif"
+    starting.write_text("data_protein\n_atom_site.id\n1\n", encoding="utf-8")
+    env["BIOEMU2_STEERING_CCD"] = str(tmp_path / "missing.pkl")
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
+    )
+
+    assert completed.returncode != 0
+    assert "steering CCD dictionary is missing" in completed.stderr
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_bioemu2_propagation_fails_when_the_steering_dictionary_does_not_match(tmp_path):
+    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
+    starting = tmp_path / "protein.cif"
+    starting.write_text("data_protein\n_atom_site.id\n1\n", encoding="utf-8")
+    wrong_manifest = tmp_path / "wrong-steering.sha256"
+    wrong_manifest.write_text(f"{'0' * 64}  steering.pkl\n", encoding="utf-8")
+    env["BIOEMU2_STEERING_CCD_MANIFEST"] = str(wrong_manifest)
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
+    )
+
+    assert completed.returncode != 0
+    assert "steering CCD integrity verification failed" in completed.stderr
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_bioemu2_non_propagation_modes_do_not_require_a_steering_dictionary(tmp_path):
+    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
+
+    for task_type in ("bioemu2_equilibrium", "bioemu2_structure_prediction"):
+        case_dir = tmp_path / task_type
+        case_dir.mkdir()
+        completed, output_dir, _ = _run(
+            case_dir, asset_root, manifest, modules, fasta, {"num_samples": 1},
+            {"TASK_TYPE": task_type, "BIOEMU2_STEERING_CCD": str(tmp_path / "missing.pkl")},
+        )
+        assert completed.returncode == 0, (task_type, completed.stderr)
+        assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu2_runner_config_does_not_mount_propagation_only_assets():
+    from revocompute.task_types import _load_runner_config
+
+    config = _load_runner_config(str(FAMILY / "runner.yaml"))
+
+    assert [mount.host_path for mount in config.mounts] == ["/mnt/db/weights/bioemu2"]
+    assert "BIOEMU2_STEERING_CCD" not in config.env
+
+
+def test_bioemu2_propagation_uses_the_default_steering_asset_path(tmp_path):
+    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
+    steering = asset_root / "steering" / "boltz-1-ccd.pkl"
+    steering.parent.mkdir()
+    steering.write_bytes(b"steering dictionary")
+    steering_manifest = asset_root / "steering.sha256"
+    steering_manifest.write_text(
+        f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  steering/boltz-1-ccd.pkl\n",
+        encoding="utf-8",
+    )
+    env["BIOEMU2_STEERING_CCD_MANIFEST"] = str(steering_manifest)
+    starting = tmp_path / "protein.cif"
+    starting.write_text("data_protein\n_atom_site.id\n1\n", encoding="utf-8")
+
+    completed, output_dir, _ = _run(
+        tmp_path, asset_root, manifest, modules, starting,
+        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
+        provide_steering=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert f"BioEmu2 steering CCD: {steering}" in completed.stdout
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu2_ccd_prefetch_does_not_consume_a_retry_for_invalid_urls(monkeypatch):
+    import requests
+
+    adapter = _adapter()
+    monkeypatch.setattr(adapter, "_ccd_url", lambda code: f"https://example.test/{code}.cif")
+    attempts = {"count": 0}
+
+    def fetch(_code):
+        attempts["count"] += 1
+        raise requests.exceptions.InvalidURL("bad URL")
+
+    with pytest.raises(RuntimeError, match="not retried"):
+        adapter.prefetch_ccd(["A1L3H"], fetch, sleep=lambda _: pytest.fail("must not sleep"))
+    assert attempts["count"] == 1
+
+
+def test_transient_request_error_rejects_permanent_request_failures():
+    import requests
+
+    adapter = _adapter()
+    for error in (
+        requests.exceptions.InvalidURL("invalid"),
+        requests.exceptions.InvalidSchema("schema"),
+        requests.exceptions.MissingSchema("missing"),
+        requests.exceptions.TooManyRedirects("redirects"),
+    ):
+        assert adapter._transient_request_error(error) is False, type(error).__name__
+    for error in (
+        requests.exceptions.ConnectionError("connection"),
+        requests.exceptions.Timeout("timeout"),
+        requests.exceptions.SSLError("tls"),
+        requests.exceptions.ChunkedEncodingError("dropped body"),
+    ):
+        assert adapter._transient_request_error(error) is True, type(error).__name__
+
+    class Response:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    for status_code, transient in ((429, True), (500, True), (400, False)):
+        error = requests.exceptions.HTTPError("http", response=Response(status_code))
+        assert adapter._transient_request_error(error) is transient, status_code
+    assert adapter._transient_request_error(requests.exceptions.HTTPError("no response")) is False

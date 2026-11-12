@@ -155,6 +155,14 @@ download fails rather than silently succeeding. Understating the capability
 both mispresents the Task in the type API and the submission UI and breaks the
 running Task.
 
+The declaration grants reachability; it does not provision assets. Every
+external file a runtime path loads must be mounted and verified, or fetched
+through a bounded, classified retry. A process-level offline flag is a
+guarantee only when its cache already contains the asset. An implicit asset
+that is missing otherwise fails after expensive setup, or silently disables a
+feature. Make the dependency explicit and exercise the path in the family's
+smoke plan; see [Test Plan](test-plan.md#scientific-mode-coverage).
+
 ## 4. Implement `run.sh`
 
 Resolve inputs by role with `task_input` or `task_inputs`, and read resolved

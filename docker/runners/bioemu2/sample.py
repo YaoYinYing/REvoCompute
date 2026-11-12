@@ -31,8 +31,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 
 #: The protein alphabet BioEmu2's ``Protein`` entity accepts. Stricter than the
@@ -45,6 +46,23 @@ PROTEIN_CHARS = frozenset("ACDEFGHIKLMNPQRSTVWYX")
 #: before the call keeps a re-run in the same directory deterministic without
 #: deleting anything the Server published.
 PROPAGATION_OUTPUTS = ("samples.xtc", "physicality.json")
+
+#: Upstream fetches public CCD components on the first cache miss with a single
+#: ``requests.get`` and no retry, so one transient TLS/connection failure fails
+#: the Task. The propagation path resolves those components only after the
+#: model is loaded; warming the same cache first bounds that failure without
+#: touching upstream. The cache is task-local by upstream's default, so every
+#: Task gets these attempts rather than sharing mutable cache state between
+#: concurrent Runners.
+CCD_FETCH_ATTEMPTS = 3
+CCD_FETCH_BACKOFF_SECONDS = 2.0
+
+#: Upstream's ligand steering loads the Boltz-1 CCD dictionary through
+#: ``huggingface_hub``, which under ``HF_HUB_OFFLINE=1`` only checks its local
+#: cache. The dictionary is mounted read-only, so the adapter exposes it to that
+#: lookup through a task-local cache instead of downloading it.
+STEERING_CCD_REVISION = "7c1d83b779e4c65ecc37dfdf0c6b2788076f31e1"
+_STEERING_CCD_REPO = "models--boltz-community--boltz-1"
 
 #: mmCIF categories whose molecular meaning upstream's CIF inference does not
 #: preserve: explicit connections are ignored and branched entities omitted.
@@ -222,20 +240,180 @@ def sample(manifest: dict, output_dir: Path, checkpoint: Path, mode: str) -> Non
     (output_dir / "sequence.fasta").write_text(f">input\n{sequence}\n", encoding="utf-8")
 
 
+def _ccd_codes_in(value: object) -> list[str]:
+    """CCD codes named anywhere in a serialized system, in first-seen order."""
+    codes: list[str] = []
+
+    def visit(node: object) -> None:
+        if isinstance(node, dict):
+            code = node.get("ccd_code")
+            if isinstance(code, str) and code:
+                codes.append(code)
+            for key, item in node.items():
+                if key != "ccd_code":
+                    visit(item)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                visit(item)
+
+    visit(value)
+    return list(dict.fromkeys(codes))
+
+
+def propagation_ccd_codes(starting_structure: Path, declared_system: Path | None) -> list[str]:
+    """The CCD components upstream's ``propagate`` will resolve for this Task.
+
+    Resolving the same ``System`` from the same inputs keeps this list identical
+    to the command's. Upstream's validation rejects invalid codes before any
+    request, so a missing component reaches the fetch as a 404, not a typo.
+    """
+    from bioemu2 import System
+    from bioemu2.data_interface import load_system_and_contacts
+
+    if declared_system is not None:
+        system, _contacts = load_system_and_contacts(declared_system)
+    else:
+        system = System.from_cif(starting_structure)
+    return _ccd_codes_in(system.model_dump())
+
+
+def _ccd_url(ccd_code: str) -> str:
+    """Upstream's CCD download URL, imported so the diagnostic cannot drift."""
+    from bioemu2.structure.templates import _CCD_URL
+
+    return _CCD_URL.format(ccd_code=ccd_code)
+
+
+def _fetch_ccd(ccd_code: str) -> None:
+    """Populate upstream's on-disk CCD cache for one component code."""
+    from bioemu2.structure.templates import _get_ccd_path
+
+    _get_ccd_path(ccd_code)
+
+
+def _transient_request_error(error: Exception) -> bool:
+    """Whether a failed CCD request can be retried without changing its meaning."""
+    import requests
+
+    if isinstance(error, requests.exceptions.HTTPError):
+        response = error.response
+        return response is not None and (response.status_code == 429 or response.status_code >= 500)
+    # SSLError is a ConnectionError subclass. ChunkedEncodingError reports a
+    # connection dropped mid-body, so a fresh request may succeed. InvalidURL,
+    # InvalidSchema, MissingSchema, and TooManyRedirects are permanent and must
+    # not retry.
+    return isinstance(
+        error,
+        (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        ),
+    )
+
+
+def prefetch_ccd(
+    ccd_codes: Iterable[str],
+    fetch: Callable[[str], object] = _fetch_ccd,
+    *,
+    attempts: int = CCD_FETCH_ATTEMPTS,
+    backoff: float = CCD_FETCH_BACKOFF_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Warm upstream's CCD cache, retrying only transient request failures.
+
+    A missing component (404), an invalid code, or any other permanent error is
+    raised immediately. A connection, TLS, timeout, a body dropped mid-transfer
+    (`ChunkedEncodingError`), 429, or 5xx failure is retried with exponential
+    backoff up to *attempts* total; the final error names the component, URL,
+    and attempt count.
+    """
+    import requests
+
+    for ccd_code in ccd_codes:
+        url = _ccd_url(ccd_code)
+        for attempt in range(1, attempts + 1):
+            try:
+                fetch(ccd_code)
+            except requests.exceptions.RequestException as error:
+                if not _transient_request_error(error):
+                    raise RuntimeError(
+                        f"BioEmu2 CCD component {ccd_code!r} could not be fetched from {url} "
+                        f"(attempt 1 of {attempts}, not retried): {error}"
+                    ) from error
+                if attempt == attempts:
+                    raise RuntimeError(
+                        f"BioEmu2 CCD component {ccd_code!r} could not be fetched from {url} "
+                        f"after {attempts} attempts: {error}"
+                    ) from error
+                print(
+                    f"BioEmu2 CCD fetch for {ccd_code!r} failed "
+                    f"(attempt {attempt}/{attempts}): {error}",
+                    file=sys.stderr,
+                )
+                sleep(backoff * 2 ** (attempt - 1))
+            except Exception as error:
+                raise RuntimeError(
+                    f"BioEmu2 CCD component {ccd_code!r} could not be prepared from {url} "
+                    f"(attempt 1 of {attempts}, not retried): {error}"
+                ) from error
+            else:
+                break
+
+
+def configure_steering_cache(
+    scratch: Path, source: str | None = None, *, required: bool = False
+) -> Path | None:
+    """Expose the mounted steering dictionary to upstream's offline HF lookup.
+
+    ``huggingface_hub`` resolves a cached file under ``HF_HOME`` before it
+    attempts a network request. A task-local cache entry made from the verified
+    read-only asset keeps the lookup offline and leaves no mutable shared state.
+    Propagation requires the dictionary: without it the CLI fails only after
+    loading the model, with an offline cache error from upstream.
+    """
+    source = source if source is not None else os.environ.get("BIOEMU2_STEERING_CCD")
+    if not source:
+        if required:
+            raise RuntimeError(
+                "BioEmu2 steering CCD dictionary is not configured; set BIOEMU2_STEERING_CCD"
+            )
+        return None
+    asset = Path(source)
+    if not asset.is_file():
+        raise RuntimeError(f"BioEmu2 steering CCD dictionary not found: {asset}")
+    cache = scratch / "huggingface"
+    repo = cache / "hub" / _STEERING_CCD_REPO
+    snapshot = repo / "snapshots" / STEERING_CCD_REVISION
+    snapshot.mkdir(parents=True)
+    (snapshot / "ccd.pkl").symlink_to(asset)
+    refs = repo / "refs"
+    refs.mkdir()
+    # ``try_to_load_from_cache`` reads this file verbatim, so it must not carry
+    # a trailing newline.
+    (refs / "main").write_text(STEERING_CCD_REVISION, encoding="utf-8")
+    os.environ["HF_HOME"] = str(cache)
+    print(f"BioEmu2 steering CCD: {asset}")
+    return asset
+
+
 def propagate(manifest: dict, output_dir: Path, checkpoint: Path) -> None:
     """Run upstream's ``bioemu2 propagate`` command from one starting CIF.
 
     Without a ``system`` input the upstream command infers the molecular system
     from ``--x0-cif``; that inference ignores explicit connections and branched
     entities, so those structures are refused unless the submission supplies the
-    matching system YAML. It saves one independent endpoint per requested sample
-    at a single lag and refuses to overwrite its own coordinate and physicality
-    files, so only those are cleared before the call; every other output is
-    upstream's to replace.
+    matching system YAML. Its CCD components are fetched into upstream's cache
+    first, because upstream resolves them only after loading the model and does
+    not retry a transient request. It saves one independent endpoint per
+    requested sample at a single lag and refuses to overwrite its own coordinate
+    and physicality files, so only those are cleared before the call; every
+    other output is upstream's to replace.
     """
     starting_structure = input_path(manifest, "starting_structure")
     declared_system = optional_input_path(manifest, "system")
     require_exact_system(starting_structure, declared_system)
+    prefetch_ccd(propagation_ccd_codes(starting_structure, declared_system))
     params = manifest["params"]
     for name in PROPAGATION_OUTPUTS:
         (output_dir / name).unlink(missing_ok=True)
@@ -295,6 +473,7 @@ def main() -> int:
     os.environ["BIOEMU2_MSA_CACHE"] = str(scratch / "colabfold_msa")
     try:
         if args.mode == "propagate":
+            configure_steering_cache(scratch, required=True)
             propagate(manifest, args.output_dir, checkpoint)
         else:
             sample(manifest, args.output_dir, checkpoint, args.mode)

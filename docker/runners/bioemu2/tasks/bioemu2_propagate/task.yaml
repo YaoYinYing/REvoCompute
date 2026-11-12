@@ -20,10 +20,18 @@ considerations:
   declares them. A ligand that CIF inference represents is kept; presence of a ligand
   alone is not a reason for refusal. Exactly one starting structure is accepted per
   run.
+- A protein declared by sequence uses BioEmu2's residue templates, which omit the
+  terminal `OXT` atom. A full all-atom CIF that includes `OXT` must be reconciled
+  explicitly before submission; the Runner refuses the atom mismatch rather than
+  altering the structure.
 - Physicality checking reports per-endpoint results in physicality.json; every endpoint
   is retained and none is removed because of the report.
 - BioEmu2 queries the public ColabFold MMseqs2 service (api.colabfold.com) for the
   system alignment on every run.
+- Ligand steering uses the pinned Boltz-1 CCD dictionary. A ligand code absent from
+  that dictionary, such as a novel predicted ligand, is sampled without
+  ligand-specific steering constraints; the rest of the system and the physicality
+  check are unchanged.
 - The released checkpoint is a preview; upstream tested it with an 80 GB A100 as the
   smallest device.
 requires_network: true
