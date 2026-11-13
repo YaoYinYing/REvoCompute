@@ -1,6 +1,8 @@
-# Logical result files published by the BioEmu2 equilibrium and structure
-# prediction Tasks, which share this contract because both call an upstream
-# sampling entry point with an identical output set.
+# Logical result files published by the legacy BioEmu2 equilibrium and
+# structure prediction Tasks, which share this contract because both call an
+# upstream sampling entry point with an identical output set. The unified
+# `bioemu2` Task owns `tasks/bioemu2/expected_files.yaml`, which drops the FASTA
+# echo and declares `command.txt` optional.
 #
 # The Runner owns this judgement. Allowed `role:` values are evidence |
 # provenance | diagnostic | artifact. `topology.cif` is upstream's topology for

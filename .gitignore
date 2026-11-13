@@ -5,6 +5,9 @@
 # to a shared install is ignored too, not only a real directory.
 node_modules
 frontend/dist/
+# Build-time-fetched, checksum-pinned JAAG core (Apache-2.0); see
+# frontend/scripts/fetch-jaag-core.mjs and frontend/provenance/jaag.json.
+frontend/vendor/jaag-core.global.js
 revocompute/static/vendor/molstar/
 revocompute/static/app/
 *.py[cod]

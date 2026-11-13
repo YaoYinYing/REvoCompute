@@ -342,6 +342,7 @@ def load_validation_identity(
                     "formats": role.formats,
                     "minimum": role.minimum,
                     "maximum": role.maximum,
+                    **({"presence": role.presence.to_dict()} if role.presence else {}),
                 }
                 for role in task_type.inputs
             ],

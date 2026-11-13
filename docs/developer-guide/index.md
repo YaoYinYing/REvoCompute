@@ -11,6 +11,9 @@ execution boundaries, extension contracts, and the test policy.
   typed registry.
 - [Execution Model](execution-model.md) — from API request to Slurm/Apptainer
   execution and parsed outputs.
+- [Live Task Reproduction](live-task-reproduction.md) — reproduce a delivered
+  Task from its immutable snapshot with the pinned runtime, including service-owned
+  result trees, representation reconciliation, and offline caches.
 - [Execution Stage State](execution-stage-state.md) — the `stage_runs` attempt
   record that owns stage status, transitions, and Task-status projection.
 - [Composable Execution Architecture](composable-execution-architecture.md) —

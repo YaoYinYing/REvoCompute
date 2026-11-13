@@ -571,7 +571,8 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         )
     for role in task_type_def.inputs:
         count = len(manifest_inputs.get(role.name, ()))
-        if count < role.minimum or count > role.maximum:
+        minimum, maximum = role.cardinality(parameters)
+        if count < minimum or count > maximum:
             raise ValueError(f"live-test input role {role.name!r} violates cardinality")
     for name, value in parameters.items():
         entities.append(

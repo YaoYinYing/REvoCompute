@@ -2,17 +2,20 @@ version: 1
 collections:
   smoke:
     cases:
-    - id: minimal-bioemu2
-      task: bioemu2_equilibrium
+    - id: equilibrium-bioemu2
+      task: bioemu2
       # Longer than cuEquivariance's 100-residue fallback threshold, so the case
       # runs the Triton kernels that need the image's C toolchain.
-      input: {roles: {sequence: [tests/data/test_esm.fasta]}}
-      parameters: {num_samples: 2, num_steps: 4, seed: 0}
+      input: {roles: {system: [tests/data/bioemu2/equilibrium_system.yaml]}}
+      parameters: {mode: equilibrium, num_samples: 2, num_steps: 4, seed: 0}
     - id: structure-bioemu2
-      task: bioemu2_structure_prediction
-      input: {roles: {sequence: [tests/data/test_esm.fasta]}}
-      parameters: {num_samples: 1, num_steps: 4, seed: 0}
+      task: bioemu2
+      input: {roles: {system: [tests/data/bioemu2/equilibrium_system.yaml]}}
+      parameters: {mode: structure_prediction, num_samples: 1, num_steps: 4, seed: 0}
     - id: propagate-bioemu2
-      task: bioemu2_propagate
-      input: {roles: {starting_structure: [tests/data/bioemu2/propagation_start.cif]}}
-      parameters: {num_samples: 1, lag_time_ns: 1, num_steps: 4, seed: 0}
+      task: bioemu2
+      input:
+        roles:
+          system: [tests/data/bioemu2/propagation_start.yaml]
+          starting_structure: [tests/data/bioemu2/propagation_start.cif]
+      parameters: {mode: propagate, num_samples: 1, lag_time_ns: 1, num_steps: 4, seed: 0}

@@ -1,0 +1,194 @@
+display_name: BioEmu2
+category: structure
+id: bioemu2
+summary: Sample BioEmu2 equilibrium ensembles, predict folded structures, or propagate
+  a starting structure by a fixed time lag.
+use_when: Use this for a BioEmu2 System YAML. Choose equilibrium for a diverse
+  conformational ensemble, structure prediction for folded-structure conditioning,
+  or propagate to advance one all-atom starting structure by a fixed lag.
+input_summary: One BioEmu2 System YAML, plus one all-atom mmCIF starting structure
+  when the mode is propagate.
+output_summary: Independent all-atom frames, the matching mmCIF topology, per-frame
+  physicality results, and the resolved sampling system.
+considerations:
+- BioEmu2 samples a model distribution; an equilibrium ensemble is not a measured
+  thermodynamic population, predicted structures are not an equilibrium ensemble,
+  and propagated endpoints are independent samples at one lag, not a time-ordered
+  trajectory.
+- The System YAML is authoritative for molecular composition, chain IDs,
+  modifications, and explicit bonds. The Runner parses it with the pinned upstream
+  parser and refuses a malformed or unsupported system before sampling.
+- In propagate mode the pinned upstream command compares the starting CIF atoms
+  and their order with the System YAML before loading the model and refuses a
+  mismatch rather than altering the chemistry or inventing atoms. The starting
+  structure role is required for propagate and refused for the other modes.
+- Physicality checking reports per-frame results in physicality.json; every frame
+  is retained and no frame is removed because of the report.
+- BioEmu2 queries the public ColabFold MMseqs2 service (api.colabfold.com) for the
+  system alignment on every run.
+- Ligand steering uses the pinned Boltz-1 CCD dictionary. It is consulted by the
+  steered samplers (edm_gd, edm_fk, edm_fkc) in every mode when the System declares
+  a CCD ligand; the unsteered edm sampler never loads it. A ligand code absent from
+  that dictionary is sampled without ligand-specific steering constraints, and the
+  rest of the system and the physicality check are unchanged.
+- The released checkpoint is a preview; upstream tested it with an 80 GB A100 as
+  the smallest device.
+# Without a supplied alignment upstream's get_msa queries its hosted MMseqs2
+# service, so the capability is declared unconditionally.
+requires_network: true
+gpus: true
+inputs:
+  system:
+    title: BioEmu2 system
+    type: supporting_data
+    cardinality: {min: 1, max: 1}
+    formats: [yaml, yml]
+    description: Exactly one BioEmu2 System YAML describing the molecular entities,
+      chain IDs, modifications, explicit bonds, and optional contacts. The Runner
+      validates it with the pinned upstream parser.
+  starting_structure:
+    title: Starting structure
+    type: protein_structure
+    cardinality: {min: 0, max: 1}
+    formats: [cif]
+    presence:
+      parameter: mode
+      required_when: [propagate]
+      forbidden_when: [equilibrium, structure_prediction]
+    description: Exactly one all-atom mmCIF structure, required only for propagate.
+      Its atoms and their order must match the System YAML exactly; upstream refuses
+      a mismatch before loading the model.
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the molecular system
+    description: Upload a BioEmu2 System YAML or build one with JAAG. Propagation
+      also needs the starting mmCIF structure.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: System and starting structure
+    - plugin: jaag-builder
+      id: jaag_system_builder
+      title: Build a System YAML
+      description: Author and validate a System YAML with the pinned JAAG builder.
+        Generating binds the YAML to the system role and replaces the current
+        upload; a later upload through the files capability replaces the
+        generated file.
+      options:
+        target: bioemu2
+        role: system
+  - id: settings
+    title: Set the experiment
+    description: Choose the scientific mode and adjust only the controls that matter
+      for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the system, starting structure, and settings before creating
+      the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: trajectory
+    id: bioemu2_frames
+    role: primary
+    title: BioEmu2 structures
+    description: >-
+      One independent structure per frame: an equilibrium conformation, a
+      predicted folded structure, or a propagation endpoint. Frame order is
+      generation order, not physical time.
+    sources:
+      topology:
+      - path: topology.cif
+        required: true
+      coordinates:
+      - path: samples.xtc
+        required: true
+    mapping:
+      coordinate_format: xtc
+      topology_format: mmcif
+      frame_unit: sample
+      timestep: 1
+      association: single
+stage_markers:
+  bioemu2: BioEmu2
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  allOf:
+  - if:
+      properties: {mode: {const: propagate}}
+      required: [mode]
+    then:
+      required: [lag_time_ns]
+  - if:
+      properties: {mode: {enum: [equilibrium, structure_prediction]}}
+      required: [mode]
+    then:
+      properties: {lag_time_ns: false}
+  properties:
+    mode:
+      type: string
+      description: Biological operation. equilibrium samples a conformational ensemble;
+        structure_prediction applies folded-structure conditioning; propagate samples
+        endpoints at one lag from the starting structure.
+      default: equilibrium
+      enum: [equilibrium, structure_prediction, propagate]
+    num_samples:
+      type: integer
+      description: Number of independent structures to generate or endpoints to sample.
+        The default applies to every mode; lower it for structure prediction or
+        propagation to bound GPU cost.
+      default: 8
+      minimum: 1
+      maximum: 1000
+    sampler:
+      type: string
+      description: Sampling algorithm; edm is unsteered, edm_gd uses gradient guidance,
+        edm_fk adds Feynman-Kac resampling, and edm_fkc uses the Feynman-Kac corrector
+        with the default physicality potentials.
+      default: edm
+      enum: [edm, edm_gd, edm_fk, edm_fkc]
+    num_steps:
+      type: integer
+      description: Number of denoising steps; when omitted the sampler's configured
+        step count applies.
+      minimum: 1
+      maximum: 1000
+    batch_size:
+      type: integer
+      description: Number of structures denoised together; when omitted the sample
+        count is used.
+      minimum: 1
+      maximum: 1000
+    physicality_mode:
+      type: string
+      description: Physicality thresholds reported per frame for invalid bond lengths,
+        clashes, chirality, and chain breaks; no_filter still writes physicality.json
+        with each frame's status reported as not checked, and no frame is removed.
+      default: high_quality
+      enum: [no_filter, no_violations, high_quality, high_quality_per_residue]
+    lag_time_ns:
+      type: number
+      description: Time lag in nanoseconds for each propagated endpoint. Required in
+        propagate mode and refused in the other modes. Upstream recommends 1 to 1000
+        ns, the range the model mostly saw during training.
+      exclusiveMinimum: 0
+      maximum: 1000
+    seed:
+      type: integer
+      x-ui-control: {kind: seed}
+      description: Optional random seed; when omitted repeated runs generally produce
+        different structures.
+      minimum: 0
+      maximum: 2147483647

@@ -1279,6 +1279,7 @@ def _task_summary(tt, *, include_internal_metadata: bool = False) -> dict[str, A
                     "formats": list(role.formats),
                     "cardinality": {"min": role.minimum, "max": role.maximum},
                     "description": role.description,
+                    **({"presence": role.presence.to_dict()} if role.presence else {}),
                 }
                 for role in tt.inputs
             ],
@@ -1310,6 +1311,8 @@ def _available_task_types(*, include_runner_metadata: bool = False) -> dict[str,
     manage_db = current_app.config.get("manage_db")
     enabled_types = []
     for tt in list_types():
+        if tt.deprecated:
+            continue
         if manage_db is not None and manage_db.task_type_is_enabled(tt.name) is False:
             continue
         enabled_types.append(_task_summary(tt, include_internal_metadata=include_runner_metadata))
@@ -1459,6 +1462,8 @@ def task_type_form(name: str):
         tt, runner = _get_task_type(name)
     except KeyError:
         return jsonify({"error": f"Unknown task type: {name!r}"}), 404
+    if tt.deprecated:
+        return jsonify({"error": f"Unknown task type: {name!r}"}), 404
 
     manage_db = current_app.config.get("manage_db")
     if manage_db is not None:
@@ -1502,6 +1507,7 @@ def task_type_form(name: str):
                 "accept": ",".join(role.extensions),
                 "cardinality": {"min": role.minimum, "max": role.maximum},
                 "description": role.description,
+                **({"presence": role.presence.to_dict()} if role.presence else {}),
             }
             for role in tt.inputs
         ],
@@ -1549,6 +1555,8 @@ def _enabled_task_type_or_404(name: str):
     try:
         tt, _runner = _get_task_type(name)
     except KeyError:
+        return None, (jsonify({"error": f"Unknown task type: {name!r}"}), 404)
+    if tt.deprecated:
         return None, (jsonify({"error": f"Unknown task type: {name!r}"}), 404)
     manage_db = current_app.config.get("manage_db")
     if manage_db is not None and manage_db.task_type_is_enabled(tt.name) is False:
@@ -1718,16 +1726,35 @@ def _role_by_name(task_type: Any, name: str):
     return next((role for role in task_type.inputs if role.name == name), None)
 
 
-def _validate_role_counts(task_type: Any, role_names: list[str]):
+def _validate_role_counts(task_type: Any, role_names: list[str], parameters: dict[str, Any] | None = None):
     known = {role.name for role in task_type.inputs}
     unknown = next((name for name in role_names if name not in known), None)
     if unknown is not None:
         return _input_contract_error("input_role_unknown", f"Unknown input role: {unknown}", role=unknown)
+    parameters = parameters or {}
     for role in task_type.inputs:
         count = role_names.count(role.name)
-        if count < role.minimum or count > role.maximum:
-            message = f"Input role {role.name!r} requires {role.minimum}..{role.maximum} file(s); received {count}."
-            return _input_contract_error("input_role_cardinality", message, role=role.name)
+        minimum, maximum = role.cardinality(parameters)
+        if minimum <= count <= maximum:
+            continue
+        presence = getattr(role, "presence", None)
+        selected = parameters.get(presence.parameter) if presence is not None else None
+        if presence is not None and selected is not None:
+            selected = str(selected)
+            if selected in presence.required_when and count < minimum:
+                message = (
+                    f"Input role {role.name!r} is required when "
+                    f"{presence.parameter!r} is {selected!r}."
+                )
+                return _input_contract_error("input_role_presence", message, role=role.name)
+            if selected in presence.forbidden_when and count > maximum:
+                message = (
+                    f"Input role {role.name!r} is not accepted when "
+                    f"{presence.parameter!r} is {selected!r}."
+                )
+                return _input_contract_error("input_role_presence", message, role=role.name)
+        message = f"Input role {role.name!r} requires {minimum}..{maximum} file(s); received {count}."
+        return _input_contract_error("input_role_cardinality", message, role=role.name)
     return None
 
 
@@ -1888,7 +1915,7 @@ def _resolve_tool_outputs(
     return resolved, None
 
 
-def _validate_input_uploads(task_type: str | None = None):
+def _validate_input_uploads(task_type: str | None = None, parameters: dict[str, Any] | None = None):
     """Apply transport and task-role checks without assigning meaning by upload order."""
     task_type = task_type or default_task_type()
     try:
@@ -1933,7 +1960,7 @@ def _validate_input_uploads(task_type: str | None = None):
             "input_file_count_limit",
             f"Submission contains more than the {max_input_files} input file limit.",
         )
-    if error := _validate_role_counts(tt, declared_roles):
+    if error := _validate_role_counts(tt, declared_roles, parameters):
         return None, error
     tool_inputs, tool_error = _resolve_tool_outputs(tt, tool_references, tool_roles)
     if tool_error is not None:
@@ -2690,6 +2717,10 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         tt, runner = _get_task_type(task_type)
     except KeyError:
         return jsonify({"error": f"Unknown task type: {task_type}"}), 400
+    if tt.deprecated:
+        # A legacy descriptor stays registered so historical results still
+        # resolve, but it is never a selectable new submission.
+        return jsonify({"error": f"Unknown task type: {task_type}"}), 400
     # Clone provenance is an assertion about the caller's own history, so it is
     # verified against the same visibility rule as every Task read. An
     # unavailable source is refused rather than silently dropped: a draft that
@@ -3151,7 +3182,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         message = f"The reused artifact was prepared from input role {input_role!r}; provide that input to reuse it."
         return jsonify({"error": message, "reason_code": code,
                         "details": [{"code": code, "message": message}]}), 400
-    uploaded_inputs, upload_error = _validate_input_uploads(task_type)
+    uploaded_inputs, upload_error = _validate_input_uploads(task_type, submission.coerce_params())
     if upload_error is not None:
         return upload_error
     quarantined: list[str] = []

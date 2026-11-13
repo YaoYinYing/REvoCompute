@@ -231,7 +231,11 @@ def diagnose(
                 task_id = str(doc.get("id", path.parent.name))
                 if task_id == task:
                     task_found = True
-                family_tasks.add(task_id)
+                # A deprecated descriptor stays registered so historical results
+                # resolve, but it is never executed, so it is not an obligation
+                # of the family's smoke collection.
+                if not doc.get("deprecated", False):
+                    family_tasks.add(task_id)
                 workspace = doc.get("input_workspace") or {}
                 for step in workspace.get("steps", []) if isinstance(workspace, dict) else ():
                     for capability in step.get("capabilities", []) if isinstance(step, dict) else ():

@@ -97,6 +97,7 @@ REASON_CODES: dict[Phase, frozenset[str]] = {
             "input_role_format",
             "input_role_unknown",
             "input_role_cardinality",
+            "input_role_presence",
             "tool_output_reference_invalid",
             "tool_output_reference_unavailable",
             "tool_output_reference_mismatch",

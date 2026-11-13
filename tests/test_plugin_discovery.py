@@ -89,6 +89,28 @@ def test_distributed_task_rejects_invalid_role_cardinality(tmp_path):
         discover_plugins(str(tmp_path))
 
 
+def test_presence_must_name_a_declared_schema_enum_value(tmp_path):
+    family = tmp_path / "demo"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text(
+        "id: echo\ninputs:\n  source:\n    type: text\n    formats: [json]\n"
+        "    cardinality: {min: 0, max: 1}\n"
+        "    presence:\n      parameter: mode\n      required_when: [propagate]\n"
+        "      forbidden_when: [equilibrium]\n"
+        "parameters:\n  type: object\n  properties:\n    mode: {type: string, enum: [equilibrium]}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="undeclared values"):
+        discover_plugins(str(tmp_path))
+
+
 def test_a_workflow_declaring_gpus_must_declare_a_gpu_stage(tmp_path):
     """Placement reads a workflow's accelerator need from its stages."""
     family = tmp_path / "demo"

@@ -1,5 +1,6 @@
 import { createIcons, Dice5 } from 'lucide';
 import { alignmentPreview, residueTone } from './alignment-preview';
+import { jaagBuilder } from './jaag-builder';
 import { parameterValue, seedConstant, validateParameter } from '../parameter-controls';
 import type { ParameterDefinition, TaskFormDefinition } from '../types';
 import { t } from '../../../app/i18n';
@@ -16,6 +17,35 @@ export function structureFormat(name: string): 'pdb' | 'mmcif' {
 
 export function inputByParameter(name: string): HTMLInputElement | HTMLSelectElement | null {
   return document.querySelector(`[data-ct-parameter="${CSS.escape(name)}"]`);
+}
+
+export interface EffectiveRoleCardinality {
+  minimum: number;
+  maximum: number;
+  required: boolean;
+  forbidden: boolean;
+}
+
+/**
+ * A role's cardinality under the form's current parameter values.
+ *
+ * The server declares the presence rule and enforces it on submission; this is
+ * the same rule projected into the browser so the CIF field is shown, required,
+ * or refused with the selected mode instead of failing after upload.
+ */
+export function effectiveRoleCardinality(
+  role: { cardinality: { min: number; max: number }; presence?: { parameter: string; required_when: string[]; forbidden_when: string[] } },
+  parameters: Record<string, string>,
+): EffectiveRoleCardinality {
+  let minimum = role.cardinality.min;
+  let maximum = role.cardinality.max;
+  const presence = role.presence;
+  const selected = presence ? parameters[presence.parameter] : undefined;
+  const required = Boolean(presence && selected !== undefined && presence.required_when.includes(selected));
+  const forbidden = Boolean(presence && selected !== undefined && presence.forbidden_when.includes(selected));
+  if (required) minimum = Math.max(minimum, 1);
+  else if (forbidden) maximum = 0;
+  return { minimum, maximum, required, forbidden };
 }
 
 function renderParameter(parameter: ParameterDefinition, context: WorkspaceContext): HTMLElement {
@@ -138,6 +168,7 @@ const filesPlugin: WorkspacePlugin = {
       const input = element('input'); input.id = id; input.type = 'file'; input.multiple = role.cardinality.max > 1; input.accept = role.accept || role.extensions.join(',');
       input.setAttribute('aria-label', `${t('ct.files.choose')}: ${role.title}`);
       const hint = element('p', 'ct-help', role.description || t('ct.files.hint', { minimum: role.cardinality.min, maximum: role.cardinality.max, formats: role.formats.join(', ') }));
+      const presence = element('p', 'ct-help ct-file-presence'); presence.hidden = true;
       const well = element('div', 'ct-file-well');
       const mark = element('span', 'ct-file-symbol', '↥'); mark.setAttribute('aria-hidden', 'true');
       const identity = element('div', 'ct-file-identity');
@@ -148,8 +179,38 @@ const filesPlugin: WorkspacePlugin = {
       const list = element('div', 'ct-file-list');
       const preview = element('div', 'ct-input-preview'); preview.hidden = true; preview.setAttribute('aria-label', t('ct.files.preview'));
       let previewGeneration = 0;
+      let discarded = false;
       const error = element('p', 'ct-field-error'); error.hidden = true; input.setAttribute('aria-describedby', `${id}-error`); error.id = `${id}-error`;
       const render = () => {
+        const parameters = context.parameters();
+        const cardinality = effectiveRoleCardinality(role, parameters);
+        const parameter = role.presence
+          ? context.form.params.find(item => item.name === role.presence!.parameter)
+          : undefined;
+        const selected = role.presence ? parameters[role.presence.parameter] : undefined;
+        // A forbidden role's files are not submitted. Discarding them in the
+        // form is the visible half of the rule the Server enforces; the notice
+        // stays until the selecting parameter leaves the forbidden values.
+        if (cardinality.forbidden) {
+          const current = context.roleFiles(role.id);
+          if (current.length) { context.setRoleFiles(role.id, []); input.value = ''; discarded = true; }
+          well.hidden = true;
+        } else {
+          discarded = false;
+          well.hidden = false;
+        }
+        input.required = cardinality.required;
+        if (role.presence && parameter && selected !== undefined) {
+          const copy = { role: role.title, parameter: parameter.label, value: selected };
+          presence.textContent = cardinality.forbidden ? t('ct.files.forbiddenWhen', copy) : t('ct.files.requiredWhen', copy);
+          presence.hidden = !(cardinality.forbidden || cardinality.required);
+        } else {
+          presence.hidden = true;
+        }
+        error.textContent = discarded
+          ? t('ct.files.discarded', { role: role.title, parameter: parameter?.label || role.presence?.parameter || '', value: selected || '' })
+          : '';
+        error.hidden = !discarded;
         const files = context.roleFiles(role.id); list.replaceChildren();
         const generation = ++previewGeneration; preview.hidden = true; preview.textContent = '';
         const first = files[0];
@@ -208,7 +269,7 @@ const filesPlugin: WorkspacePlugin = {
       };
       remove.addEventListener('click', () => { context.setRoleFiles(role.id, []); input.value = ''; render(); context.filesChanged(); });
       input.addEventListener('change', () => { context.setRoleFiles(role.id, Array.from(input.files || [])); render(); context.filesChanged(); });
-      const contract = element('details', 'ct-input-contract'); contract.append(element('summary', '', t('ct.files.contract')), hint); if (roles.length === 1) label.classList.add('sr-only'); group.append(label, well, remove, list, preview, contract, error); target.append(group); render(); controls.push({ role, input, list, error, render });
+      const contract = element('details', 'ct-input-contract'); contract.append(element('summary', '', t('ct.files.contract')), hint); if (roles.length === 1) label.classList.add('sr-only'); group.append(label, well, presence, remove, list, preview, contract, error); target.append(group); render(); controls.push({ role, input, list, error, render });
     });
     return {
       // A role binding changed by something other than this element - a preset
@@ -227,8 +288,15 @@ const filesPlugin: WorkspacePlugin = {
         controls.forEach(({ role, input, error }) => {
           const files = context.roleFiles(role.id); const sequence = context.sequenceRole() === role.id && context.sequence() ? 1 : 0;
           const roleErrors: string[] = [];
-          const range = { role: role.title, minimum: role.cardinality.min, maximum: role.cardinality.max };
-          if (files.length + sequence < role.cardinality.min || files.length + sequence > role.cardinality.max) roleErrors.push(t('ct.files.range', range));
+          const cardinality = effectiveRoleCardinality(role, context.parameters());
+          const range = { role: role.title, minimum: cardinality.minimum, maximum: cardinality.maximum };
+          // The browser refuses the same conditional state the Server refuses,
+          // including a file bound before the selecting parameter changed.
+          if (cardinality.forbidden && files.length + sequence > 0) {
+            roleErrors.push(t('ct.files.forbiddenWhen', { role: role.title, parameter: role.presence?.parameter || '', value: context.parameters()[role.presence?.parameter || ''] || '' }));
+          } else if (files.length + sequence < cardinality.minimum || files.length + sequence > cardinality.maximum) {
+            roleErrors.push(t('ct.files.range', range));
+          }
           if (files.some(file => !matchesExtension(file, role.extensions))) roleErrors.push(t('ct.files.format', range));
           input.toggleAttribute('aria-invalid', roleErrors.length > 0); error.textContent = roleErrors[0] || ''; error.hidden = !roleErrors.length; errors.push(...roleErrors);
         });
@@ -369,4 +437,4 @@ const reviewPlugin: WorkspacePlugin = {
   },
 };
 
-export const builtinPlugins: WorkspacePlugin[] = [filesPlugin, sequencePlugin, structurePlugin, parameterPlugin('regions'), parameterPlugin('parameters'), reviewPlugin];
+export const builtinPlugins: WorkspacePlugin[] = [filesPlugin, sequencePlugin, structurePlugin, parameterPlugin('regions'), parameterPlugin('parameters'), jaagBuilder, reviewPlugin];

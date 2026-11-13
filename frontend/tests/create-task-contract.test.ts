@@ -5,7 +5,7 @@ import { parametersFromSchema, seedConstant } from '../src/features/create-task/
 import { InputWorkspace, selectableExecutionModes } from '../src/features/create-task/input-workspace/InputWorkspace';
 import { HarnessNode, installHarness } from './dom-harness';
 import { buildSubmissionFormData } from '../src/features/create-task/submission';
-import { maxOriginalBytes, structureFormat } from '../src/features/create-task/input-workspace/builtins';
+import { effectiveRoleCardinality, maxOriginalBytes, structureFormat } from '../src/features/create-task/input-workspace/builtins';
 import type { ParameterDefinition, TaskFormDefinition } from '../src/features/create-task/types';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -195,6 +195,31 @@ describe('Create Task server contracts', () => {
     // range the schema published, so it fails loud instead.
     const wider = projected({ minimum: 0, maximum: 4_294_967_296, 'x-ui-control': { kind: 'seed' } });
     expect(() => seedConstant(wider, draws(0))).toThrow(/wider than a 32-bit draw/);
+  });
+});
+
+
+describe('conditional input roles', () => {
+  it('projects a conditional input role from the selected mode', () => {
+    const role = {
+      cardinality: { min: 0, max: 1 },
+      presence: {
+        parameter: 'mode',
+        required_when: ['propagate'],
+        forbidden_when: ['equilibrium', 'structure_prediction'],
+      },
+    };
+
+    expect(effectiveRoleCardinality(role, { mode: 'propagate' }))
+      .toEqual({ minimum: 1, maximum: 1, required: true, forbidden: false });
+    expect(effectiveRoleCardinality(role, { mode: 'equilibrium' }))
+      .toEqual({ minimum: 0, maximum: 0, required: false, forbidden: true });
+    expect(effectiveRoleCardinality(role, { mode: 'structure_prediction' }))
+      .toEqual({ minimum: 0, maximum: 0, required: false, forbidden: true });
+    // A role without a rule keeps its static cardinality, including when the
+    // selecting parameter is absent.
+    expect(effectiveRoleCardinality({ cardinality: { min: 0, max: 1 } }, {}))
+      .toEqual({ minimum: 0, maximum: 1, required: false, forbidden: false });
   });
 });
 

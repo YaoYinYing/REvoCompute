@@ -15,9 +15,13 @@ from __future__ import annotations
 from conftest import _load_fleet_module
 
 RENAMED = {
-    "bioemu2_equilibrium": ("BioEmu2", "bioemu2"),
+    "bioemu2": ("BioEmu2", "bioemu2"),
     "foundry_rf3_fold": ("RoseTTAFold3", "foundry"),
 }
+
+#: Legacy descriptor ids kept registered only so historical results and
+#: storyboards still resolve. They are not selectable catalog entries.
+LEGACY = ("bioemu2_equilibrium", "bioemu2_structure_prediction", "bioemu2_propagate")
 
 
 def test_concise_task_labels_keep_ids_and_dispatch_families(monkeypatch, tmp_path):
@@ -43,3 +47,18 @@ def test_concise_task_labels_keep_ids_and_dispatch_families(monkeypatch, tmp_pat
         assert projection["display_name"] == label
         assert projection["runtime_family"] == family
         assert client.get(f"/compute/api/task-parameters/{task_id}").status_code == 200
+        if task_id == "bioemu2":
+            roles = {role["id"]: role for role in projection["inputs"]}
+            assert roles["starting_structure"]["presence"] == {
+                "parameter": "mode",
+                "required_when": ["propagate"],
+                "forbidden_when": ["equilibrium", "structure_prediction"],
+            }
+
+    from revocompute.task_types import get
+
+    for legacy in LEGACY:
+        assert legacy not in labels
+        task, _runner = get(legacy)
+        assert task.deprecated
+        assert client.get(f"/compute/api/types/{legacy}").status_code == 404

@@ -95,6 +95,7 @@ _DETAIL_CODE_TO_CLASS = {
     "input_role_format": INVALID_PARAMETERS,
     "input_role_unknown": INVALID_PARAMETERS,
     "input_role_cardinality": INVALID_PARAMETERS,
+    "input_role_presence": INVALID_PARAMETERS,
     "tool_output_reference_invalid": INVALID_PARAMETERS,
     "tool_output_reference_unavailable": ARTIFACT_NOT_FOUND,
     "tool_output_reference_mismatch": INVALID_PARAMETERS,

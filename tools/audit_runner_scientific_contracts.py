@@ -605,7 +605,7 @@ def build_inventory(runners_dir: str | Path, repo_root: str | Path) -> dict[str,
             plan_status = "absent"
             plan = None
             plan_error = ""
-            declared = {task.name for task in family_tasks}
+            declared = {task.name for task in family_tasks if not task.deprecated}
             test_yaml = family_root / "test.yaml"
             if test_yaml.is_file():
                 try:
@@ -639,6 +639,7 @@ def build_inventory(runners_dir: str | Path, repo_root: str | Path) -> dict[str,
                     "live_test_plan": plan_status,
                     "live_test_plan_error": plan_error,
                     "smoke_cases": smoke_covered,
+                    "smoke_required_tasks": sorted(declared),
                     "smoke_missing_tasks": smoke_missing,
                     "has_fast_tests": (family_root / "tests" / "fast").is_dir(),
                     "has_scientific_tests": (family_root / "tests" / "scientific").is_dir(),
@@ -681,6 +682,7 @@ def build_inventory(runners_dir: str | Path, repo_root: str | Path) -> dict[str,
                 {
                     "task": task.name,
                     "family": task.runtime.name,
+                    "deprecated": task.deprecated,
                     "display_name": task.display_name,
                     "category": task.category,
                     "coverage_state": _coverage_state(task, repo_path),

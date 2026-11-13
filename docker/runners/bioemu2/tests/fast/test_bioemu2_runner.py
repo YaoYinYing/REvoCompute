@@ -5,10 +5,11 @@
 """BioEmu2 adapter and entrypoint contract.
 
 No GPU and no network: a fake ``bioemu2`` module on ``PYTHONPATH`` mirrors the
-Python call seams the adapter binds to, and a fake ``bioemu2`` executable on
-``BIOEMU2_CLI`` records the propagation argv. Each writes the upstream output
-files, so the real ``run.sh`` is exercised end to end -- model-asset check,
-mode dispatch, and publication check -- against the calls it actually makes.
+upstream system parser and CCD seams the adapter binds to, and a fake
+``bioemu2`` executable on ``BIOEMU2_CLI`` records the command. It writes the
+upstream output files, so the real ``run.sh`` is exercised end to end --
+model-asset check, mode dispatch, and publication check -- against the calls it
+actually makes.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import importlib.util
 import json
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -27,81 +29,47 @@ ROOT = Path(__file__).resolve().parents[5]
 FAMILY = ROOT / "docker" / "runners" / "bioemu2"
 RUNNER = FAMILY / "run.sh"
 
-FAKE_BIOEMU2 = """
+SYSTEM_YAML = """entities:
+  - entity_type: protein
+    asym_ids: [A]
+    sequence: MEMDIRFRG
+bonds: []
+"""
+
+LIGAND_SYSTEM_YAML = """entities:
+  - entity_type: protein
+    asym_ids: [A]
+    sequence: MEMDIRFRG
+  - entity_type: ligand
+    asym_ids: [L]
+    ccd_code: NAG
+bonds: []
+"""
+
+FAKE_DATA_INTERFACE = """
 import json
 import os
 from pathlib import Path
 
+import yaml
+
 
 class System:
-    @classmethod
-    def from_description(cls, **kwargs):
-        _capture("system", kwargs)
-        return cls()
-
-    @classmethod
-    def from_cif(cls, path):
-        _capture("system_from_cif", str(path))
-        return cls()
+    def __init__(self, data):
+        self._data = data
 
     def model_dump(self):
-        codes = [code for code in os.environ.get("BIOEMU2_FAKE_CCD_CODES", "").split(",") if code]
-        return {"entities": [{"entity_type": "ligand", "ccd_code": code} for code in codes]}
-
-
-def _capture(key, value):
-    path = Path(os.environ["BIOEMU2_CALL"])
-    calls = json.loads(path.read_text()) if path.exists() else {}
-    calls[key] = value
-    path.write_text(json.dumps(calls))
-
-
-def load_model(*, checkpoint_path):
-    _capture("checkpoint", str(checkpoint_path))
-    return object()
-
-
-def _publish(entry_point, output_dir, kwargs):
-    _capture("entry_point", entry_point)
-    _capture("sampling", kwargs)
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    omit = os.environ.get("BIOEMU2_OMIT_OUTPUT", "")
-    reject_first = os.environ.get("BIOEMU2_REJECT_FIRST") == "1"
-    report = [
-        {
-            "frame": frame,
-            "status": "rejected" if reject_first and frame == 0 else "passed",
-            "reason": "bad_bonds_sidechain" if reject_first and frame == 0 else None,
-        }
-        for frame in range(kwargs["num_samples"])
-    ]
-    published = {
-        "samples.xtc": b"xtc",
-        "topology.cif": b"data_topology\\n",
-        "system.yaml": b"entities: []\\n",
-        "physicality.json": json.dumps(report).encode(),
-    }
-    for name, payload in published.items():
-        if name != omit:
-            (out / name).write_bytes(payload)
-    return []
-
-
-def sample_equilibrium(system, *, model, output_dir, **kwargs):
-    return _publish("sample_equilibrium", output_dir, kwargs)
-
-
-def predict_structure(system, *, model, output_dir, **kwargs):
-    return _publish("predict_structure", output_dir, kwargs)
-"""
-
-FAKE_DATA_INTERFACE = """
-from bioemu2 import System
+        return self._data
 
 
 def load_system_and_contacts(path):
-    return System(), None
+    capture = os.environ.get("BIOEMU2_CALL")
+    if capture:
+        Path(capture).write_text(json.dumps({"system": str(path)}))
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("entities"), list):
+        raise ValueError("System YAML must contain an entities list")
+    return System(data), None
 """
 
 FAKE_TEMPLATES = """
@@ -141,18 +109,33 @@ import os
 import sys
 from pathlib import Path
 
-Path(os.environ["BIOEMU2_CLI_CAPTURE"]).write_text(json.dumps(sys.argv[1:]))
+argv = sys.argv[1:]
+Path(os.environ["BIOEMU2_CLI_CAPTURE"]).write_text(json.dumps(argv))
 if failure := os.environ.get("BIOEMU2_CLI_FAIL"):
     sys.exit(failure)
-out = Path(sys.argv[sys.argv.index("--out") + 1])
+out = Path(argv[argv.index("--out") + 1])
 out.mkdir(parents=True, exist_ok=True)
-(out / "samples.xtc").write_bytes(b"xtc")
-(out / "topology.cif").write_bytes(b"data_topology\\n")
-(out / "system.yaml").write_text("entities: []\\n", encoding="utf-8")
-(out / "physicality.json").write_text(
-    json.dumps([{"frame": 0, "status": "passed", "reason": None}]), encoding="utf-8"
-)
-(out / "command.txt").write_text("bioemu2 propagate\\n", encoding="utf-8")
+num_samples = int(argv[argv.index("--num-samples") + 1])
+omit = os.environ.get("BIOEMU2_OMIT_OUTPUT", "")
+reject_first = os.environ.get("BIOEMU2_REJECT_FIRST") == "1"
+report = [
+    {
+        "frame": frame,
+        "status": "rejected" if reject_first and frame == 0 else "passed",
+        "reason": "bad_bonds_sidechain" if reject_first and frame == 0 else None,
+    }
+    for frame in range(num_samples)
+]
+published = {
+    "samples.xtc": b"xtc",
+    "topology.cif": b"data_topology\\n",
+    "system.yaml": b"entities: []\\n",
+    "physicality.json": json.dumps(report).encode(),
+    "command.txt": " ".join(argv).encode() + b"\\n",
+}
+for name, payload in published.items():
+    if name != omit:
+        (out / name).write_bytes(payload)
 """
 
 
@@ -164,11 +147,11 @@ def _adapter():
     return module
 
 
-def _workspace(tmp_path, *, with_cli=False):
+def _workspace(tmp_path):
     """A fake checkpoint, its verified asset manifest, and the fake modules."""
     asset_root = tmp_path / "weights"
     checkpoint_dir = asset_root / "checkpoints" / "bioemu2-preview"
-    checkpoint_dir.mkdir(parents=True)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
     (checkpoint_dir / "checkpoint.ckpt").write_bytes(b"checkpoint")
     (checkpoint_dir / "config.yaml").write_text("model: test\n", encoding="utf-8")
     manifest = tmp_path / "model-assets.sha256"
@@ -182,33 +165,42 @@ def _workspace(tmp_path, *, with_cli=False):
     )
     modules = tmp_path / "modules"
     package = modules / "bioemu2"
-    (package / "data_interface").mkdir(parents=True)
-    (package / "structure").mkdir()
-    (package / "__init__.py").write_text(FAKE_BIOEMU2, encoding="utf-8")
+    (package / "data_interface").mkdir(parents=True, exist_ok=True)
+    (package / "structure").mkdir(exist_ok=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "data_interface" / "__init__.py").write_text(FAKE_DATA_INTERFACE, encoding="utf-8")
     (package / "structure" / "__init__.py").write_text("", encoding="utf-8")
     (package / "structure" / "templates.py").write_text(FAKE_TEMPLATES, encoding="utf-8")
-    fasta = tmp_path / "input.fasta"
-    fasta.write_text(">2KL8\nMEMDIRFRG\n", encoding="utf-8")
-    if with_cli:
-        cli = tmp_path / "bioemu2"
-        cli.write_text(f"#!{sys.executable}\n{FAKE_CLI}", encoding="utf-8")
-        cli.chmod(cli.stat().st_mode | stat.S_IXUSR)
-        return asset_root, manifest, modules, fasta, cli
-    return asset_root, manifest, modules, fasta, None
+    cli = tmp_path / "bioemu2"
+    cli.write_text(f"#!{sys.executable}\n{FAKE_CLI}", encoding="utf-8")
+    cli.chmod(cli.stat().st_mode | stat.S_IXUSR)
+    system = tmp_path / "system.yaml"
+    if not system.exists():
+        system.write_text(SYSTEM_YAML, encoding="utf-8")
+    starting = tmp_path / "starting.cif"
+    if not starting.exists():
+        starting.write_text("data_test\n_atom_site.id\n1\n", encoding="utf-8")
+    return asset_root, manifest, modules, system, starting, cli
+
+
+def _steering_fixture(tmp_path):
+    steering = tmp_path / "steering.pkl"
+    steering.write_bytes(b"steering dictionary")
+    manifest = tmp_path / "steering.sha256"
+    manifest.write_text(f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  {steering}\n", encoding="utf-8")
+    return steering, manifest
 
 
 def _run(
-    tmp_path, asset_root, manifest, modules, input_file, params, extra_env=None,
-    role="sequence", extra_inputs=None, empty_roles=(), provide_steering=True,
+    tmp_path, modules, input_file, params, extra_env=None, *,
+    role="system", extra_inputs=None, empty_roles=(), capture_name="argv.json",
 ):
     from runner_protocol import run_with_manifest
 
+    asset_root, manifest, _modules, _system, _starting, cli = _workspace(tmp_path)
     output_dir = tmp_path / "outputs"
-    capture = tmp_path / "calls.json"
-    extra_env = dict(extra_env or {})
+    argv_capture = tmp_path / capture_name
     env = os.environ.copy()
-    # Steering is a propagation-only dependency; no other mode gets a fixture.
     env.pop("BIOEMU2_STEERING_CCD", None)
     env.pop("BIOEMU2_STEERING_CCD_MANIFEST", None)
     env.update(
@@ -216,35 +208,28 @@ def _run(
             "BIOEMU2_PYTHON": sys.executable,
             "BIOEMU2_ASSET_ROOT": str(asset_root),
             "BIOEMU2_ASSET_MANIFEST": str(manifest),
-            "BIOEMU2_CALL": str(capture),
+            "BIOEMU2_CLI": str(cli),
+            "BIOEMU2_CLI_CAPTURE": str(argv_capture),
             "RUNNER_RUNTIME_ROOT": str(ROOT / "docker" / "runners"),
             "PYTHONPATH": str(modules),
         }
     )
-    if (
-        provide_steering
-        and extra_env.get("TASK_TYPE") == "bioemu2_propagate"
-        and "BIOEMU2_STEERING_CCD" not in extra_env
-    ):
-        steering = tmp_path / "steering.pkl"
-        steering.write_bytes(b"steering dictionary")
-        steering_manifest = tmp_path / "steering.sha256"
-        steering_manifest.write_text(
-            f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  {steering}\n", encoding="utf-8"
-        )
-        env["BIOEMU2_STEERING_CCD"] = str(steering)
-        env["BIOEMU2_STEERING_CCD_MANIFEST"] = str(steering_manifest)
-    env.update(extra_env)
+    env.update(extra_env or {})
     completed = run_with_manifest(
         RUNNER, input_file, output_dir, env, params=params, role=role,
         extra_inputs=extra_inputs, empty_roles=empty_roles,
     )
-    return completed, output_dir, capture
+    return completed, output_dir, argv_capture
 
 
-def test_bioemu2_parameters_and_sequence_reach_upstream(tmp_path):
-    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
+def _argv(path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_equilibrium_mode_runs_the_upstream_equilibrium_command(tmp_path):
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
     params = {
+        "mode": "equilibrium",
         "num_samples": 3,
         "sampler": "edm_fk",
         "num_steps": 5,
@@ -253,296 +238,328 @@ def test_bioemu2_parameters_and_sequence_reach_upstream(tmp_path):
         "seed": 11,
     }
 
-    completed, output_dir, capture = _run(tmp_path, asset_root, manifest, modules, fasta, params)
+    completed, output_dir, capture = _run(tmp_path, modules, system, params)
 
     assert completed.returncode == 0, completed.stderr
-    calls = json.loads(capture.read_text(encoding="utf-8"))
-    assert calls["entry_point"] == "sample_equilibrium"
-    assert calls["system"] == {"proteins": ["MEMDIRFRG"]}
-    assert calls["checkpoint"].endswith("checkpoints/bioemu2-preview/checkpoint.ckpt")
-    assert calls["sampling"] == {
-        "num_samples": 3,
-        "sampler": "edm_fk",
-        "num_steps": 5,
-        "batch_size": 2,
-        "physicality_mode": "no_violations",
-        "seed": 11,
-    }
+    forwards = _argv(capture)
+    assert forwards[0] == "sample-equilibrium"
+    assert forwards[forwards.index("--system") + 1] == str(system)
+    assert forwards[forwards.index("--num-samples") + 1] == "3"
+    assert forwards[forwards.index("--sampler") + 1] == "edm_fk"
+    assert forwards[forwards.index("--num-steps") + 1] == "5"
+    assert forwards[forwards.index("--batch-size") + 1] == "2"
+    assert forwards[forwards.index("--physicality-filter") + 1] == "no_violations"
+    assert forwards[forwards.index("--seed") + 1] == "11"
+    assert "--x0-cif" not in forwards
+    assert "--lag-time-ns" not in forwards
     assert (output_dir / "topology.cif").is_file()
-    assert not (output_dir / "topology.pdb").exists()
-    assert (output_dir / "sequence.fasta").read_text(encoding="utf-8") == ">input\nMEMDIRFRG\n"
-    assert (output_dir / "task_finished").is_file()
-
-
-def test_bioemu2_structure_mode_calls_predict_structure(tmp_path):
-    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
-    params = {"num_samples": 1, "num_steps": 4, "seed": 0}
-
-    completed, output_dir, capture = _run(
-        tmp_path,
-        asset_root,
-        manifest,
-        modules,
-        fasta,
-        params,
-        {"TASK_TYPE": "bioemu2_structure_prediction"},
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    calls = json.loads(capture.read_text(encoding="utf-8"))
-    assert calls["entry_point"] == "predict_structure"
-    assert calls["sampling"] == {"num_samples": 1, "num_steps": 4, "seed": 0}
-    assert calls["system"] == {"proteins": ["MEMDIRFRG"]}
-    assert (output_dir / "topology.cif").is_file()
-    assert not (output_dir / "topology.pdb").exists()
-    assert (output_dir / "sequence.fasta").is_file()
-    assert (output_dir / "task_finished").is_file()
-
-
-def test_bioemu2_propagation_forwards_resolved_flags_and_publishes_outputs(tmp_path):
-    asset_root, manifest, modules, _fasta, cli = _workspace(tmp_path, with_cli=True)
-    starting = tmp_path / "starting.cif"
-    starting.write_text("data_test\n", encoding="utf-8")
-    argv_capture = tmp_path / "argv.json"
-    params = {
-        "num_samples": 2,
-        "lag_time_ns": 1.5,
-        "seed": 3,
-        "num_steps": 4,
-        "batch_size": 2,
-        "sampler": "edm_fk",
-        "physicality_mode": "no_violations",
-    }
-
-    completed, output_dir, _ = _run(
-        tmp_path,
-        asset_root,
-        manifest,
-        modules,
-        starting,
-        params,
-        {
-            "TASK_TYPE": "bioemu2_propagate",
-            "BIOEMU2_CLI": str(cli),
-            "BIOEMU2_CLI_CAPTURE": str(argv_capture),
-        },
-        role="starting_structure",
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    forwards = json.loads(argv_capture.read_text(encoding="utf-8"))
-    assert forwards == [
-        "propagate",
-        "--x0-cif",
-        str(starting),
-        "--checkpoint-path",
-        str(asset_root / "checkpoints" / "bioemu2-preview" / "checkpoint.ckpt"),
-        "--out",
-        str(output_dir),
-        "--num-samples",
-        "2",
-        "--lag-time-ns",
-        "1.5",
-        "--seed",
-        "3",
-        "--num-steps",
-        "4",
-        "--batch-size",
-        "2",
-        "--sampler",
-        "edm_fk",
-        "--physicality-filter",
-        "no_violations",
-    ]
-    assert (output_dir / "topology.cif").is_file()
-    assert not (output_dir / "topology.pdb").exists()
     assert (output_dir / "samples.xtc").is_file()
     assert (output_dir / "system.yaml").is_file()
     assert (output_dir / "physicality.json").is_file()
-    assert not (output_dir / "sequence.fasta").exists()
     assert (output_dir / "task_finished").is_file()
 
 
-def test_bioemu2_propagation_omits_unresolved_optional_flags(tmp_path):
-    asset_root, manifest, modules, _fasta, cli = _workspace(tmp_path, with_cli=True)
-    starting = tmp_path / "starting.cif"
-    starting.write_text("data_test\n", encoding="utf-8")
-    argv_capture = tmp_path / "argv.json"
+def test_structure_prediction_mode_runs_the_upstream_predict_command(tmp_path):
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+    params = {"mode": "structure_prediction", "num_samples": 1, "num_steps": 4, "seed": 0, "sampler": "edm"}
 
-    completed, output_dir, _ = _run(
-        tmp_path,
-        asset_root,
-        manifest,
-        modules,
-        starting,
-        {"num_samples": 1, "lag_time_ns": 1},
-        {
-            "TASK_TYPE": "bioemu2_propagate",
-            "BIOEMU2_CLI": str(cli),
-            "BIOEMU2_CLI_CAPTURE": str(argv_capture),
-        },
-        role="starting_structure",
-    )
+    completed, output_dir, capture = _run(tmp_path, modules, system, params)
 
     assert completed.returncode == 0, completed.stderr
-    forwards = json.loads(argv_capture.read_text(encoding="utf-8"))
-    assert forwards == [
-        "propagate",
-        "--x0-cif",
-        str(starting),
-        "--checkpoint-path",
-        str(asset_root / "checkpoints" / "bioemu2-preview" / "checkpoint.ckpt"),
-        "--out",
-        str(output_dir),
-        "--num-samples",
-        "1",
-        "--lag-time-ns",
-        "1",
-    ]
-    assert (output_dir / "topology.cif").is_file()
-
-
-def _propagation_workspace(tmp_path):
-    asset_root, manifest, modules, _fasta, cli = _workspace(tmp_path, with_cli=True)
-    argv_capture = tmp_path / "argv.json"
-    env = {
-        "TASK_TYPE": "bioemu2_propagate",
-        "BIOEMU2_CLI": str(cli),
-        "BIOEMU2_CLI_CAPTURE": str(argv_capture),
-    }
-    return asset_root, manifest, modules, argv_capture, env
-
-
-def test_bioemu2_propagation_accepts_a_ligand_that_inference_represents(tmp_path):
-    asset_root, manifest, modules, argv_capture, env = _propagation_workspace(tmp_path)
-    starting = tmp_path / "complex.cif"
-    starting.write_text(
-        "data_complex\n"
-        "_pdbx_entity_nonpoly.entity_id 2\n"
-        "_pdbx_entity_nonpoly.comp_id LIG\n"
-        "loop_\n_atom_site.id\n1\n",
-        encoding="utf-8",
-    )
-
-    completed, output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, starting,
-        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
-    )
-
-    assert completed.returncode == 0, completed.stderr
+    forwards = _argv(capture)
+    assert forwards[0] == "predict-structure"
+    assert forwards[forwards.index("--system") + 1] == str(system)
+    assert "--x0-cif" not in forwards
     assert (output_dir / "task_finished").is_file()
-    # Presence of a non-polymer entity is not by itself lossy: upstream infers
-    # the ligand, so no explicit system is required.
-    assert "--system" not in json.loads(argv_capture.read_text(encoding="utf-8"))
-    assert "inferred from the starting CIF" in completed.stdout
 
 
-def test_bioemu2_propagation_refuses_inference_loss_before_sampling(tmp_path):
-    asset_root, manifest, modules, argv_capture, env = _propagation_workspace(tmp_path)
-    cases = {
-        "struct_conn.cif": ("_struct_conn.id 1\n", "_struct_conn connections"),
-        "branched.cif": ("_pdbx_entity_branch.entity_id 2\n", "branched entities"),
-    }
-    for filename, (record, label) in cases.items():
-        starting = tmp_path / filename
-        starting.write_text(f"data_lossy\n{record}", encoding="utf-8")
+def test_propagate_mode_forwards_the_system_and_starting_structure(tmp_path):
+    asset_root, manifest, modules, system, starting, _cli = _workspace(tmp_path)
+    params = {"mode": "propagate", "num_samples": 2, "lag_time_ns": 1.5, "num_steps": 4, "seed": 3, "sampler": "edm"}
 
-        completed, output_dir, _ = _run(
-            tmp_path, asset_root, manifest, modules, starting,
-            {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
-        )
-
-        assert completed.returncode != 0, filename
-        assert label in completed.stderr, completed.stderr
-        assert "system YAML" in completed.stderr
-        assert not (output_dir / "task_finished").exists()
-    assert not argv_capture.exists(), "a refused CIF must not reach upstream"
-
-
-def test_bioemu2_inference_loss_scan_reads_cif_tokens_not_line_prefixes(tmp_path):
-    adapter = _adapter()
-    cases = {
-        # Legal CIF forms that put the data name away from the line start.
-        "loop_same_line.cif": "data_x\nloop_ _struct_conn.id _struct_conn.conn_type_id\n1 covale\n",
-        "value_then_tag.cif": "data_x _struct_conn.id 1\n",
-        "uppercase.cif": "data_x\n_STRUCT_CONN.ID 1\n",
-        "nbsp_indent.cif": "data_x\n _struct_conn.id 1\n",
-        "branched_same_line.cif": "data_x\n_pdbx_entity_branch.entity_id 2\n",
-    }
-    for filename, text in cases.items():
-        path = tmp_path / filename
-        path.write_text(text, encoding="utf-8")
-        assert adapter.inference_losses(path), filename
-
-    # Comments, quoted values, and semicolon text fields cannot carry a data
-    # name, so their text is not a refusal.
-    innocent = {
-        "comment.cif": "data_x\n# _struct_conn.id 1\n",
-        "quoted.cif": "data_x\n_note 'see _struct_conn.id below'\n",
-        "text_field.cif": "data_x\n_descriptor\n; _struct_conn.id 1\n;\n",
-    }
-    for filename, text in innocent.items():
-        path = tmp_path / filename
-        path.write_text(text, encoding="utf-8")
-        assert adapter.inference_losses(path) == [], filename
-
-
-def test_bioemu2_propagation_forwards_an_explicit_system(tmp_path):
-    asset_root, manifest, modules, argv_capture, env = _propagation_workspace(tmp_path)
-    starting = tmp_path / "complex.cif"
-    starting.write_text("data_complex\n_struct_conn.id 1\n", encoding="utf-8")
-    declared = tmp_path / "system.yaml"
-    declared.write_text("entities: []\n", encoding="utf-8")
-
-    completed, output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, starting,
-        {"num_samples": 1, "lag_time_ns": 1}, env,
-        role="starting_structure", extra_inputs={"system": declared},
+    completed, output_dir, capture = _run(
+        tmp_path, modules, system, params, role="system",
+        extra_inputs={"starting_structure": starting},
+        extra_env={"BIOEMU2_STEERING_CCD": "", "BIOEMU2_STEERING_CCD_MANIFEST": ""},
     )
 
     assert completed.returncode == 0, completed.stderr
-    forwards = json.loads(argv_capture.read_text(encoding="utf-8"))
+    forwards = _argv(capture)
+    assert forwards[0] == "propagate"
+    assert forwards[forwards.index("--system") + 1] == str(system)
     assert forwards[forwards.index("--x0-cif") + 1] == str(starting)
-    assert forwards[forwards.index("--system") + 1] == str(declared)
-    assert "declared system YAML" in completed.stdout
+    assert forwards[forwards.index("--lag-time-ns") + 1] == "1.5"
+    assert forwards[forwards.index("--num-samples") + 1] == "2"
+    assert "upstream compares the starting CIF atoms and order before model load" in completed.stdout
+    assert (output_dir / "samples.xtc").is_file()
     assert (output_dir / "task_finished").is_file()
 
 
-def test_bioemu2_propagation_treats_a_declared_empty_system_role_as_absent(tmp_path):
-    """The server manifest declares every role, leaving an optional one empty."""
-    asset_root, manifest, modules, argv_capture, env = _propagation_workspace(tmp_path)
-    starting = tmp_path / "starting.cif"
-    starting.write_text("data_test\n", encoding="utf-8")
+def test_optional_flags_are_not_invented(tmp_path):
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
 
-    completed, output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, starting,
-        {"num_samples": 1, "lag_time_ns": 1}, env,
-        role="starting_structure", empty_roles=("system",),
+    completed, _output_dir, capture = _run(
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"}
     )
 
     assert completed.returncode == 0, completed.stderr
-    forwards = json.loads(argv_capture.read_text(encoding="utf-8"))
-    assert "--system" not in forwards
-    assert "inferred from the starting CIF" in completed.stdout
+    forwards = _argv(capture)
+    for flag in ("--seed", "--num-steps", "--batch-size"):
+        assert flag not in forwards
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"num_samples": 1, "sampler": "edm"}, "declares no valid mode"),
+        ({"mode": "bogus", "num_samples": 1, "sampler": "edm"}, "declares no valid mode"),
+    ],
+)
+def test_run_sh_refuses_a_missing_or_unknown_mode(tmp_path, params, message):
+    """The shell entrypoint consumes the resolved mode and never guesses one."""
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+
+    completed, _output_dir, capture = _run(tmp_path, modules, system, params)
+
+    assert completed.returncode != 0
+    assert message in completed.stderr
+    assert not capture.exists(), "a mode the Server did not resolve must not reach upstream"
+
+
+@pytest.mark.parametrize("params", [
+    {"num_samples": 1, "sampler": "edm"},
+    {"mode": "bogus", "num_samples": 1, "sampler": "edm"},
+])
+def test_sample_entrypoint_refuses_a_missing_or_unknown_mode(tmp_path, params):
+    """The Python entrypoint fails closed before parsing a system."""
+    asset_root, _manifest, _modules, _system, _starting, _cli = _workspace(tmp_path)
+    task_manifest = tmp_path / "direct-task.json"
+    task_manifest.write_text(json.dumps({"params": params, "inputs": {}}), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(FAMILY / "sample.py"),
+            "--task-manifest", str(task_manifest),
+            "--output-dir", str(tmp_path / "out"),
+            "--checkpoint-dir", str(asset_root / "checkpoints" / "bioemu2-preview"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "must resolve 'mode'" in completed.stderr
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("params", [
+    {"mode": "equilibrium", "num_samples": 1},
+    {"mode": "equilibrium", "num_samples": 1, "sampler": "bogus"},
+])
+def test_adapter_refuses_a_missing_or_unknown_sampler_before_the_cli(tmp_path, params):
+    """The adapter consumes the resolved sampler and never substitutes ``edm``."""
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+
+    completed, output_dir, capture = _run(tmp_path, modules, system, params)
+
+    assert completed.returncode != 0
+    assert "must resolve 'sampler'" in completed.stderr
+    assert not capture.exists(), "an unresolved sampler must not reach upstream"
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_a_malformed_system_fails_before_the_cli(tmp_path):
+    asset_root, manifest, modules, _system, _starting, _cli = _workspace(tmp_path)
+    malformed = tmp_path / "malformed.yaml"
+    malformed.write_text("sequence: not-a-system\n", encoding="utf-8")
+
+    completed, output_dir, capture = _run(
+        tmp_path, modules, malformed, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"}
+    )
+
+    assert completed.returncode != 0
+    assert "entities" in completed.stderr
+    assert not capture.exists(), "a refused system must not reach upstream"
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_propagate_requires_the_starting_structure_role(tmp_path):
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+
+    completed, output_dir, capture = _run(
+        tmp_path, modules, system, {"mode": "propagate", "num_samples": 1, "lag_time_ns": 1, "sampler": "edm"}
+    )
+
+    assert completed.returncode != 0
+    assert "starting_structure" in completed.stderr
+    assert not capture.exists()
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_non_propagate_modes_refuse_a_starting_structure(tmp_path):
+    asset_root, manifest, modules, system, starting, _cli = _workspace(tmp_path)
+
+    completed, output_dir, capture = _run(
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"},
+        extra_inputs={"starting_structure": starting},
+    )
+
+    assert completed.returncode != 0
+    assert "does not accept a starting_structure" in completed.stderr
+    assert not capture.exists()
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_propagation_prewarms_ccd_components_before_the_cli(tmp_path):
+    asset_root, manifest, modules, system, starting, _cli = _workspace(tmp_path)
+    system.write_text(LIGAND_SYSTEM_YAML, encoding="utf-8")
+    ccd_capture = tmp_path / "ccd.json"
+
+    completed, output_dir, _capture = _run(
+        tmp_path, modules, system, {"mode": "propagate", "num_samples": 1, "lag_time_ns": 1, "sampler": "edm"},
+        extra_inputs={"starting_structure": starting},
+        extra_env={"BIOEMU2_CCD_CAPTURE": str(ccd_capture), "BIOEMU2_STEERING_CCD": "", "BIOEMU2_STEERING_CCD_MANIFEST": ""},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(ccd_capture.read_text(encoding="utf-8")) == {"NAG": 1}
     assert (output_dir / "task_finished").is_file()
 
 
-def test_bioemu2_propagation_reports_an_atom_mismatch(tmp_path):
-    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
-    starting = tmp_path / "starting.cif"
-    starting.write_text("data_test\n", encoding="utf-8")
+def test_equilibrium_prewarms_ccd_components_too(tmp_path):
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+    system.write_text(LIGAND_SYSTEM_YAML, encoding="utf-8")
+    ccd_capture = tmp_path / "ccd.json"
 
-    completed, output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, starting,
-        {"num_samples": 1, "lag_time_ns": 1},
-        {
-            **env,
+    completed, output_dir, _capture = _run(
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"},
+        extra_env={"BIOEMU2_CCD_CAPTURE": str(ccd_capture), "BIOEMU2_STEERING_CCD": "", "BIOEMU2_STEERING_CCD_MANIFEST": ""},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(ccd_capture.read_text(encoding="utf-8")) == {"NAG": 1}
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_propagation_retries_a_transient_ccd_failure(tmp_path):
+    asset_root, manifest, modules, system, starting, _cli = _workspace(tmp_path)
+    system.write_text(LIGAND_SYSTEM_YAML, encoding="utf-8")
+    ccd_capture = tmp_path / "ccd.json"
+
+    completed, output_dir, _capture = _run(
+        tmp_path, modules, system, {"mode": "propagate", "num_samples": 1, "lag_time_ns": 1, "sampler": "edm"},
+        extra_inputs={"starting_structure": starting},
+        extra_env={
+            "BIOEMU2_CCD_CAPTURE": str(ccd_capture),
+            "BIOEMU2_CCD_FAIL": "transient",
+            "BIOEMU2_CCD_FAIL_TIMES": "1",
+            "BIOEMU2_STEERING_CCD": "",
+            "BIOEMU2_STEERING_CCD_MANIFEST": "",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(ccd_capture.read_text(encoding="utf-8")) == {"NAG": 2}
+    assert "attempt 1/3" in completed.stderr
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_steering_is_required_for_a_steered_sampler_in_any_mode(tmp_path):
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+    system.write_text(LIGAND_SYSTEM_YAML, encoding="utf-8")
+
+    completed, output_dir, capture = _run(
+        tmp_path, modules, system,
+        {"mode": "equilibrium", "num_samples": 1, "sampler": "edm_gd"},
+        extra_env={"BIOEMU2_STEERING_CCD": "", "BIOEMU2_STEERING_CCD_MANIFEST": ""},
+    )
+
+    assert completed.returncode != 0
+    assert "steering CCD dictionary" in completed.stderr
+    assert not capture.exists()
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_unsteered_edm_does_not_need_the_steering_dictionary(tmp_path):
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+    system.write_text(LIGAND_SYSTEM_YAML, encoding="utf-8")
+
+    completed, output_dir, _capture = _run(
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"},
+        extra_env={"BIOEMU2_STEERING_CCD": "", "BIOEMU2_STEERING_CCD_MANIFEST": ""},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_the_runner_verifies_the_steering_dictionary_identity(tmp_path):
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+    system.write_text(LIGAND_SYSTEM_YAML, encoding="utf-8")
+    steering, steering_manifest = _steering_fixture(tmp_path)
+
+    completed, output_dir, _capture = _run(
+        tmp_path, modules, system,
+        {"mode": "equilibrium", "num_samples": 1, "sampler": "edm_gd"},
+        extra_env={
+            "BIOEMU2_STEERING_CCD": str(steering),
+            "BIOEMU2_STEERING_CCD_MANIFEST": str(steering_manifest),
+        },
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert f"BioEmu2 steering CCD: {steering}" in completed.stdout
+    assert (output_dir / "task_finished").is_file()
+
+    steering.write_bytes(b"tampered")
+    (output_dir / "task_finished").unlink()
+    completed, output_dir, _capture = _run(
+        tmp_path, modules, system,
+        {"mode": "equilibrium", "num_samples": 1, "sampler": "edm_gd"},
+        extra_env={
+            "BIOEMU2_STEERING_CCD": str(steering),
+            "BIOEMU2_STEERING_CCD_MANIFEST": str(steering_manifest),
+        },
+    )
+    assert completed.returncode != 0
+    assert "steering CCD integrity verification failed" in completed.stderr
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_a_missing_steering_dictionary_fails_before_the_cli(tmp_path):
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+    system.write_text(LIGAND_SYSTEM_YAML, encoding="utf-8")
+
+    completed, output_dir, capture = _run(
+        tmp_path, modules, system,
+        {"mode": "equilibrium", "num_samples": 1, "sampler": "edm_fk"},
+        extra_env={
+            "BIOEMU2_STEERING_CCD": str(tmp_path / "missing.pkl"),
+            "BIOEMU2_STEERING_CCD_MANIFEST": str(tmp_path / "missing.sha256"),
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "steering CCD dictionary is missing" in completed.stderr
+    assert not capture.exists()
+    assert not (output_dir / "task_finished").exists()
+
+
+def test_a_propagation_atom_mismatch_fails_the_task(tmp_path):
+    asset_root, manifest, modules, system, starting, _cli = _workspace(tmp_path)
+
+    completed, output_dir, _capture = _run(
+        tmp_path, modules, system,
+        {"mode": "propagate", "num_samples": 1, "lag_time_ns": 1, "sampler": "edm"},
+        extra_inputs={"starting_structure": starting},
+        extra_env={
             "BIOEMU2_CLI_FAIL": (
                 "--x0-cif atoms do not match the system: atom 3 is "
                 "('CA', 'C', 'ALA', 0), system has ('CB', 'C', 'ALA', 0)"
             ),
+            "BIOEMU2_STEERING_CCD": "",
+            "BIOEMU2_STEERING_CCD_MANIFEST": "",
         },
-        role="starting_structure",
     )
 
     assert completed.returncode != 0
@@ -550,81 +567,45 @@ def test_bioemu2_propagation_reports_an_atom_mismatch(tmp_path):
     assert not (output_dir / "task_finished").exists()
 
 
-def test_bioemu2_propagation_prewarms_ccd_components_before_the_cli(tmp_path):
-    asset_root, manifest, modules, _argv, env = _propagation_workspace(tmp_path)
-    starting = tmp_path / "starting.cif"
-    starting.write_text("data_test\n", encoding="utf-8")
-    ccd_capture = tmp_path / "ccd.json"
+def test_missing_published_output_fails_the_task(tmp_path):
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
 
-    completed, output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, starting,
-        {"num_samples": 1, "lag_time_ns": 1},
-        {
-            **env,
-            "BIOEMU2_FAKE_CCD_CODES": "A1L3H,NAG",
-            "BIOEMU2_CCD_CAPTURE": str(ccd_capture),
-        },
-        role="starting_structure",
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    # One bounded fetch per distinct component, before the command runs.
-    assert json.loads(ccd_capture.read_text(encoding="utf-8")) == {"A1L3H": 1, "NAG": 1}
-    assert (output_dir / "task_finished").is_file()
-
-
-def test_bioemu2_propagation_retries_a_transient_ccd_failure(tmp_path):
-    asset_root, manifest, modules, _argv, env = _propagation_workspace(tmp_path)
-    starting = tmp_path / "starting.cif"
-    starting.write_text("data_test\n", encoding="utf-8")
-    ccd_capture = tmp_path / "ccd.json"
-
-    completed, output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, starting,
-        {"num_samples": 1, "lag_time_ns": 1},
-        {
-            **env,
-            "BIOEMU2_FAKE_CCD_CODES": "A1L3H",
-            "BIOEMU2_CCD_FAIL": "transient",
-            "BIOEMU2_CCD_FAIL_TIMES": "1",
-            "BIOEMU2_CCD_CAPTURE": str(ccd_capture),
-        },
-        role="starting_structure",
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    assert json.loads(ccd_capture.read_text(encoding="utf-8")) == {"A1L3H": 2}
-    assert "attempt 1/3" in completed.stderr
-    assert (output_dir / "task_finished").is_file()
-
-
-def test_bioemu2_propagation_does_not_retry_a_missing_ccd_component(tmp_path):
-    asset_root, manifest, modules, _argv, env = _propagation_workspace(tmp_path)
-    starting = tmp_path / "starting.cif"
-    starting.write_text("data_test\n", encoding="utf-8")
-    ccd_capture = tmp_path / "ccd.json"
-
-    completed, output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, starting,
-        {"num_samples": 1, "lag_time_ns": 1},
-        {
-            **env,
-            "BIOEMU2_FAKE_CCD_CODES": "A1L3H",
-            "BIOEMU2_CCD_FAIL": "missing",
-            "BIOEMU2_CCD_CAPTURE": str(ccd_capture),
-        },
-        role="starting_structure",
+    completed, output_dir, _capture = _run(
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"},
+        extra_env={"BIOEMU2_OMIT_OUTPUT": "physicality.json"},
     )
 
     assert completed.returncode != 0
-    assert json.loads(ccd_capture.read_text(encoding="utf-8")) == {"A1L3H": 1}
-    assert "A1L3H" in completed.stderr
-    assert "https://files.rcsb.org/ligands/download/A1L3H.cif" in completed.stderr
-    assert "not retried" in completed.stderr
+    assert "physicality.json" in completed.stderr
     assert not (output_dir / "task_finished").exists()
 
 
-def test_bioemu2_ccd_codes_are_collected_and_deduplicated():
+def test_the_optional_command_record_is_not_required(tmp_path):
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+
+    completed, output_dir, _capture = _run(
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"},
+        extra_env={"BIOEMU2_OMIT_OUTPUT": "command.txt"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_rejected_frames_are_reported_not_failed(tmp_path):
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+
+    completed, output_dir, _capture = _run(
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 2, "sampler": "edm"},
+        extra_env={"BIOEMU2_REJECT_FIRST": "1"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "BioEmu2 physicality: 1/2 frames accepted (bad_bonds_sidechain: 1), 1 rejected" in completed.stdout
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_ccd_codes_are_collected_and_deduplicated():
     adapter = _adapter()
     system = {
         "entities": [
@@ -639,7 +620,24 @@ def test_bioemu2_ccd_codes_are_collected_and_deduplicated():
     assert adapter._ccd_codes_in(system) == ["A1L3H", "SEP", "NAG"]
 
 
-def test_bioemu2_ccd_prefetch_retries_transient_failures_with_backoff(monkeypatch):
+def test_steering_codes_mirror_upstream_ligand_only_rules():
+    adapter = _adapter()
+
+    class System:
+        def model_dump(self):
+            return {
+                "entities": [
+                    {"entity_type": "ligand", "ccd_code": "A1L3H"},
+                    {"entity_type": "protein", "mods": [{"ccd_code": "SEP"}]},
+                    {"entity_type": "ligand", "smiles": "CC"},
+                ]
+            }
+
+    assert adapter.steered_ligand_ccd_codes(System(), "edm_gd") == ["A1L3H"]
+    assert adapter.steered_ligand_ccd_codes(System(), "edm") == []
+
+
+def test_ccd_prefetch_retries_transient_failures_with_backoff(monkeypatch):
     import requests
 
     adapter = _adapter()
@@ -660,7 +658,7 @@ def test_bioemu2_ccd_prefetch_retries_transient_failures_with_backoff(monkeypatc
     assert "https://example.test/A1L3H.cif" in str(failure.value)
 
 
-def test_bioemu2_ccd_prefetch_stops_retrying_once_a_component_is_cached(monkeypatch):
+def test_ccd_prefetch_stops_retrying_once_a_component_is_cached(monkeypatch):
     import requests
 
     adapter = _adapter()
@@ -677,7 +675,7 @@ def test_bioemu2_ccd_prefetch_stops_retrying_once_a_component_is_cached(monkeypa
     assert calls == ["A1L3H", "A1L3H", "NAG"]
 
 
-def test_bioemu2_ccd_prefetch_does_not_retry_permanent_http_errors(monkeypatch):
+def test_ccd_prefetch_does_not_retry_permanent_http_errors(monkeypatch):
     import requests
 
     adapter = _adapter()
@@ -696,7 +694,7 @@ def test_bioemu2_ccd_prefetch_does_not_retry_permanent_http_errors(monkeypatch):
     assert calls == ["A1L3H"]
 
 
-def test_bioemu2_ccd_prefetch_reports_upstream_errors_without_retry(monkeypatch):
+def test_ccd_prefetch_reports_upstream_errors_without_retry(monkeypatch):
     adapter = _adapter()
     monkeypatch.setattr(adapter, "_ccd_url", lambda code: f"https://example.test/{code}.cif")
     calls: list[str] = []
@@ -714,306 +712,7 @@ def test_bioemu2_ccd_prefetch_reports_upstream_errors_without_retry(monkeypatch)
     assert calls == ["A1L3H"]
 
 
-def test_bioemu2_propagation_requires_the_starting_structure_role(tmp_path):
-    asset_root, manifest, modules, fasta, cli = _workspace(tmp_path, with_cli=True)
-
-    completed, output_dir, _ = _run(
-        tmp_path,
-        asset_root,
-        manifest,
-        modules,
-        fasta,
-        {"num_samples": 1, "lag_time_ns": 1},
-        {"TASK_TYPE": "bioemu2_propagate", "BIOEMU2_CLI": str(cli)},
-        role="sequence",
-    )
-
-    assert completed.returncode != 0
-    assert "starting_structure" in completed.stderr
-    assert not (output_dir / "task_finished").exists()
-
-
-def test_bioemu2_tasks_and_result_contracts_resolve(tmp_path):
-    from revocompute.result_storyboard import contract_dir, expected_file_tree, storyboard_declaration
-    from revocompute.task_types import isolated_discovery
-
-    with isolated_discovery(str(ROOT / "docker" / "runners"), enabled={"bioemu2"}) as manager:
-        tasks = {task.name: task for _identifier, task in manager.contributions.items("tasks")}
-
-    assert set(tasks) == {"bioemu2_equilibrium", "bioemu2_structure_prediction", "bioemu2_propagate"}
-    propagate_dir = FAMILY / "tasks" / "bioemu2_propagate"
-    assert contract_dir(tasks["bioemu2_equilibrium"], str(ROOT)) == FAMILY
-    assert contract_dir(tasks["bioemu2_structure_prediction"], str(ROOT)) == FAMILY
-    assert contract_dir(tasks["bioemu2_propagate"], str(ROOT)) == propagate_dir
-
-    shared = expected_file_tree(tasks["bioemu2_structure_prediction"], str(ROOT))
-    assert set(shared) == {"topology", "coordinates", "sequence", "physicality", "system"}
-    assert shared["topology"]["path"] == "topology.cif"
-    propagated = expected_file_tree(tasks["bioemu2_propagate"], str(ROOT))
-    assert {key for key, entry in propagated.items() if entry["required"]} == {
-        "topology",
-        "coordinates",
-        "physicality",
-        "system",
-    }
-    assert propagated["topology"]["path"] == "topology.cif"
-    assert propagated["command"]["required"] is False
-    assert "sequence" not in propagated
-
-    for task_name, tree in (("bioemu2_structure_prediction", shared), ("bioemu2_propagate", propagated)):
-        task = tasks[task_name]
-        assert len(task.result_workspace) == 1
-        view = task.result_workspace[0]
-        assert view.plugin == "trajectory"
-        required = {
-            selector.value for selectors in view.sources.values() for selector in selectors if selector.required
-        }
-        assert required == {
-            "topology.cif",
-            "samples.xtc",
-        }
-        assert view.mapping["topology_format"] == "mmcif"
-        for selectors in view.sources.values():
-            assert {selector.value for selector in selectors} <= {entry["path"] for entry in tree.values()}
-
-    assert storyboard_declaration(tasks["bioemu2_equilibrium"], str(ROOT), set(shared)) is not None
-    assert storyboard_declaration(tasks["bioemu2_propagate"], str(ROOT), set(propagated)) is None
-
-
-def test_bioemu2_missing_published_output_fails_the_task(tmp_path):
-    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
-
-    completed, output_dir, _ = _run(
-        tmp_path,
-        asset_root,
-        manifest,
-        modules,
-        fasta,
-        {"num_samples": 1},
-        {"BIOEMU2_OMIT_OUTPUT": "physicality.json"},
-    )
-
-    assert completed.returncode != 0
-    assert "physicality.json" in completed.stderr
-    assert not (output_dir / "task_finished").exists()
-
-
-def test_bioemu2_publication_check_covers_every_required_contract_file(tmp_path):
-    """The entrypoint fails when any file the fake upstream publishes is missing."""
-    # The paths the fake upstream actually writes. sequence.fasta is written by
-    # the adapter itself, so the fake has no seam to omit it; it is covered by
-    # the success-path test.
-    published = ["samples.xtc", "topology.cif", "system.yaml", "physicality.json"]
-    for path in published:
-        case = tmp_path / path
-        case.mkdir()
-        asset_root, manifest, modules, fasta, _ = _workspace(case)
-        completed, output_dir, _ = _run(
-            case,
-            asset_root,
-            manifest,
-            modules,
-            fasta,
-            {"num_samples": 1},
-            {"BIOEMU2_OMIT_OUTPUT": path},
-        )
-        assert completed.returncode != 0, path
-        assert path in completed.stderr, completed.stderr
-        assert not (output_dir / "task_finished").exists(), path
-
-
-def test_bioemu2_rejected_frames_are_reported_not_failed(tmp_path):
-    """A rejected ensemble still succeeds, and its counts must reach the log."""
-    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
-
-    completed, output_dir, _ = _run(
-        tmp_path,
-        asset_root,
-        manifest,
-        modules,
-        fasta,
-        {"num_samples": 2},
-        {"BIOEMU2_REJECT_FIRST": "1"},
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    assert "BioEmu2 physicality: 1/2 frames accepted (bad_bonds_sidechain: 1), 1 rejected" in completed.stdout
-    assert (output_dir / "task_finished").is_file()
-
-
-def test_bioemu2_sequence_framing(tmp_path):
-    adapter = _adapter()
-    fasta = tmp_path / "one.fasta"
-    fasta.write_text(">query\nacdefg hik\n", encoding="utf-8")
-    assert adapter.query_sequence(fasta) == "ACDEFGHIK"
-
-    # A blank header is rejected on its own terms; a second record is rejected
-    # as a second record even when its separator carries no header.
-    fasta.write_text(">\nACDE\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="empty FASTA header"):
-        adapter.query_sequence(fasta)
-
-    fasta.write_text(">a\nACDE\n>b\nFGHI\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="exactly one protein sequence"):
-        adapter.query_sequence(fasta)
-
-    fasta.write_text(">a\nACDE\n>\nFGHI\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="exactly one protein sequence"):
-        adapter.query_sequence(fasta)
-
-    fasta.write_text(">a\nACDZ\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="residues Z"):
-        adapter.query_sequence(fasta)
-
-
-def test_bioemu2_optional_parameters_keep_upstream_defaults():
-    adapter = _adapter()
-    assert adapter.sampling_kwargs({"num_samples": 4}) == {"num_samples": 4}
-
-
-def test_configure_steering_cache_exposes_the_asset_to_the_offline_hf_lookup(tmp_path, monkeypatch):
-    adapter = _adapter()
-    asset = tmp_path / "ccd.pkl"
-    asset.write_bytes(b"steering dictionary")
-    monkeypatch.delenv("HF_HOME", raising=False)
-
-    assert adapter.configure_steering_cache(tmp_path / "scratch", str(asset)) == asset
-
-    repo = tmp_path / "scratch" / "huggingface" / "hub" / "models--boltz-community--boltz-1"
-    snapshot = repo / "snapshots" / adapter.STEERING_CCD_REVISION
-    assert (snapshot / "ccd.pkl").resolve() == asset.resolve()
-    # ``try_to_load_from_cache`` reads this file verbatim; a trailing newline
-    # would stop it resolving the snapshot directory.
-    assert (repo / "refs" / "main").read_text(encoding="utf-8") == adapter.STEERING_CCD_REVISION
-    assert os.environ["HF_HOME"] == str(tmp_path / "scratch" / "huggingface")
-
-
-def test_configure_steering_cache_is_optional_and_rejects_a_missing_asset(tmp_path, monkeypatch):
-    adapter = _adapter()
-    monkeypatch.delenv("BIOEMU2_STEERING_CCD", raising=False)
-    assert adapter.configure_steering_cache(tmp_path / "unused") is None
-    with pytest.raises(RuntimeError, match="steering CCD dictionary is not configured"):
-        adapter.configure_steering_cache(tmp_path / "scratch", required=True)
-
-    with pytest.raises(RuntimeError, match="steering CCD dictionary not found"):
-        adapter.configure_steering_cache(tmp_path / "scratch", str(tmp_path / "missing.pkl"))
-
-
-def test_bioemu2_runner_verifies_the_steering_ccd_identity(tmp_path):
-    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
-    starting = tmp_path / "starting.cif"
-    starting.write_text("data_x\n_atom_site.id\n1\n", encoding="utf-8")
-    steering = tmp_path / "ccd.pkl"
-    steering.write_bytes(b"steering dictionary")
-    steering_manifest = tmp_path / "steering.sha256"
-    steering_manifest.write_text(
-        f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  {steering}\n", encoding="utf-8"
-    )
-    env.update(
-        {
-            "BIOEMU2_STEERING_CCD": str(steering),
-            "BIOEMU2_STEERING_CCD_MANIFEST": str(steering_manifest),
-        }
-    )
-
-    completed, _output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, starting,
-        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
-    )
-    assert completed.returncode == 0, completed.stderr
-
-    steering.write_bytes(b"tampered")
-    completed, _output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, starting,
-        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
-    )
-    assert completed.returncode != 0
-    assert "steering CCD integrity verification failed" in completed.stderr
-
-
-def test_bioemu2_propagation_fails_early_when_the_steering_dictionary_is_missing(tmp_path):
-    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
-    starting = tmp_path / "protein.cif"
-    starting.write_text("data_protein\n_atom_site.id\n1\n", encoding="utf-8")
-    env["BIOEMU2_STEERING_CCD"] = str(tmp_path / "missing.pkl")
-
-    completed, output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, starting,
-        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
-    )
-
-    assert completed.returncode != 0
-    assert "steering CCD dictionary is missing" in completed.stderr
-    assert not (output_dir / "task_finished").exists()
-
-
-def test_bioemu2_propagation_fails_when_the_steering_dictionary_does_not_match(tmp_path):
-    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
-    starting = tmp_path / "protein.cif"
-    starting.write_text("data_protein\n_atom_site.id\n1\n", encoding="utf-8")
-    wrong_manifest = tmp_path / "wrong-steering.sha256"
-    wrong_manifest.write_text(f"{'0' * 64}  steering.pkl\n", encoding="utf-8")
-    env["BIOEMU2_STEERING_CCD_MANIFEST"] = str(wrong_manifest)
-
-    completed, output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, starting,
-        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
-    )
-
-    assert completed.returncode != 0
-    assert "steering CCD integrity verification failed" in completed.stderr
-    assert not (output_dir / "task_finished").exists()
-
-
-def test_bioemu2_non_propagation_modes_do_not_require_a_steering_dictionary(tmp_path):
-    asset_root, manifest, modules, fasta, _ = _workspace(tmp_path)
-
-    for task_type in ("bioemu2_equilibrium", "bioemu2_structure_prediction"):
-        case_dir = tmp_path / task_type
-        case_dir.mkdir()
-        completed, output_dir, _ = _run(
-            case_dir, asset_root, manifest, modules, fasta, {"num_samples": 1},
-            {"TASK_TYPE": task_type, "BIOEMU2_STEERING_CCD": str(tmp_path / "missing.pkl")},
-        )
-        assert completed.returncode == 0, (task_type, completed.stderr)
-        assert (output_dir / "task_finished").is_file()
-
-
-def test_bioemu2_runner_config_does_not_mount_propagation_only_assets():
-    from revocompute.task_types import _load_runner_config
-
-    config = _load_runner_config(str(FAMILY / "runner.yaml"))
-
-    assert [mount.host_path for mount in config.mounts] == ["/mnt/db/weights/bioemu2"]
-    assert "BIOEMU2_STEERING_CCD" not in config.env
-
-
-def test_bioemu2_propagation_uses_the_default_steering_asset_path(tmp_path):
-    asset_root, manifest, modules, _argv_capture, env = _propagation_workspace(tmp_path)
-    steering = asset_root / "steering" / "boltz-1-ccd.pkl"
-    steering.parent.mkdir()
-    steering.write_bytes(b"steering dictionary")
-    steering_manifest = asset_root / "steering.sha256"
-    steering_manifest.write_text(
-        f"{hashlib.sha256(steering.read_bytes()).hexdigest()}  steering/boltz-1-ccd.pkl\n",
-        encoding="utf-8",
-    )
-    env["BIOEMU2_STEERING_CCD_MANIFEST"] = str(steering_manifest)
-    starting = tmp_path / "protein.cif"
-    starting.write_text("data_protein\n_atom_site.id\n1\n", encoding="utf-8")
-
-    completed, output_dir, _ = _run(
-        tmp_path, asset_root, manifest, modules, starting,
-        {"num_samples": 1, "lag_time_ns": 1}, env, role="starting_structure",
-        provide_steering=False,
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    assert f"BioEmu2 steering CCD: {steering}" in completed.stdout
-    assert (output_dir / "task_finished").is_file()
-
-
-def test_bioemu2_ccd_prefetch_does_not_consume_a_retry_for_invalid_urls(monkeypatch):
+def test_ccd_prefetch_does_not_consume_a_retry_for_invalid_urls(monkeypatch):
     import requests
 
     adapter = _adapter()
@@ -1056,3 +755,55 @@ def test_transient_request_error_rejects_permanent_request_failures():
         error = requests.exceptions.HTTPError("http", response=Response(status_code))
         assert adapter._transient_request_error(error) is transient, status_code
     assert adapter._transient_request_error(requests.exceptions.HTTPError("no response")) is False
+
+
+def test_configure_steering_cache_exposes_the_asset_to_the_offline_hf_lookup(tmp_path, monkeypatch):
+    adapter = _adapter()
+    asset = tmp_path / "ccd.pkl"
+    asset.write_bytes(b"steering dictionary")
+    monkeypatch.delenv("HF_HOME", raising=False)
+
+    assert adapter.configure_steering_cache(tmp_path / "scratch", str(asset)) == asset
+
+    repo = tmp_path / "scratch" / "huggingface" / "hub" / "models--boltz-community--boltz-1"
+    snapshot = repo / "snapshots" / adapter.STEERING_CCD_REVISION
+    assert (snapshot / "ccd.pkl").resolve() == asset.resolve()
+    # ``try_to_load_from_cache`` reads this file verbatim; a trailing newline
+    # would stop it resolving the snapshot directory.
+    assert (repo / "refs" / "main").read_text(encoding="utf-8") == adapter.STEERING_CCD_REVISION
+    assert os.environ["HF_HOME"] == str(tmp_path / "scratch" / "huggingface")
+
+
+def test_configure_steering_cache_is_optional_and_rejects_a_missing_asset(tmp_path, monkeypatch):
+    adapter = _adapter()
+    monkeypatch.delenv("BIOEMU2_STEERING_CCD", raising=False)
+    assert adapter.configure_steering_cache(tmp_path / "unused") is None
+    with pytest.raises(RuntimeError, match="steering CCD dictionary is not configured"):
+        adapter.configure_steering_cache(tmp_path / "scratch", required=True)
+
+    with pytest.raises(RuntimeError, match="steering CCD dictionary not found"):
+        adapter.configure_steering_cache(tmp_path / "scratch", str(tmp_path / "missing.pkl"))
+
+
+def test_the_unified_task_and_legacy_descriptors_resolve(tmp_path):
+    from revocompute.result_storyboard import contract_dir, expected_file_tree
+    from revocompute.task_types import isolated_discovery
+
+    with isolated_discovery(str(ROOT / "docker" / "runners"), enabled={"bioemu2"}) as manager:
+        tasks = {task.name: task for _identifier, task in manager.contributions.items("tasks")}
+
+    assert set(tasks) == {
+        "bioemu2", "bioemu2_equilibrium", "bioemu2_structure_prediction", "bioemu2_propagate",
+    }
+    assert tasks["bioemu2"].display_name == "BioEmu2"
+    assert not tasks["bioemu2"].deprecated
+    for legacy in ("bioemu2_equilibrium", "bioemu2_structure_prediction", "bioemu2_propagate"):
+        assert tasks[legacy].deprecated
+    assert contract_dir(tasks["bioemu2"], str(ROOT)) == FAMILY / "tasks" / "bioemu2"
+
+    tree = expected_file_tree(tasks["bioemu2"], str(ROOT))
+    assert {key for key, entry in tree.items() if entry["required"]} == {
+        "topology", "coordinates", "physicality", "system",
+    }
+    assert tree["command"]["required"] is False
+    assert "sequence" not in tree
