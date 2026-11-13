@@ -5444,6 +5444,10 @@ class TaskDatabase:
         The state write is the claim: a crash after it leaves a resumable
         deletion rather than an intact tree whose row still reads ``ACTIVE``.
         Idempotent for a row already awaiting, in purge, or purged.
+
+        A request that names an actor records it; one that names nobody (an
+        automatic retention retry) keeps the actor already recorded, so the
+        deletion's lane survives however many passes re-drive it.
         """
         timestamp = time.time() if at is None else at
         terminal = (
@@ -5477,18 +5481,20 @@ class TaskDatabase:
                 return True
             if existing["state"] in terminal:
                 return False
+            values: dict[str, Any] = {
+                "state": rloan.DataLifecycleState.DELETE_REQUESTED.value,
+                "requested_at": timestamp,
+                "updated_at": timestamp,
+            }
+            if actor_user_id is not None:
+                values["requested_by_user_id"] = actor_user_id
             result = conn.execute(
                 update(self.data_lifecycle_table)
                 .where(
                     self.data_lifecycle_table.c.task_id == task_id,
                     self.data_lifecycle_table.c.state.notin_(terminal),
                 )
-                .values(
-                    state=rloan.DataLifecycleState.DELETE_REQUESTED.value,
-                    requested_by_user_id=actor_user_id,
-                    requested_at=timestamp,
-                    updated_at=timestamp,
-                )
+                .values(**values)
             )
             return result.rowcount == 1
 

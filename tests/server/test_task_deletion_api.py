@@ -16,6 +16,8 @@ import uuid
 
 from pathlib import Path
 
+import pytest
+
 from conftest import (
     _load_pssm_module,
     _relocate_task_artifacts,
@@ -249,6 +251,38 @@ def test_retention_finishes_a_user_claim_without_relabelling_it(monkeypatch, tmp
     )
 
     assert cleaned == 1
+    task = module.task_store.get_task(md5sum)
+    assert (task["status"], task["error"]) == ("deleted:finshed", "Task deleted by user")
+    assert not result_dir.exists()
+    assert _releases(module, user_id) == [GIB]
+
+
+def test_retention_keeps_a_user_lane_across_a_failed_purge(monkeypatch, tmp_path):
+    """Retention's NULL-actor retry must not erase the user who asked to delete."""
+    from revocompute.maintenance.tasks import result_cleanup
+
+    module, _client, _auth = _app(monkeypatch, tmp_path)
+    md5sum, result_dir, _artifact, user_id = _seed_task(module, tmp_path, status="deleting:finished")
+    task = module.task_store.get_task(md5sum)
+    assert resource_lifecycle.request_data_deletion(module.task_store, task, actor_user_id=user_id)
+
+    def _fail(_task):
+        raise RuntimeError("filesystem went away")
+
+    with pytest.raises(RuntimeError):
+        resource_lifecycle.purge_task_data(module.task_store, task, remove_artifacts=_fail)
+    assert module.task_store.get_data_lifecycle(md5sum)["state"] == DataLifecycleState.ERROR.value
+
+    cleaned = result_cleanup.cleanup_expired_task_artifacts(
+        0.1,
+        task_store=module.task_store,
+        results_folder=str(module.app.config["RESULTS_FOLDER"]),
+    )
+
+    assert cleaned == 1
+    record = module.task_store.get_data_lifecycle(md5sum)
+    assert record["state"] == DataLifecycleState.PURGED.value
+    assert record["requested_by_user_id"] == user_id
     task = module.task_store.get_task(md5sum)
     assert (task["status"], task["error"]) == ("deleted:finshed", "Task deleted by user")
     assert not result_dir.exists()
