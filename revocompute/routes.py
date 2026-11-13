@@ -5292,12 +5292,13 @@ def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> bool:
     # which is exactly what maintenance resumes, so the request keeps its 500
     # contract and leaves a resumable cleanup rather than an intact tree whose
     # row still reads ``finished``.
-    if not resource_lifecycle.purge_task_data(
+    if not resource_lifecycle.ensure_task_purged(
         task_store,
         task,
         remove_artifacts=_delete_task_artifacts,
     ):
         logging.warning("Data purge for task %s did not complete; it will be retried", md5sum)
+        return False
     now = time.time()
     started_at = task.get("started_at")
     walltime = task.get("walltime")

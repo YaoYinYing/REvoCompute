@@ -16,7 +16,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from revocompute import resource_lifecycle
-from revocompute import resource_ledger as rloan
 from revocompute import task_state
 from revocompute.config import ComputeConfig, env_float
 from revocompute.db import TaskDatabase
@@ -229,26 +228,8 @@ def _retire_expired_task(
     # The durable request precedes any filesystem work: after it, a crash is a
     # resumable purge rather than an intact tree whose row still reads ACTIVE.
     resource_lifecycle.request_data_deletion(task_store, task, actor_user_id=None, at=at)
-    record = task_store.get_data_lifecycle(task_id)
-    if record is None:  # pragma: no cover - request_data_deletion always records one
-        return False
-    state = str(record["state"])
-    if state == rloan.DataLifecycleState.PURGED.value:
-        return True
-    if state == rloan.DataLifecycleState.ERROR.value:
-        # A purge that failed keeps its charge; re-queue it through the same
-        # guarded transition the first attempt used rather than freeing quota.
-        if not task_store.requeue_data_lifecycle(task_id, at=at):
-            return False
-    elif state == rloan.DataLifecycleState.PURGING.value:
-        claimed_at = float(record.get("claimed_at") or record.get("updated_at") or 0.0)
-        if at - claimed_at < resource_lifecycle.PURGE_STALE_SECONDS:
-            # A live purge owns this Task right now.
-            return False
-        if not task_store.reclaim_stale_purge(task_id, at=at):
-            return False
     try:
-        return resource_lifecycle.purge_task_data(
+        return resource_lifecycle.ensure_task_purged(
             task_store, task, remove_artifacts=remove_artifacts, at=at
         )
     except Exception:

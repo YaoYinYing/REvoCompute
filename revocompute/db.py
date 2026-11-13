@@ -5443,12 +5443,13 @@ class TaskDatabase:
 
         The state write is the claim: a crash after it leaves a resumable
         deletion rather than an intact tree whose row still reads ``ACTIVE``.
-        Idempotent for a row already awaiting or in purge.
+        Idempotent for a row already awaiting, in purge, or purged.
         """
         timestamp = time.time() if at is None else at
         terminal = (
             rloan.DataLifecycleState.DELETE_REQUESTED.value,
             rloan.DataLifecycleState.PURGING.value,
+            rloan.DataLifecycleState.PURGED.value,
         )
         with self.engine.begin() as conn:
             existing = (

@@ -34,7 +34,9 @@ its result failed.
 
 A deletion is resumable. If a request is interrupted after its `deleting:*`
 claim, the same delete request resumes it, and deleting a Task whose artifacts
-are already gone succeeds without changing the record. The full transition
+are already gone succeeds without changing the record. While a purge is actively
+running, another delete request answers `409` and leaves the Task in
+`deleting:*` until the purge completes. The full transition
 table is in [Task Lifecycle State](../developer-guide/task-lifecycle-state.md).
 
 Every state after `finished`/`failed` keeps the Task ID: a resubmission of
