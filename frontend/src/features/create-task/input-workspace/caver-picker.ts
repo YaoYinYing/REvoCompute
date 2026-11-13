@@ -851,13 +851,24 @@ export class CaverPicker {
    * Atom mode records only the authored residue address, atom name and altloc.
    * A same-named atom in another residue is a different atom, so the option is
    * selected only when the residue address agrees too.
+   *
+   * The chain is optional in atom mode. An empty `start_chain` leaves the chain
+   * to the Runner, so it must not invalidate the canonical atom. It names a
+   * residue number rather than a chain, so when two chains carry that number one
+   * chain's atom is never presented as the committed atom.
    */
   private atomCommittedIn(residue: SelectedResidue): boolean {
     const parameters = this.context.parameters();
-    return Boolean(parameters.start_atom_name)
-      && !residue.insertion_code
-      && parameters.start_chain === residue.auth_chain
-      && parameters.start_residue_number === String(residue.auth_seq_id);
+    if (!parameters.start_atom_name
+      || residue.insertion_code
+      || parameters.start_residue_number !== String(residue.auth_seq_id)) return false;
+    if (parameters.start_chain) return parameters.start_chain === residue.auth_chain;
+    const chains = new Set(
+      (this.options.viewer()?.allAtoms() || [])
+        .filter(atom => atom.identity.authSeqId === residue.auth_seq_id && !atom.identity.insertionCode)
+        .map(atom => atom.identity.authChain),
+    );
+    return chains.size <= 1;
   }
 
   private renderAtomPicker(): void {

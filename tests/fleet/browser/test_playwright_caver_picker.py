@@ -316,6 +316,20 @@ def _atom_start_point_preset() -> DemoSpec:
     )
 
 
+def _chainless_atom_start_point_preset() -> DemoSpec:
+    """The atom preset with the optional chain left to the Runner."""
+    preset = _atom_start_point_preset()
+    parameters = dict(preset.parameters)
+    parameters.pop("start_chain")
+    return DemoSpec(
+        id="configured_chainless_atom_start_point",
+        title="Configured chainless atom start point",
+        purpose="Bind the reference structure together with a chainless atom address.",
+        files=preset.files,
+        parameters=parameters,
+    )
+
+
 def test_a_preset_reinstates_its_start_point_and_undo_restores_the_previous_one(
     page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -491,3 +505,39 @@ def test_an_atom_preset_keeps_its_atom_and_undo_keeps_the_earlier_point(
     expect(_control(page, "start_chain")).to_have_value("A")
     expect(_control(page, "start_residue_number")).to_have_value("7")
     expect(_control(page, "start_atom_name")).to_have_value("")
+
+
+def test_a_chainless_atom_preset_keeps_its_atom_after_the_topology_loads(
+    page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An optional chain must not invalidate the atom address the preset carries."""
+    monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", PRODUCTION_DIST)
+    mount_scenario(
+        page, runner_scenario(CAVER_PICKER).with_demos([_chainless_atom_start_point_preset()])
+    )
+    page.goto(f"{ORIGIN}/compute/create_task?task_type={CAVER_PICKER.name}")
+    expect(page.locator(".ct-workbench")).to_be_visible()
+
+    page.locator(".ct-file-role input[type=file]").first.set_input_files(
+        {"name": "manual.pdb", "mimeType": "chemical/x-pdb", "buffer": PDB.encode("utf-8")}
+    )
+    page.get_by_text("select residues").wait_for(timeout=180_000)
+
+    page.locator("[data-ct-demo-open]").click()
+    expect(page.locator("dialog.ct-demo-dialog")).to_be_visible()
+    page.locator("[data-ct-demo-choose]").click()
+    page.get_by_role("button", name="Replace current inputs").click()
+    expect(page.locator(".ct-demo-applied")).to_be_visible()
+    page.get_by_text("reference.pdb; select residues").wait_for(timeout=180_000)
+
+    # The chainless address is a Task-valid atom mode state. Restoring must keep
+    # its canonical atom and residue once the deferred topology load completes.
+    expect(page.locator(".ct-file-well")).to_contain_text("reference.pdb")
+    expect(_control(page, "start_point_mode")).to_have_value("atom")
+    expect(_control(page, "start_chain")).to_have_value("")
+    expect(_control(page, "start_residue_number")).to_have_value("2")
+    expect(_control(page, "start_atom_name")).to_have_value("CA")
+    atoms = page.locator(".ct-caver-actions select")
+    expect(atoms).to_be_visible()
+    expect(atoms).not_to_have_value("")
+    assert atoms.locator("option:checked").inner_text().startswith("CA · ")
