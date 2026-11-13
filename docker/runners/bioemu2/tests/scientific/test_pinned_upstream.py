@@ -98,6 +98,31 @@ print("RESULT" + json.dumps({"fixtures": fixtures, "examples": examples}))
     assert any("ligand" in entities for entities in parsed["examples"].values())
 
 
+def test_propagate_fixture_passes_real_atom_validation():
+    output = run_in_sif(
+        """
+import json
+
+import mdtraj
+from bioemu2.cli import validate_x0
+from bioemu2.data_interface import load_system_and_contacts
+
+system, _ = load_system_and_contacts("/data/propagation_start.yaml")
+trajectory = mdtraj.load("/data/propagation_start.cif")
+validate_x0(trajectory, system)
+print("RESULT" + json.dumps({
+    "cif_residues": trajectory.topology.n_residues,
+    "cif_atoms": trajectory.topology.n_atoms,
+    "system_residues": len(system.model_dump()["entities"][0]["sequence"]),
+}))
+""",
+        {ROOT / "tests" / "data" / "bioemu2": "/data"},
+    )
+    parsed = result_line(output)
+    assert parsed["cif_residues"] == parsed["system_residues"] == 79
+    assert parsed["cif_atoms"] == 646
+
+
 def test_three_modes_are_accepted_by_the_pinned_cli():
     output = run_in_sif(
         """
@@ -200,4 +225,3 @@ except RuntimeError as error:
     )
     parsed = result_line(output)
     assert "steering CCD dictionary is not configured" in parsed["error"]
-

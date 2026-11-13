@@ -215,6 +215,12 @@ invented release numbers or dates.
     tests: the pinned SIF commit, the real System YAML parser, and the real Click
     acceptance of all three mode commands. Scientific result acceptance remains
     a separate authorized live run.
+  - Correct the committed propagation fixture so its System YAML sequence matches
+    the captured 79-residue mmCIF exactly; pinned `validate_x0` now passes on the
+    pair and is exercised as a real regression.
+  - Keep one `num_samples` default of 8 across modes, matching the default
+    equilibrium mode. Callers that relied on the legacy propagation or
+    structure-prediction single-sample default set it explicitly.
 
 ### Fixed
 - Tools:

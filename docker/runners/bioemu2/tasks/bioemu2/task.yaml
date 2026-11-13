@@ -146,6 +146,8 @@ parameters:
     num_samples:
       type: integer
       description: Number of independent structures to generate or endpoints to sample.
+        The default applies to every mode; lower it for structure prediction or
+        propagation to bound GPU cost.
       default: 8
       minimum: 1
       maximum: 1000

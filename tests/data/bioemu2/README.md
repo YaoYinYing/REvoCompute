@@ -17,4 +17,6 @@ from the captured CIF. `ligand_system.yaml` declares the same protein chain plus
 one `NAG` CCD ligand on chain `B`, so it exercises the pinned upstream parser's
 ligand entity path. The fixtures are minimal contract demonstrations rather
 than scientific trajectories. Pinned-upstream `validate_x0` compares its atoms
-and their order against the declared system before loading the model.
+and their order against the declared system before loading the model; the
+scientific acceptance test runs `validate_x0` on this exact pair, so the YAML
+sequence and the captured CIF cannot drift apart silently.
