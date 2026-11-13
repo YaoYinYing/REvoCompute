@@ -211,7 +211,7 @@ const jaagBuilder: WorkspacePlugin = {
         if (!errors.length && result.data != null) {
           generated = fileFor(dialect, result.data);
           context.setRoleFiles(role, [generated]);
-          status.textContent = `System YAML ready: ${model.entities instanceof Array ? model.entities.length : 0} entities.`;
+          status.textContent = `System YAML ready: ${rows.length} entities.`;
           context.filesChanged();
         } else {
           clearOwnOutput();
@@ -282,10 +282,8 @@ const jaagBuilder: WorkspacePlugin = {
 
     target.append(details);
     details.append(entityList, add, element('h4', '', 'Covalent bonds'), labelled(bonds, 'Bonded atom pairs'), generate, clear, status, error);
-    [bonds, generate].forEach(control => {
-      control.addEventListener('input', () => { engaged = true; refresh(); });
-      control.addEventListener('change', () => { engaged = true; refresh(); });
-    });
+    bonds.addEventListener('input', () => { engaged = true; refresh(); });
+    bonds.addEventListener('change', () => { engaged = true; refresh(); });
     generate.addEventListener('click', () => { engaged = true; refresh(); });
     add.addEventListener('click', () => addEntity({ type: 'protein', chainIds: 'A' }));
     clear.addEventListener('click', () => {
