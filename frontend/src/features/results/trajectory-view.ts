@@ -9,6 +9,7 @@ import { resultFileName } from '../../api/result-types';
 import { t } from '../../app/i18n';
 import { StructureController } from './molecular/structure-controller';
 import { createDisplayModeControls } from '../structure/display-mode';
+import { createTrajectoryFitPanel } from '../structure/trajectory-fit-panel';
 import type { MolecularViewerFactory, TrajectoryInfo, TrajectoryTopologyFormat } from './molecular/viewer-contract';
 import type { ResolvedViewSources, ViewRenderer } from './renderer-registry';
 
@@ -90,7 +91,7 @@ export function createTrajectoryViewRenderer(
       // declared; a newer Task states its topology's real format (mmCIF).
       const topologyFormat = topologyFormatOf(mapping.topology_format);
 
-      const controller = new StructureController(createViewer, { controlsCollapsed: true });
+      const controller = new StructureController(createViewer, { controlsCollapsed: true, selectionEnabled: true });
       const stage = element('section', 'structure-viewport trajectory-viewport');
       const viewerHost = element('div', 'structure-host');
       viewerHost.setAttribute('role', 'region');
@@ -157,6 +158,9 @@ export function createTrajectoryViewRenderer(
         status.textContent = sample
           ? t('results.trajectory.frames', { count: value.frameCount })
           : t('results.trajectory.framesDeclared', { count: value.frameCount, unit: declared || unit.toLowerCase() });
+        // The fit panel applies the precomputed preview transform for this
+        // frame, if a preview is active; otherwise it is a no-op.
+        void fit.frameDisplayed(value.frame, value.frameCount);
       };
       const step = async (action: 'set' | 'advance', value: number): Promise<void> => {
         try {
@@ -209,7 +213,21 @@ export function createTrajectoryViewRenderer(
           collapsed: t('results.structure.collapsed'),
         },
       });
-      context.signal.addEventListener('abort', () => { destroyed = true; stop(); display.destroy(); controller.dispose(); }, { once: true });
+      // The preview fit layer never touches the source bytes or the published
+      // artifact; it reads the frames Mol* already parsed and applies a
+      // reversible conformation transform to the display.
+      let currentSource: { topology: ResultFile; coordinates: ResultFile } | null = null;
+      const fit = createTrajectoryFitPanel({
+        controller,
+        taskId: context.taskId,
+        source: () => currentSource
+          ? { ...currentSource, coordinateFormat: format, topologyFormat }
+          : null,
+      });
+      toolbar.append(fit.element);
+      context.signal.addEventListener('abort', () => {
+        destroyed = true; stop(); display.destroy(); fit.destroy(); controller.dispose();
+      }, { once: true });
 
       // Each selection mounts that design's topology and its own frames; the
       // controller supersedes the previous load, so the same stage is reused.
@@ -217,6 +235,7 @@ export function createTrajectoryViewRenderer(
       const load = async (topology: ResultFile): Promise<void> => {
         const current = ++request;
         stop();
+        fit.reset();
         loaded = null;
         scrubber.disabled = true;
         scrubber.value = '1';
@@ -225,6 +244,7 @@ export function createTrajectoryViewRenderer(
         play.disabled = true;
         label.textContent = t('results.trajectory.position', { unit, frame: '—', total: '—' });
         const coordinates = associatedCoordinates(topology, coordinateArtifacts, mapping.association);
+        currentSource = coordinates ? { topology, coordinates } : null;
         if (!coordinates) {
           // The stage is emptied so the previous design's frames cannot be
           // mistaken for this design's.
@@ -260,6 +280,7 @@ export function createTrajectoryViewRenderer(
         // A single design keeps its existing failure contract; with several, one
         // design's unreadable frames must not take the selector down with it.
         if (topologies.length === 1) {
+          fit.destroy();
           controller.dispose();
           throw error;
         }
@@ -267,7 +288,7 @@ export function createTrajectoryViewRenderer(
       }
       return {
         get frameCount(): number { return loaded?.frameCount || 0; },
-        destroy: () => { destroyed = true; stop(); display.destroy(); controller.dispose(); },
+        destroy: () => { destroyed = true; stop(); display.destroy(); fit.destroy(); controller.dispose(); },
       };
     },
   };

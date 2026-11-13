@@ -12,6 +12,7 @@ import type {
   XYZ,
 } from '../../structure/molecular-scene';
 import type { MolecularViewer, MolecularViewerFactory, TrajectoryInfo, TrajectoryTopologyFormat } from './viewer-contract';
+import type { PeriodicBox } from '../../structure/trajectory-fit';
 
 const MAX_STRUCTURE_BYTES = 64 * 1024 * 1024;
 
@@ -334,6 +335,33 @@ export class StructureController {
     const viewer = this.viewer;
     if (!viewer?.setTrajectoryFrame) throw new Error(t('results.trajectory.unavailable'));
     return viewer.setTrajectoryFrame(action, value);
+  }
+
+  /** Whether this backend can run a browser-local fit over the loaded frames. */
+  supportsTrajectoryFitting(): boolean {
+    return typeof this.viewer?.readTrajectoryFrame === 'function'
+      && typeof this.viewer?.trajectoryFrameCell === 'function'
+      && typeof this.viewer?.applyPreviewTransform === 'function';
+  }
+
+  setSelectionMode(enabled: boolean): void {
+    this.viewer?.setSelectionMode?.(enabled);
+  }
+
+  readTrajectoryFrame(frame: number, indices: readonly number[]): Float64Array {
+    const viewer = this.viewer;
+    if (!viewer?.readTrajectoryFrame) throw new Error(t('results.trajectory.fittingUnavailable'));
+    return viewer.readTrajectoryFrame(frame, indices);
+  }
+
+  trajectoryFrameCell(frame: number): PeriodicBox | null {
+    return this.viewer?.trajectoryFrameCell?.(frame) || null;
+  }
+
+  applyPreviewTransform(matrix: ArrayLike<number> | null): Promise<void> {
+    const viewer = this.viewer;
+    if (!viewer?.applyPreviewTransform) return Promise.resolve();
+    return viewer.applyPreviewTransform(matrix);
   }
 
   /** Empty the stage, superseding any in-flight trajectory load. */

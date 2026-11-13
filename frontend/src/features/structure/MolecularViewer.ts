@@ -8,6 +8,8 @@ import { ShapeRepresentation } from 'molstar/lib/mol-repr/shape/representation.j
 import { parseRecordedSpheres } from './sphere-geometry';
 import { OrderedSet } from 'molstar/lib/mol-data/int.js';
 import { Box3D, Sphere3D } from 'molstar/lib/mol-math/geometry.js';
+import { ModelSymmetry } from 'molstar/lib/mol-model-formats/structure/property/symmetry.js';
+import { Mat4 } from 'molstar/lib/mol-math/linear-algebra.js';
 import { Vec3 } from 'molstar/lib/mol-math/linear-algebra/3d/vec3.js';
 import {
   StructureElement,
@@ -49,6 +51,7 @@ import {
   type XYZ,
 } from './molecular-scene';
 import { allAtoms as allSceneAtoms, selectionAtoms, selectionResidues } from './molstar-scene';
+import type { PeriodicBox } from './trajectory-fit';
 
 export { authoredResidue };
 export type {
@@ -84,6 +87,9 @@ const COLORS: Record<string, string> = {
 };
 
 const BACKGROUNDS = { light: 0xfcfdfb, dark: 0x111318 } as const;
+
+/** Tag on the reversible preview-only conformation decorator. */
+const PREVIEW_TRANSFORM_TAG = 'REvoComputeTrajectoryPreviewTransform';
 
 export interface MolecularViewerOptions {
   /** This mode offers Mol*'s native panels. When false the viewer also hides
@@ -330,6 +336,90 @@ export class MolecularViewer implements MolecularScene {
       this.sceneState.refreshSelection(this.readSelection());
       this.sceneState.setFrame(frame);
       return { frame, frameCount: info.frameCount };
+    });
+  }
+
+  /**
+   * Turn Mol*'s click-to-select interaction on or off without remounting.
+   * Selections still flow through the shared typed scene.
+   */
+  setSelectionMode(enabled: boolean): void {
+    if (this.plugin) this.plugin.selectionMode = Boolean(enabled);
+  }
+
+  /**
+   * Read the fit-subset coordinates of one source frame, in Angstrom.
+   *
+   * `indices` are the viewer element indices of the loaded topology (the same
+   * `SceneAtom.identity.index` values the typed scene publishes). The source
+   * coordinate artifact is parsed by Mol* and never rewritten here.
+   */
+  readTrajectoryFrame(frame: number, indices: readonly number[]): Float64Array {
+    const selection = this.trajectorySelection();
+    if (!selection) throw new Error('No trajectory frames are loaded.');
+    const index = Math.max(0, Math.min(selection.frameCount - 1, Math.trunc(frame)));
+    const model = selection.trajectory.getFrameAtIndex(index);
+    const conformation = (model as { atomicConformation?: { x: ArrayLike<number>; y: ArrayLike<number>; z: ArrayLike<number> } } | undefined)?.atomicConformation;
+    if (!conformation) throw new Error('The trajectory frame did not expose atomic coordinates.');
+    const coordinates = new Float64Array(indices.length * 3);
+    for (let offset = 0; offset < indices.length; offset += 1) {
+      const atom = indices[offset]!;
+      coordinates[offset * 3] = Number(conformation.x[atom]);
+      coordinates[offset * 3 + 1] = Number(conformation.y[atom]);
+      coordinates[offset * 3 + 2] = Number(conformation.z[atom]);
+    }
+    return coordinates;
+  }
+
+  /** The periodic box declared by one source frame, if the artifact has one. */
+  trajectoryFrameCell(frame: number): PeriodicBox | null {
+    const selection = this.trajectorySelection();
+    if (!selection) return null;
+    const index = Math.max(0, Math.min(selection.frameCount - 1, Math.trunc(frame)));
+    const model = selection.trajectory.getFrameAtIndex(index);
+    const cell = ModelSymmetry.Provider.get(model as never)?.spacegroup?.cell;
+    if (!cell) return null;
+    const lengths: [number, number, number] = [Number(cell.size[0]), Number(cell.size[1]), Number(cell.size[2])];
+    const angles: [number, number, number] = [
+      Number(cell.anglesInRadians[0]), Number(cell.anglesInRadians[1]), Number(cell.anglesInRadians[2]),
+    ];
+    return { lengths, angles };
+  }
+
+  /**
+   * Apply or clear the reversible preview transform.
+   *
+   * This inserts Mol*'s own conformation decorator below the loaded structure, so
+   * the published frame, the downloaded bytes and the source topology are never
+   * mutated. Clearing writes the identity matrix, which `Structure.transform`
+   * short-circuits, restoring the exact original display.
+   */
+  applyPreviewTransform(matrix: ArrayLike<number> | null): Promise<void> {
+    return this.enqueue(async () => {
+      this.assertMounted();
+      const structure = this.hierarchy().current.structures[0];
+      if (!structure) return;
+      const state = this.plugin.state.data;
+      const root = structure.cell.transform.ref;
+      const existing = state.selectQ((query: any) => query.byRef(root).subtree()
+        .withTag(PREVIEW_TRANSFORM_TAG)
+        .withTransformer(StateTransforms.Model.TransformStructureConformation))[0];
+      if (matrix === null) {
+        if (!existing) return;
+        const params = { transform: { name: 'matrix' as const, params: { data: Mat4.identity(), transpose: false } } };
+        await this.plugin.runTask(state.updateTree(state.build().to(existing).update(params)));
+        this.plugin.canvas3d?.commit(true);
+        return;
+      }
+      if (matrix.length < 16) throw new Error('A preview transform needs 16 matrix values.');
+      const data = Mat4.identity();
+      for (let index = 0; index < 16; index += 1) data[index] = Number(matrix[index]);
+      const params = { transform: { name: 'matrix' as const, params: { data, transpose: false } } };
+      const builder = existing
+        ? state.build().to(existing).update(params)
+        : state.build().to(root).insert(StateTransforms.Model.TransformStructureConformation, params, { tags: PREVIEW_TRANSFORM_TAG });
+      await this.plugin.runTask(state.updateTree(builder));
+      this.plugin.canvas3d?.commit(true);
     });
   }
 
@@ -804,15 +894,20 @@ export class MolecularViewer implements MolecularScene {
     }, () => representation.destroy());
   }
 
-  private trajectoryInfo() {
+  private trajectorySelection() {
     if (!this.plugin) return null;
     const state = this.plugin.state.data;
-    let best: { model: any; frameCount: number } | null = null;
+    let best: { model: any; trajectory: any; frameCount: number } | null = null;
     for (const model of state.selectQ((query: any) => query.ofTransformer(StateTransforms.Model.ModelFromTrajectory))) {
-      const trajectory = state.cells.get(model.transform.parent);
-      const frames = Number(trajectory?.obj?.data?.frameCount || 0);
-      if (!best || frames > best.frameCount) best = { model, frameCount: frames };
+      const trajectory = state.cells.get(model.transform.parent)?.obj?.data;
+      const frames = Number(trajectory?.frameCount || 0);
+      if (!best || frames > best.frameCount) best = { model, trajectory, frameCount: frames };
     }
+    return best;
+  }
+
+  private trajectoryInfo() {
+    const best = this.trajectorySelection();
     if (!best || best.frameCount < 1) return null;
     return {
       model: best.model,
