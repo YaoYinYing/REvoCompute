@@ -255,3 +255,48 @@ size is not guessed from the atom count.
   CPU, address-space, output-file, descriptor, and wall-clock limits. A timeout,
   resource-limit termination, crash, or malformed worker response is a normal
   validation rejection and cannot create a Task.
+
+### Artifact download links
+
+An authenticated owner may mint a short-lived bearer URL for one published,
+manifest-declared artifact. The URL is a capability for that artifact's bytes,
+never a login credential: it authorizes no Task list, API, or other artifact.
+
+- The signed token binds the Task, artifact path, digest, size, issuing owner,
+  `read-bytes` scope and a hard expiry (default one hour, ceiling 24 hours). The
+  grant row stores only a hash of the token id, never the token or its clear-text
+  id. Rotating `ARTIFACT_LINK_SECRET` (or `AUTH_SECRET_KEY` when it is unset)
+  invalidates every outstanding link; individual and per-Task revocation are
+  explicit.
+- Every `GET`/`HEAD` rechecks the grant, the canonical Task state, the current
+  publication digest and size, and the issuing owner's access. Invalid, expired,
+  revoked, wrong-scope and stale-publication cases share one `404` so a caller
+  cannot enumerate Tasks or artifacts.
+- Bytes come from the same verified snapshot used by the ordinary artifact
+  download route.
+  A replaced inode or a republished digest is refused, an in-flight response may
+  finish from its already-open snapshot, and every later range request needs an
+  active link.
+- The bearer response sends `Content-Disposition: attachment`,
+  `Referrer-Policy: no-referrer`, `Cache-Control: private, no-store,
+  no-transform`, and `X-Content-Type-Options: nosniff`. A full representation is
+  `Content-Encoding: identity`, so a gateway compressor cannot replace the strong
+  content `ETag` with a weak one; `If-Range` is honored only for an exact strong
+  validator, and 206 responses stay byte-exact and uncompressed.
+- The gateway and application access logs redact the token-bearing request
+  path. The application checks the raw and repeatedly unquoted path for the
+  marker before resolving anything, and folds duplicate and `.` separators
+  without ever resolving `..`; a leading `//` is treated as a path, not a URL.
+  The gateway matches the marker in the raw request line and normalized URI
+  (including `%25` and `%00`) and rejects the parent-dot spellings whose
+  normalization would remove the marker from `$uri` (`..` followed by `/`,
+  `%2f`, `%00`, `%5c`, or end-of-URI) with `400` before proxying, because a
+  resolved `..` can remove the marker while the raw request line still names the
+  token. A trailing `..` before `?`, `;` or `%3F` is not rejected: it returns
+  `502` with a closed upstream, but nginx leaves the marker in `$uri`, so the
+  gateway error log stays suppressed, the access line is redacted, and the token
+  is not forwarded. Gateway error messages for the bearer route are suppressed;
+  the application still records its own redacted error. Tradeoff: the
+  parent-dot spellings whose normalization would remove the marker are rejected,
+  and a URI containing `%25` or a decoded bare `%` is access-log-redacted even
+  when it is not a bearer request.

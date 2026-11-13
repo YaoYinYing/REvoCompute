@@ -1,4 +1,4 @@
-import { ApiError, beginDownload, downloadName, downloadUrl, getResultManifest, loadAuthorizedResult, requestResultArchive, taskIdFromLocation } from '../../api/result-api';
+import { ApiError, absoluteDownloadUrl, beginDownload, createArtifactDownloadLink, downloadName, downloadUrl, getResultManifest, loadAuthorizedResult, requestResultArchive, revokeArtifactDownloadLink, taskIdFromLocation, type ArtifactDownloadLink } from '../../api/result-api';
 import { createClonePlan } from '../../api/app-api';
 import { getTaskType } from '../../api/app-api';
 import { resultFileName, type ArtifactRole, type LogicalResultFile, type ResultArtifact, type ResultFile, type ResultManifest,
@@ -121,6 +121,8 @@ export class ResultWorkspace {
   private diagnosticController: AbortController | null = null;
   private poll: number | null = null;
   private disposed = false;
+  /** Links issued this page session, keyed by published artifact path. */
+  private readonly downloadLinks = new Map<string, ArtifactDownloadLink>();
   private archiveBusy = false;
   private archiveTimer: number | null = null;
   private archiveChecks = 0;
@@ -709,7 +711,86 @@ export class ResultWorkspace {
     open.setAttribute('aria-current', String(selectedPath === artifact.path));
     const meta = element('span', '', formatBytes(artifact.size)); open.append(name, meta); open.addEventListener('click', () => void this.openArtifact(artifact));
     const download = element('a', 'result-file-download') as HTMLAnchorElement; download.href = downloadUrl(artifact); download.setAttribute('download', downloadName(artifact)); download.title = t('results.fileDownload', { name: artifact.path }); download.setAttribute('aria-label', t('results.fileDownload', { name: artifact.path })); setButtonIcon(download, 'Download');
-    row.append(open, download); return row;
+    row.append(open, download);
+    // A local result's files are the reader's own, and a demo replay has no
+    // Task to authorize issuance against, so neither offers a Server link.
+    if (!this.local && !this.demoSource) {
+      const link = element('button', 'result-file-link') as HTMLButtonElement; link.type = 'button';
+      link.title = t('results.link.copy'); link.setAttribute('aria-label', t('results.link.copyNamed', { name: artifact.path }));
+      setButtonIcon(link, 'Link');
+      const status = element('p', 'result-link-status'); status.hidden = true; status.setAttribute('role', 'status');
+      link.addEventListener('click', () => void this.copyExpiringLink(artifact, link, status));
+      row.append(link, status);
+      const existing = this.downloadLinks.get(artifact.path);
+      if (existing) this.renderLinkState(artifact, link, status, existing);
+    }
+    return row;
+  }
+
+  private async copyExpiringLink(artifact: ResultArtifact, button: HTMLButtonElement, status: HTMLElement): Promise<void> {
+    const existing = this.downloadLinks.get(artifact.path);
+    if (existing && this.linkActive(existing)) {
+      this.renderLinkState(artifact, button, status, existing, await this.copyLink(existing));
+      return;
+    }
+    if (!window.confirm(t('results.link.warning'))) return;
+    button.disabled = true;
+    status.hidden = false; status.dataset.state = 'busy'; status.replaceChildren(element('span', '', t('results.link.creating')));
+    try {
+      const link = await createArtifactDownloadLink(this.taskId, artifact.path);
+      this.downloadLinks.set(artifact.path, link);
+      this.renderLinkState(artifact, button, status, link, await this.copyLink(link));
+    } catch (error) {
+      status.dataset.state = 'error'; status.replaceChildren(element('span', '', (error as Error).message || t('results.link.failed')));
+    } finally { button.disabled = false; }
+  }
+
+  /** Copy the link; return the URL for manual copying when the clipboard is unavailable. */
+  private async copyLink(link: ArtifactDownloadLink): Promise<HTMLInputElement | null> {
+    const url = absoluteDownloadUrl(link.download_url);
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(url);
+      return null;
+    } catch {
+      const input = element('input', 'result-link-url') as HTMLInputElement;
+      input.value = url; input.readOnly = true; input.setAttribute('aria-label', t('results.link.copy'));
+      input.addEventListener('focus', () => input.select());
+      return input;
+    }
+  }
+
+  private linkActive(link: ArtifactDownloadLink): boolean {
+    return new Date(link.expires_at).getTime() > Date.now();
+  }
+
+  private renderLinkState(artifact: ResultArtifact, button: HTMLButtonElement, status: HTMLElement, link: ArtifactDownloadLink, manual: HTMLInputElement | null = null): void {
+    status.hidden = false; status.dataset.state = this.linkActive(link) ? 'active' : 'expired';
+    const revoke = element('button', 'result-button result-button-small', t('results.link.revoke')) as HTMLButtonElement; revoke.type = 'button';
+    const renew = element('button', 'result-button result-button-small', t('results.link.renew')) as HTMLButtonElement; renew.type = 'button';
+    revoke.addEventListener('click', () => void this.revokeLink(artifact, button, status, false));
+    renew.addEventListener('click', () => void this.revokeLink(artifact, button, status, true));
+    const expiry = element('span', '', this.linkActive(link)
+      ? t('results.link.active', { expires: new Date(link.expires_at).toLocaleString() })
+      : t('results.link.expired'));
+    const content = [expiry, element('span', 'result-link-warning', t('results.link.notice')), revoke, renew];
+    // A clipboard refusal still leaves the reader the exact URL to copy by
+    // hand; the link is never silently left only in memory.
+    if (manual) { content.push(element('span', '', t('results.link.manual'))); content.push(manual); manual.focus(); manual.select(); }
+    status.replaceChildren(...content);
+  }
+
+  private async revokeLink(artifact: ResultArtifact, button: HTMLButtonElement, status: HTMLElement, renew: boolean): Promise<void> {
+    const link = this.downloadLinks.get(artifact.path); if (!link) return;
+    button.disabled = true;
+    try {
+      await revokeArtifactDownloadLink(this.taskId, link.id);
+      this.downloadLinks.delete(artifact.path);
+      if (renew) await this.copyExpiringLink(artifact, button, status);
+      else { status.hidden = false; status.dataset.state = 'revoked'; status.replaceChildren(element('span', '', t('results.link.revoked'))); }
+    } catch (error) {
+      status.hidden = false; status.dataset.state = 'error'; status.replaceChildren(element('span', '', (error as Error).message || t('results.link.failed')));
+    } finally { button.disabled = false; }
   }
 
   private renderRecord(): void {

@@ -830,6 +830,13 @@ _TOKEN_MAX_AGE = _env_int("AUTH_TOKEN_MAX_AGE", 7 * 24 * 3600)  # 7 days
 
 _serializer = URLSafeTimedSerializer(_SECRET_KEY, salt="revodesign-auth")
 
+#: Artifact download links sign with the same primitive under a distinct salt,
+#: so neither token class validates as the other.  ``ARTIFACT_LINK_SECRET`` lets
+#: an operator rotate link signing on its own; rotating ``AUTH_SECRET_KEY``
+#: (when it is unset) invalidates every outstanding link as well.
+_ARTIFACT_LINK_SECRET = os.environ.get("ARTIFACT_LINK_SECRET", "") or _SECRET_KEY
+artifact_link_serializer = URLSafeTimedSerializer(_ARTIFACT_LINK_SECRET, salt="revocompute-artifact-download")
+
 
 _SESSION_PURPOSE = "session"
 

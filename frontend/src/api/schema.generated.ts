@@ -1434,6 +1434,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/results/{task_id}/download-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue an expiring download link for one published artifact
+         * @description Creates a revocable bearer link scoped to one artifact of an accessible Task. The link URL is a capability for that artifact's bytes only; it authenticates no other API. The response returns the token once.
+         */
+        post: operations["createResultDownloadLink"];
+        /** Revoke every active download link for a Task */
+        delete: operations["revokeResultDownloadLinks"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/results/{task_id}/download-links/{link_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke one download link */
+        delete: operations["revokeResultDownloadLink"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/artifact-downloads/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one artifact through a bearer download link
+         * @description Accepts no session credential. Supports GET and HEAD with a single byte Range and If-Range. Every request rechecks the grant, the canonical Task, the current publication and the issuing owner's access; an invalid, expired, revoked or stale link receives the same 404.
+         */
+        get: operations["getArtifactDownload"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/results/{task_id}/files/{file_id}": {
         parameters: {
             query?: never;
@@ -1791,6 +1849,30 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ArtifactDownloadLinkRequest: {
+            /** @description Manifest-declared artifact path */
+            path: string;
+            /** @description Requested lifetime, bounded by the server maximum */
+            ttl_seconds?: number | null;
+        };
+        ArtifactDownloadLink: {
+            id: string;
+            /** @description Same-origin bearer URL for the artifact's bytes */
+            download_url: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** @enum {string} */
+            scope: "read-bytes";
+            path: string;
+            sha256: string;
+            size: number;
+        };
+        ArtifactDownloadRevocation: {
+            /** @enum {string} */
+            status: "revoked";
+            md5sum: string;
+            revoked?: number;
+        };
         TaskDiagnostics: {
             task_id: string;
             /** @enum {string} */
@@ -6296,6 +6378,136 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    createResultDownloadLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: components["parameters"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactDownloadLinkRequest"];
+            };
+        };
+        responses: {
+            /** @description Link issued */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactDownloadLink"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Issuance rate limit exceeded */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    revokeResultDownloadLinks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: components["parameters"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Links revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactDownloadRevocation"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    revokeResultDownloadLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: components["parameters"]["TaskId"];
+                link_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Link revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactDownloadRevocation"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getArtifactDownload: {
+        parameters: {
+            query?: never;
+            header?: {
+                Range?: string;
+                "If-Range"?: string;
+            };
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Complete artifact bytes or its headers for HEAD */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description One byte range of the artifact */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            /** @description Requested byte range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     getResultLogicalFile: {

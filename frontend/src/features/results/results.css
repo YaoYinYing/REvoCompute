@@ -19,11 +19,11 @@
 /* The result's own identity leads the page: it is the loudest text in the workspace. */
 .result-header h1 { margin: .5rem 0 0; font-family: var(--font-display); font-size: clamp(1.95rem, 2.9vw, 2.5rem); font-weight: 600; line-height: 1.12; letter-spacing: -.02em; overflow-wrap: anywhere; }
 .result-header-actions { flex-wrap: wrap; justify-content: end; }
-.result-button, .result-icon-button, .result-tab, .result-file-open, .result-file-download, .result-rail-reopen, .candidate-open { border: 1px solid var(--result-line); border-radius: var(--r-util); background: var(--result-surface); color: var(--result-ink); text-decoration: none; cursor: pointer; }
+.result-button, .result-icon-button, .result-tab, .result-file-open, .result-file-download, .result-file-link, .result-rail-reopen, .candidate-open { border: 1px solid var(--result-line); border-radius: var(--r-util); background: var(--result-surface); color: var(--result-ink); text-decoration: none; cursor: pointer; }
 .result-button { display: inline-flex; min-height: 2.35rem; align-items: center; padding: .45rem .72rem; font-size: .875rem; font-weight: 600; transition: border-color .15s ease, color .15s ease, background .15s ease; }
 .result-button-small { min-height: 2rem; padding: .32rem .55rem; font-size: .875rem; }
-.result-icon-button, .result-file-download { display: inline-grid; width: 2.35rem; height: 2.35rem; place-items: center; padding: 0; }
-.result-button:hover, .result-icon-button:hover, .result-tab:hover, .result-file-open:hover, .result-file-download:hover { border-color: var(--result-accent); color: var(--result-accent); background: color-mix(in srgb, var(--result-accent) 6%, var(--result-surface)); }
+.result-icon-button, .result-file-download, .result-file-link { display: inline-grid; width: 2.35rem; height: 2.35rem; place-items: center; padding: 0; }
+.result-button:hover, .result-icon-button:hover, .result-tab:hover, .result-file-open:hover, .result-file-download:hover, .result-file-link:hover { border-color: var(--result-accent); color: var(--result-accent); background: color-mix(in srgb, var(--result-accent) 6%, var(--result-surface)); }
 /* Scoped to the results subtree: the app shell owns the document-level ring
    (app.css), and this sheet loads after it, so a bare selector here would
    replace the shell's ring everywhere on a result route. */
@@ -81,7 +81,11 @@
 .result-directory { border-top: 1px solid var(--result-line); }
 .result-directory > summary { padding: .6rem 0; cursor: pointer; color: var(--result-muted); font-size: .875rem; font-weight: 650; }
 .result-directory-children { padding-left: .7rem; }
-.result-file-row { display: grid; grid-template-columns: minmax(0, 1fr) 2.35rem; align-items: center; }
+.result-file-row { display: grid; grid-template-columns: minmax(0, 1fr) 2.35rem 2.35rem; align-items: center; }
+.result-link-status { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .6rem; margin: 0 .55rem .55rem; padding: .45rem .55rem; border: 1px solid var(--result-line); border-radius: var(--r-util); font-size: .8125rem; color: var(--result-muted); }
+.result-link-status[data-state="expired"], .result-link-status[data-state="error"] { border-color: color-mix(in srgb, var(--result-danger) 45%, var(--result-line)); }
+.result-link-warning { color: var(--result-muted); font-size: .8125rem; }
+.result-link-url { width: 100%; min-width: 0; margin-top: .25rem; padding: .3rem .4rem; border: 1px solid var(--result-line); border-radius: var(--r-util); background: var(--result-surface); color: var(--result-ink); font: inherit; }
 .result-file-open { min-width: 0; padding: .5rem .55rem; border-color: transparent; border-radius: var(--r-util); text-align: left; }
 .result-file-open strong, .result-file-open span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result-file-open span { margin-top: .18rem; color: var(--result-muted); font-size: .875rem; }

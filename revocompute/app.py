@@ -20,6 +20,7 @@ from flask import Flask, abort, current_app, g, jsonify, request
 from revocompute.auth import _SECRET_KEY as _TOKEN_SIGNING_KEY  # noqa: E402
 from revocompute.auth import UserDatabase  # noqa: E402
 from revocompute.auth import _env_bool  # noqa: E402
+from revocompute.artifact_links import redacted_request_path  # noqa: E402
 from revocompute.config import ComputeConfig, ToolConfig
 from revocompute.config import ensure_directories as _ensure_directories
 from revocompute.config import env_csv as _env_csv
@@ -64,6 +65,12 @@ def _start_request_trace() -> None:
     incoming = request.headers.get("X-Request-ID", "")
     g.request_id = incoming if _REQUEST_ID_PATTERN.fullmatch(incoming) else uuid.uuid4().hex
     g.request_started_at = time.monotonic()
+    # The gateway and gunicorn access log formats read this environment entry
+    # instead of the raw path, so a bearer download token in the URL path is
+    # never persisted in an access log.  The path is normalized first, so a
+    # malformed spelling that fails the route is redacted too.  Every other
+    # path is unchanged.
+    request.environ["x-log-path"] = redacted_request_path(request.path)
     emit_event(
         "http.request.started",
         request_id=g.request_id,
@@ -422,13 +429,21 @@ def _is_admin_user() -> bool:
     return bool(user and user.get("role") == "admin")
 
 
-def _task_access_allowed(task: dict[str, Any]) -> bool:
-    if _is_admin_user():
+def _task_access_allowed_for_user(task: dict[str, Any], user: dict[str, Any] | None) -> bool:
+    """Whether *user* may read *task*, independent of the current request.
+
+    The bearer download route authorizes as the link's issuing owner rather than
+    as the anonymous requester, so the decision must not read request state.
+    """
+    if user and user.get("role") == "admin":
         return True
-    user = g.get("current_user")
     if not user:
         return False
     return str(task.get("submitted_by_user_id")) == str(user["id"])
+
+
+def _task_access_allowed(task: dict[str, Any]) -> bool:
+    return _task_access_allowed_for_user(task, g.get("current_user"))
 
 
 def _task_mutation_allowed(task: dict[str, Any]) -> bool:
@@ -436,23 +451,30 @@ def _task_mutation_allowed(task: dict[str, Any]) -> bool:
     return _task_access_allowed(task)
 
 
+def _task_full_results_allowed_for_user(task: dict[str, Any], user: dict[str, Any] | None) -> bool:
+    """Return whether *user* may read inputs, diagnostics, and archives."""
+    return _task_access_allowed_for_user(task, user)
+
+
 def _task_full_results_allowed(task: dict[str, Any]) -> bool:
     """Return whether the caller may read inputs, diagnostics, and archives."""
-    if _is_admin_user():
-        return True
-    user = g.get("current_user")
-    if not user:
+    return _task_full_results_allowed_for_user(task, g.get("current_user"))
+
+
+def _task_artifact_access_allowed_for_user(
+    task: dict[str, Any], artifact: dict[str, Any], user: dict[str, Any] | None
+) -> bool:
+    """Keep diagnostic/provenance files out of visibility-only surfaces."""
+    if not _task_access_allowed_for_user(task, user):
         return False
-    return _task_access_allowed(task)
+    if _task_full_results_allowed_for_user(task, user):
+        return True
+    return artifact.get("role") not in {"diagnostic", "provenance"}
 
 
 def _task_artifact_access_allowed(task: dict[str, Any], artifact: dict[str, Any]) -> bool:
     """Keep diagnostic/provenance files out of visibility-only surfaces."""
-    if not _task_access_allowed(task):
-        return False
-    if _task_full_results_allowed(task):
-        return True
-    return artifact.get("role") not in {"diagnostic", "provenance"}
+    return _task_artifact_access_allowed_for_user(task, artifact, g.get("current_user"))
 
 
 def _task_not_found(md5sum: str, *, as_page: bool = False):
@@ -484,6 +506,10 @@ def _task_id_for_upload(content_md5: str, user_storage_key: str) -> str:
 
 
 def _delete_task_artifacts(task: dict[str, Any]) -> None:
+    # A grant outlives neither the bytes it names nor the Task that published
+    # them.  Dropping the rows is the durable half of deletion; a bearer request
+    # still rechecks the canonical Task, so a row removed later is refused too.
+    task_store.delete_task_artifact_download_links(str(task["md5sum"]))
     _delete_result_artifacts(task, app.config["RESULTS_FOLDER"], app.config["WORKSPACE_FOLDER"])
 
 

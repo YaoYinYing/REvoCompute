@@ -1014,6 +1014,18 @@ const en: Dictionary = {
   'quota.waterfall.unattributed': 'Unattributed',
   'quota.waterfall.unknownKind': 'Unknown fact',
   'quota.waterfall.rawLedger': 'View the raw append-only ledger',
+  'results.link.copy': 'Copy expiring download link',
+  'results.link.copyNamed': 'Copy expiring download link for {name}',
+  'results.link.warning': 'This link lets anyone who has it download this file until the link expires or you revoke it. It is not a login. The address may remain in your clipboard, download manager, or browser history.',
+  'results.link.creating': 'Creating an expiring link…',
+  'results.link.active': 'Link active until {expires}',
+  'results.link.expired': 'This link has expired. Create a new one to download again.',
+  'results.link.revoked': 'Link revoked.',
+  'results.link.revoke': 'Revoke link',
+  'results.link.renew': 'Renew link',
+  'results.link.failed': 'The download link could not be created or revoked.',
+  'results.link.notice': 'Anyone with this link can download this file until it expires or is revoked. It may be exposed through your clipboard or download manager.',
+  'results.link.manual': 'Copy this address manually:',
 };
 
 const zhCN: Dictionary = {
@@ -1979,6 +1991,18 @@ const zhCN: Dictionary = {
   'quota.waterfall.unattributed': '未归属',
   'quota.waterfall.unknownKind': '未知事实',
   'quota.waterfall.rawLedger': '查看原始仅追加账本',
+  'results.link.copy': '复制限时下载链接',
+  'results.link.copyNamed': '复制 {name} 的限时下载链接',
+  'results.link.warning': '任何获得此链接的人都能在链接过期或你撤销之前下载此文件。它不是登录凭证。该地址可能留在你的剪贴板、下载管理器或浏览器历史中。',
+  'results.link.creating': '正在创建限时链接…',
+  'results.link.active': '链接有效至 {expires}',
+  'results.link.expired': '此链接已过期。如需再次下载，请创建新链接。',
+  'results.link.revoked': '链接已撤销。',
+  'results.link.revoke': '撤销链接',
+  'results.link.renew': '续期链接',
+  'results.link.failed': '无法创建或撤销下载链接。',
+  'results.link.notice': '任何获得此链接的人都能在它过期或被撤销之前下载此文件。它可能通过你的剪贴板或下载管理器泄露。',
+  'results.link.manual': '请手动复制此地址：',
 };
 
 export const catalogs: Record<Locale, Dictionary> = { en, 'zh-CN': zhCN };

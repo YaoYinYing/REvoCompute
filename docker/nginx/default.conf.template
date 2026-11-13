@@ -57,7 +57,31 @@ http {
         default 0;   # token present — do not log this request line
         ""      1;
     }
-    access_log /dev/stdout combined if=$loggable;
+
+    # Artifact-scoped download links carry their bearer token as a path
+    # segment.  These requests stay in the access log for operational
+    # visibility, but the request line is rewritten for the log only.  Matching
+    # the raw ``$request`` catches double-encoded separators (``%252F``) and a
+    # trailing encoded NUL; matching the normalized ``$uri`` catches
+    # percent-encoded marker letters and collapsed slashes and dot segments.
+    # Every other request keeps its original line.
+    map $request $log_raw_marker {
+        default 0;
+        ~*artifact-downloads 1;
+        ~*%25 1;   # double-encoded byte — a marker letter may be hidden
+        ~*%00 1;   # encoded NUL terminator
+    }
+    map $uri $log_normalized_marker {
+        default 0;
+        ~*artifact-downloads 1;
+        ~*% 1;     # nginx decoded ``%25`` to ``%``; the marker may be hidden
+    }
+    map "$log_raw_marker$log_normalized_marker" $log_request {
+        default $request;
+        ~1 "$request_method /compute/api/artifact-downloads/[redacted] $server_protocol";
+    }
+    log_format revocompute_combined '$remote_addr - $remote_user [$time_local] "$log_request" $status $body_bytes_sent "$http_referer" "$http_user_agent"';
+    access_log /dev/stdout revocompute_combined if=$loggable;
 
     map $http_x_forwarded_proto $origin_proto {
         default $http_x_forwarded_proto;
@@ -69,8 +93,36 @@ http {
         server_name _;
         error_page 503 =503 /maintenance.html;
 
+        # A parent-dot segment can normalize the bearer marker out of ``$uri``
+        # while the raw request line still names the token.  Locations and
+        # ``error_log`` cannot match the raw line, so reject such a URI before
+        # any upstream can log it.  No legitimate request needs a ``..``
+        # segment; separators may be raw or percent-encoded.
+        if ($request_uri ~* "(^|/|%2f)(\.|%2e){2}(/|%2f|%00|%5c|$)") {
+            return 400;
+        }
+
         location / {
             if (-f /srv/deployment/.maintenance) { return 503; }
+            proxy_pass http://web:${UPSTREAM_PORT};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $origin_proto;
+        }
+
+        # Bearer download links are the one route whose URL names a secret.
+        # The access log redacts it, but nginx error messages (an upstream
+        # timeout, for example) embed the raw request line and there is no
+        # error-log redaction hook.  Silence gateway error messages for every
+        # spelling that carries the marker, including a double-encoded byte
+        # left as a bare ``%`` in ``$uri``; the application's own redacted log
+        # still records failures.
+        location ~* "artifact-downloads|%" {
+            if (-f /srv/deployment/.maintenance) { return 503; }
+            error_log /dev/null emerg;
             proxy_pass http://web:${UPSTREAM_PORT};
             proxy_http_version 1.1;
             proxy_set_header Connection "";

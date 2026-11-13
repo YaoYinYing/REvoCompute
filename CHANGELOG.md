@@ -98,6 +98,22 @@ invented release numbers or dates.
     - Poll only visible non-terminal Tasks and reconcile their state in place,
       without re-sorting the history traversal.
     - Replace the browser regular-expression filter with plain literal search.
+- Artifact downloads:
+  - Server:
+    - Add authenticated issuance of revocable, expiring, artifact-scoped bearer
+      links with a bounded TTL, a hashed grant identity, and a signed token using
+      a distinct salt. Every retrieval rechecks the grant, the canonical Task,
+      the current publication digest and the issuing owner's access, and the
+      bearer URL authorizes no other API.
+    - Add exact `HEAD`/`GET` single-range and `If-Range` semantics, strong
+      content ETags, parallel independent range reads, and identity-encoded full
+      representations so a response compressor cannot weaken the validator.
+    - Redact bearer download paths from operational and gateway access logs and
+      send `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`.
+  - Frontend:
+    - Add **Copy expiring download link**, visible expiry, and revoke/renew
+      controls to Results > Files & diagnostics, with an explicit warning that
+      the link grants file access until revoked or expired.
 - Release governance:
   - Server:
     - Add the signed-in `GET /compute/api/version` projection and the
