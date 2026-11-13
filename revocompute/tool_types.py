@@ -17,6 +17,12 @@ from jsonschema import Draft202012Validator
 
 from revocompute.io_contracts import NamedFileRole, ROLE_ID_PATTERN, load_named_file_roles
 
+#: Ordinary per-call Tool input budget.  A Tool manifest may raise its own
+#: budget only up to the deployment ceiling (``TOOL_REQUEST_MAX_BYTES``), so a
+#: large-input Tool is an explicit, operator-enabled exception rather than a
+#: change to every other Tool and Task submission.
+DEFAULT_TOOL_REQUEST_BYTES = 16 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class ToolFileRole(NamedFileRole):
@@ -47,6 +53,8 @@ class ToolType:
     outputs: tuple[ToolFileRole, ...]
     schema: Mapping[str, Any]
     timeout_seconds: int
+    request_max_bytes: int
+    input_max_bytes: Mapping[str, int]
 
     def role(self, name: str, *, output: bool = False) -> ToolFileRole | None:
         roles = self.outputs if output else self.inputs
@@ -68,6 +76,7 @@ class ToolRegistry:
         enabled: set[str],
         image_root: str | Path | None = None,
         maximum_timeout: int = 300,
+        maximum_request_bytes: int | None = None,
     ) -> "ToolRegistry":
         root_path = Path(root).resolve()
         manifests: dict[str, Path] = {}
@@ -103,7 +112,7 @@ class ToolRegistry:
                 raise ValueError(f"Tool family {family_id!r} must declare Tool manifests")
             for ref in refs:
                 tool_path = _relative_file(family_root, ref, "Tool manifest")
-                tool = _load_tool(tool_path, runtime, maximum_timeout)
+                tool = _load_tool(tool_path, runtime, maximum_timeout, maximum_request_bytes)
                 if tool.name in tools:
                     raise ValueError(f"Duplicate Tool id: {tool.name!r}")
                 tools[tool.name] = tool
@@ -158,11 +167,16 @@ def _relative_file(root: Path, value: Any, label: str) -> Path:
     return result
 
 
-def _load_tool(path: Path, runtime: ToolRuntimeFamily, maximum_timeout: int) -> ToolType:
+def _load_tool(
+    path: Path,
+    runtime: ToolRuntimeFamily,
+    maximum_timeout: int,
+    maximum_request_bytes: int | None,
+) -> ToolType:
     raw = _mapping(yaml.safe_load(path.read_text(encoding="utf-8")) or {}, "Tool manifest")
     allowed = {
         "id", "display_name", "summary", "guidance", "version", "runtime_family",
-        "inputs", "outputs", "parameters", "timeout_seconds",
+        "inputs", "outputs", "parameters", "timeout_seconds", "limits",
     }
     unknown = set(raw) - allowed
     if unknown:
@@ -186,6 +200,7 @@ def _load_tool(path: Path, runtime: ToolRuntimeFamily, maximum_timeout: int) -> 
     timeout = raw.get("timeout_seconds", maximum_timeout)
     if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1 or timeout > maximum_timeout:
         raise ValueError(f"Tool {name!r} timeout must be between 1 and {maximum_timeout} seconds")
+    request_max_bytes, input_max_bytes = _limits(name, raw.get("limits"), inputs, maximum_request_bytes)
     return ToolType(
         name=name,
         display_name=_text(raw.get("display_name"), f"Tool {name!r} display name"),
@@ -197,7 +212,63 @@ def _load_tool(path: Path, runtime: ToolRuntimeFamily, maximum_timeout: int) -> 
         outputs=outputs,
         schema=dict(schema),
         timeout_seconds=timeout,
+        request_max_bytes=request_max_bytes,
+        input_max_bytes=input_max_bytes,
     )
+
+
+def _limits(
+    name: str,
+    raw: Any,
+    inputs: tuple[ToolFileRole, ...],
+    maximum_request_bytes: int | None,
+) -> tuple[int, dict[str, int]]:
+    """Return the effective request and per-role input byte caps.
+
+    An omitted ``limits`` keeps the ordinary Tool budget.  A declared
+    ``request_bytes`` is the Tool's own aggregate budget and may not exceed the
+    deployment ceiling, so enabling a large-input Tool is an explicit operator
+    decision.  Per-role caps let a small topology and a large trajectory be
+    bounded separately while the shared budget still bounds their sum.
+    """
+    ordinary = DEFAULT_TOOL_REQUEST_BYTES if maximum_request_bytes is None else min(
+        DEFAULT_TOOL_REQUEST_BYTES, maximum_request_bytes
+    )
+    if raw is None:
+        return ordinary, {}
+    limits = _mapping(raw, f"Tool {name!r} limits")
+    unknown = set(limits) - {"request_bytes", "input_bytes"}
+    if unknown:
+        raise ValueError(f"Tool {name!r} limits contain unknown fields: {sorted(unknown)}")
+    request_bytes = limits.get("request_bytes", ordinary)
+    if (
+        not isinstance(request_bytes, int)
+        or isinstance(request_bytes, bool)
+        or request_bytes < 1
+    ):
+        raise ValueError(f"Tool {name!r} request_bytes must be a positive integer")
+    if maximum_request_bytes is not None and request_bytes > maximum_request_bytes:
+        raise ValueError(
+            f"Tool {name!r} request_bytes {request_bytes} exceeds the deployment TOOL_REQUEST_MAX_BYTES "
+            f"ceiling {maximum_request_bytes}"
+        )
+    declarations = limits.get("input_bytes", {})
+    if not isinstance(declarations, Mapping):
+        raise ValueError(f"Tool {name!r} input_bytes must be a mapping of input role to bytes")
+    known_roles = {role.name for role in inputs}
+    input_max_bytes: dict[str, int] = {}
+    for role_name, value in declarations.items():
+        if role_name not in known_roles:
+            raise ValueError(f"Tool {name!r} input_bytes names unknown input role {role_name!r}")
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1 or value > request_bytes:
+            raise ValueError(f"Tool {name!r} input_bytes for {role_name!r} must be between 1 and request_bytes")
+        input_max_bytes[role_name] = value
+    return request_bytes, input_max_bytes
+
+
+def input_max_bytes(tool: ToolType, role: str) -> int:
+    """The per-file cap for one input role, defaulting to the Tool request cap."""
+    return tool.input_max_bytes.get(role, tool.request_max_bytes)
 
 
 def _sha256(path: Path) -> str:
@@ -230,6 +301,10 @@ def public_tool(tool: ToolType) -> dict[str, Any]:
         "inputs": [role_payload(role) for role in tool.inputs],
         "outputs": [role_payload(role) for role in tool.outputs],
         "timeout_seconds": tool.timeout_seconds,
+        "limits": {
+            "request_bytes": tool.request_max_bytes,
+            "input_bytes": dict(tool.input_max_bytes),
+        },
     }
 
 

@@ -192,3 +192,16 @@ def test_ttl_cleanup_removes_expired_row_and_workspace_but_preserves_running(mon
     assert not workspace.call_root(expired).exists()
     assert reopened.get(running)["status"] == "running"
     assert workspace.call_root(running).exists()
+
+
+def test_workspace_delete_is_idempotent_when_a_concurrent_reclaimer_wins(monkeypatch, tmp_path):
+    workspace = ToolWorkspace(tmp_path / "workspace", request_max_bytes=1_000, output_max_bytes=1_000)
+    call_id = new_tool_call_id()
+    workspace.create(call_id)
+
+    def already_removed(*_args, **_kwargs):
+        raise FileNotFoundError()
+
+    monkeypatch.setattr("revocompute.tool_workspace.shutil.rmtree", already_removed)
+
+    workspace.delete(call_id)

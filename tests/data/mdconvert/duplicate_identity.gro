@@ -1,0 +1,6 @@
+Synthetic duplicate PDB identity
+    3
+    1ALA      N    1   0.100   0.200   0.300
+    1ALA      N    2   0.200   0.300   0.400
+    1ALA     CA    3   0.300   0.400   0.500
+   2.00000   2.00000   2.00000

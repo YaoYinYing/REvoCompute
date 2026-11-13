@@ -25,6 +25,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
 
@@ -237,10 +238,11 @@ from revocompute.workspace_contracts import (
 from revocompute.task_types import workspace_backend
 from revocompute.media_types import media_type_for_path
 from revocompute.tool_calls import ToolAdmissionError, new_tool_call_id, normalize_tool_call_id
-from revocompute.tool_types import canonical_parameters, public_tool
+from revocompute.tool_types import canonical_parameters, input_max_bytes, public_tool
 from revocompute.tool_workspace import ToolWorkspaceError
 from revocompute.upload_encoding import (
     DECLARATION_FIELD,
+    IDENTITY,
     MULTIPART_HEADROOM_BYTES,
     DecodeBudget,
     DecodeLimits,
@@ -827,19 +829,48 @@ def tool_parameter_schema(tool_type):
         return jsonify({"error": "Tool not found"}), 404
 
 
-def _reclaim_tool_storage(required_bytes: int) -> bool:
-    if tool_calls.total_accounted_bytes() + required_bytes <= TOOL_CONFIG.storage_max_bytes:
+def _reclaim_tool_storage(required_bytes: int, user_id: int) -> bool:
+    """Evict terminal workspaces until both storage bounds admit the call.
+
+    Admission has a global budget and an equal per-user share of it.  A call
+    that fails only the user share must still reclaim the user's own terminal
+    workspaces; reclaiming another tenant's or a running call's bytes cannot
+    make the submitting user fit and is not allowed.
+    """
+    global_limit = TOOL_CONFIG.storage_max_bytes
+    user_allowance = max(global_limit // TOOL_CONFIG.max_active_per_user, required_bytes)
+
+    def shortfalls() -> tuple[bool, bool]:
+        global_short = tool_calls.total_accounted_bytes() + required_bytes > global_limit
+        user_short = tool_calls.accounted_bytes(user_id) + required_bytes > user_allowance
+        return global_short, user_short
+
+    global_short, user_short = shortfalls()
+    if not global_short and not user_short:
         return True
     for candidate in tool_calls.cleanup_candidates(now=time.time(), storage_pressure=True):
+        # cleanup_candidates returns terminal rows only.  When the global
+        # budget already fits, only the submitting user's rows can close the
+        # remaining per-user shortfall.
+        if not global_short and int(candidate["submitted_by_user_id"]) != user_id:
+            continue
         call_id = str(candidate["tool_call_id"])
         tool_workspace.delete(call_id)
         tool_calls.delete_terminal(call_id)
-        if tool_calls.total_accounted_bytes() + required_bytes <= TOOL_CONFIG.storage_max_bytes:
+        global_short, user_short = shortfalls()
+        if not global_short and not user_short:
             return True
     return False
 
 
-def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[str, Any]:
+def _tool_task_artifact(
+    tool_call_id: str,
+    role: Any,
+    expression: str,
+    *,
+    limits: DecodeLimits,
+    budget: DecodeBudget,
+) -> dict[str, Any]:
     match = _ARTIFACT_REFERENCE_PATTERN.fullmatch(expression)
     if not match:
         raise ToolWorkspaceError("Invalid Task artifact reference")
@@ -856,25 +887,24 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
         raise ToolWorkspaceError("Task artifact reference is unavailable")
     stream = resolved.pop("verified_stream")
     try:
-        # #156 gate: verified artifact bytes are materialized outside the decoded
-        # upload budget, so a request's total input is uploads + artifact bytes.
-        # Every shipped Tool has one {min: 1, max: 1} role, which keeps the
-        # total equal to one per-file-bounded input. A Tool that accepts more
-        # than one input must charge this stream to the same per-request budget
-        # before materializing it.
-        # Materialize from the verified snapshot, not from the resolved name:
-        # the bytes copied into the Tool workspace are exactly the bytes whose
-        # manifest identity was checked, so a replacement between resolution and
-        # materialization cannot enter the workspace.
+        # A verified Task artifact is charged to the same per-role and aggregate
+        # decoded budget as an upload, so a multi-input Tool cannot exceed its
+        # request tier by mixing the two sources. Materialize from the verified
+        # snapshot, not from the resolved name: the bytes copied into the Tool
+        # workspace are exactly the bytes whose manifest identity was checked,
+        # so a replacement between resolution and materialization cannot enter.
         item = tool_workspace.materialize_stream(
             tool_call_id,
             role=role.name,
             filename=Path(logical_path).name,
             accepted_formats=role.formats,
-            stream=stream,
+            max_bytes=limits.decoded_max_bytes,
+            stream=DecodedStream(stream, IDENTITY, limits, budget=budget),
         )
     finally:
         stream.close()
+    if item["sha256"] != resolved["sha256"] or item["size"] != resolved.get("size", item["size"]):
+        raise ToolWorkspaceError("Task artifact identity changed during materialization")
     item["source"] = {
         "kind": "task_artifact",
         "task_id": source_id.lower(),
@@ -889,9 +919,10 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
 @rate_limit(max_requests=60, window_seconds=3600)
 def submit_tool_call(name):
     # Tool inputs can opt into a larger tier than an ordinary Task submission.
-    # Set Flask's per-request body cap before any form access; the gateway's
-    # Tool location carries the same multipart headroom.
-    request.max_content_length = TOOL_CONFIG.request_max_bytes + MULTIPART_HEADROOM_BYTES
+    # The selected Tool owns its own request budget; the deployment setting is
+    # the ceiling that budget cannot exceed. Set Flask's per-request body cap
+    # before any form access; the gateway's Tool location carries headroom for
+    # the deployment ceiling.
     if blocked := require_bearer_auth():
         return blocked
     if blocked := _reject_guest():
@@ -908,6 +939,10 @@ def submit_tool_call(name):
         tool = tool_registry.get(name)
     except KeyError:
         return jsonify({"error": "Tool not found"}), 404
+    # The Tool's own budget bounds the encoded body; multipart framing sits
+    # above it. The gateway location admits the deployment ceiling, so a
+    # smaller Tool call is refused here rather than in the browser.
+    request.max_content_length = tool.request_max_bytes + MULTIPART_HEADROOM_BYTES
     if not tool.runtime.image.is_file():
         return jsonify({"error": "Tool runtime is unavailable", "error_class": "runtime_unavailable"}), 503
     idempotency_key = request.headers.get("Idempotency-Key", "").strip() or None
@@ -939,12 +974,19 @@ def submit_tool_call(name):
         )
     except UploadEncodingError as exc:
         return jsonify({"error": str(exc), "error_class": "invalid_input", "code": exc.code}), 400
-    tool_decode_limits = DecodeLimits(
-        encoded_max_bytes=int(request.max_content_length),
-        decoded_max_bytes=TOOL_CONFIG.request_max_bytes,
-        decoded_total_max_bytes=TOOL_CONFIG.request_max_bytes,
-    )
-    tool_decode_budget = DecodeBudget(tool_decode_limits.decoded_total_max_bytes)
+
+    def tool_decode_limits(role_name: str) -> DecodeLimits:
+        # The encoded body is bounded once for the whole multipart request; the
+        # decoded per-file cap can differ by role (a small topology and a large
+        # trajectory are separate tiers), and the shared budget bounds their
+        # sum before the crossing chunk reaches the workspace.
+        return DecodeLimits(
+            encoded_max_bytes=int(request.max_content_length),
+            decoded_max_bytes=input_max_bytes(tool, role_name),
+            decoded_total_max_bytes=tool.request_max_bytes,
+        )
+
+    tool_decode_budget = DecodeBudget(tool.request_max_bytes)
     submitted_roles = [*upload_roles, *artifact_roles]
     known_roles = {role.name: role for role in tool.inputs}
     if any(role not in known_roles for role in submitted_roles):
@@ -965,13 +1007,22 @@ def submit_tool_call(name):
                 tool_workspace.materialize_stream(
                     call_id, role=role_name, filename=uploaded.filename,
                     accepted_formats=role.formats,
+                    max_bytes=input_max_bytes(tool, role_name),
                     stream=DecodedStream(
-                        uploaded.stream, encoding, tool_decode_limits, budget=tool_decode_budget
+                        uploaded.stream, encoding, tool_decode_limits(role_name), budget=tool_decode_budget
                     ),
                 )
             )
         for expression, role_name in zip(artifact_refs, artifact_roles, strict=True):
-            inputs[role_name].append(_tool_task_artifact(call_id, known_roles[role_name], expression))
+            inputs[role_name].append(
+                _tool_task_artifact(
+                    call_id,
+                    known_roles[role_name],
+                    expression,
+                    limits=tool_decode_limits(role_name),
+                    budget=tool_decode_budget,
+                )
+            )
         for role_name, values in inputs.items():
             role = known_roles[role_name]
             for item in values:
@@ -989,7 +1040,11 @@ def submit_tool_call(name):
         input_manifest = {
             "inputs": {
                 role: [
-                    {key: item[key] for key in ("original_name", "path", "format", "sha256", "size", "source") if key in item}
+                    {
+                        key: item[key]
+                        for key in ("original_name", "path", "format", "sha256", "size", "source")
+                        if key in item
+                    }
                     for item in values
                 ]
                 for role, values in inputs.items()
@@ -1022,7 +1077,9 @@ def submit_tool_call(name):
             # without touching admission.  A storage rejection — global or the
             # caller's own share — may reclaim terminal workspaces, and then
             # only once.
-            if exc.reason not in {"storage_limit", "user_storage_limit"} or not _reclaim_tool_storage(required_bytes):
+            if exc.reason not in {"storage_limit", "user_storage_limit"} or not _reclaim_tool_storage(
+                required_bytes, int(g.current_user["id"])
+            ):
                 raise
             reservation = reserve_call()
         if not reservation.created:
@@ -1665,6 +1722,163 @@ def _validate_role_counts(task_type: Any, role_names: list[str]):
     return None
 
 
+_TOOL_OUTPUT_REFERENCE = re.compile(r"@(tool_call_[A-Za-z0-9_-]{32})/([A-Za-z0-9][A-Za-z0-9_.-]{0,199})\Z")
+
+
+def _resolve_tool_outputs(
+    tt: Any, expressions: list[str], role_names: list[str]
+) -> tuple[list[dict[str, Any]], tuple[Any, int] | None]:
+    """Resolve server-owned Tool outputs into bounded Task input sources.
+
+    A reference names a finished Tool call owned by the caller and one output
+    file from its published result manifest.  The bytes are copied from the
+    Tool workspace into the same quarantine an upload uses, so the immutable
+    role snapshot preserves them with the Tool call's provenance; the browser
+    never downloads and re-uploads them.
+
+    Structural checks and the declared-size budget run before any byte is read:
+    a repeated or oversized reference is refused from cheap metadata, so a
+    request cannot force unbounded reads in the web worker.
+    """
+    if len(expressions) != len(role_names):
+        return [], _input_contract_error(
+            "input_role_binding", "Every Tool output reference must be bound to an input role."
+        )
+    max_references = int(current_app.config["MAX_INPUT_FILES"])
+    if len(expressions) > max_references:
+        return [], _input_contract_error(
+            "input_file_count_limit",
+            f"Submission contains more than the {max_references} input file limit.",
+        )
+    budget = DecodeBudget(int(current_app.config["MAX_TOOL_OUTPUT_INPUT_BYTES"]))
+    resolved = []
+    seen: set[tuple[str, str]] = set()
+    for expression, role_name in zip(expressions, role_names, strict=True):
+        match = _TOOL_OUTPUT_REFERENCE.fullmatch(expression.strip())
+        if match is None:
+            return [], _input_contract_error(
+                "tool_output_reference_invalid", "Invalid Tool output reference", role=role_name
+            )
+        role = _role_by_name(tt, role_name)
+        if role is None:
+            return [], _input_contract_error("input_role_unknown", f"Unknown input role: {role_name}", role=role_name)
+        call_id, name = match.groups()
+        key = (role_name, name)
+        if key in seen:
+            return [], _input_contract_error(
+                "input_namespace_collision",
+                "Two inputs resolve to the same path within one role.",
+                role=role_name,
+            )
+        seen.add(key)
+        format_name = os.path.splitext(name)[1].lower().removeprefix(".")
+        if format_name not in role.formats:
+            return [], _input_contract_error(
+                "input_role_format",
+                f"Input role {role_name!r} does not accept {format_name or 'files without a format extension'}.",
+                role=role_name,
+                format_name=format_name or None,
+            )
+        call = tool_calls.get_owned(call_id, int(g.current_user["id"]))
+        if call is None or call["status"] != "finished":
+            return [], _input_contract_error(
+                "tool_output_reference_unavailable",
+                "Tool output reference is unavailable",
+                role=role_name,
+            )
+        try:
+            expires_at = float(call.get("expires_at"))
+        except (TypeError, ValueError):
+            expires_at = 0.0
+        if expires_at <= time.time():
+            return [], _input_contract_error(
+                "tool_output_reference_unavailable",
+                "Tool output reference has expired",
+                role=role_name,
+            )
+        try:
+            outputs = json.loads(str(call["result_manifest_json"])).get("outputs", {})
+        except (TypeError, json.JSONDecodeError):
+            outputs = {}
+        declared = next(
+            (
+                item
+                for values in outputs.values() if isinstance(values, list)
+                for item in values if isinstance(item, dict) and item.get("path") == name
+            ),
+            None,
+        )
+        if declared is None:
+            return [], _input_contract_error(
+                "tool_output_reference_invalid", "Tool output is not declared by its result manifest", role=role_name
+            )
+        declared_sha256 = declared.get("sha256")
+        declared_size = declared.get("size")
+        if (
+            not isinstance(declared_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", declared_sha256) is None
+            or not isinstance(declared_size, int)
+            or isinstance(declared_size, bool)
+            or declared_size < 0
+        ):
+            return [], _input_contract_error(
+                "tool_output_reference_invalid", "Tool output manifest identity is invalid", role=role_name
+            )
+        try:
+            budget.consume(declared_size)
+        except UploadEncodingError as exc:
+            return [], _input_contract_error(exc.code, str(exc), role=role_name)
+        physical = tool_workspace.call_root(call_id) / "output" / name
+        if physical.is_symlink() or not physical.is_file():
+            return [], _input_contract_error(
+                "tool_output_reference_unavailable", "Tool output is no longer available", role=role_name
+            )
+        if physical.stat().st_size != declared_size:
+            return [], _input_contract_error(
+                "tool_output_reference_mismatch",
+                "Tool output no longer matches its result manifest",
+                role=role_name,
+            )
+        digest = hashlib.sha256()
+        size = 0
+        with physical.open("rb") as stream:
+            # Read no more than the declared size: a grown file is a mismatch,
+            # not another full read of attacker-chosen bytes.
+            remaining = declared_size
+            while remaining:
+                chunk = stream.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                size += len(chunk)
+                remaining -= len(chunk)
+                digest.update(chunk)
+        if digest.hexdigest() != declared_sha256 or size != declared_size:
+            return [], _input_contract_error(
+                "tool_output_reference_mismatch",
+                "Tool output no longer matches its result manifest",
+                role=role_name,
+            )
+        resolved.append(
+            {
+                "filename": name,
+                "source_path": str(physical),
+                "format": format_name,
+                "sha256": digest.hexdigest(),
+                "size": size,
+                "source": {
+                    "kind": "tool_output",
+                    "tool_call_id": call_id,
+                    "tool_type": str(call["tool_type"]),
+                    "artifact_path": name,
+                    "sha256": digest.hexdigest(),
+                    "size": size,
+                },
+                "role": role_name,
+            }
+        )
+    return resolved, None
+
+
 def _validate_input_uploads(task_type: str | None = None):
     """Apply transport and task-role checks without assigning meaning by upload order."""
     task_type = task_type or default_task_type()
@@ -1694,8 +1908,31 @@ def _validate_input_uploads(task_type: str | None = None):
         return None, _input_contract_error(
             "input_role_binding", "Every uploaded file must be bound to an input role."
         )
-    if error := _validate_role_counts(tt, submitted_roles):
+    tool_references = request.form.getlist("tool_output_references")
+    tool_roles = request.form.getlist("tool_output_roles")
+    if len(tool_references) != len(tool_roles):
+        return None, _input_contract_error(
+            "input_role_binding", "Every Tool output reference must be bound to an input role."
+        )
+    # Every structural refusal runs before the resolver reads any referenced
+    # output: unknown roles, cardinality, and the file-count cap are cheap
+    # metadata checks, so a repeated or oversized request cannot force the web
+    # worker to hash the same server-owned bytes many times.
+    declared_roles = [*submitted_roles, *tool_roles]
+    if len(uploads) + len(tool_references) > max_input_files:
+        return None, _input_contract_error(
+            "input_file_count_limit",
+            f"Submission contains more than the {max_input_files} input file limit.",
+        )
+    if error := _validate_role_counts(tt, declared_roles):
         return None, error
+    tool_inputs, tool_error = _resolve_tool_outputs(tt, tool_references, tool_roles)
+    if tool_error is not None:
+        return None, tool_error
+    if len(tool_inputs) != len(tool_references):
+        return None, _input_contract_error(
+            "input_role_binding", "Every Tool output reference must resolve to one input."
+        )
     submitted_paths = request.form.getlist("input_paths")
     validated: list[tuple[Any, str, str, str, str]] = []
     seen_paths: set[tuple[str, str]] = set()
@@ -1729,6 +1966,27 @@ def _validate_input_uploads(task_type: str | None = None):
             )
         seen_paths.add(key)
         validated.append((uploaded, safe_path, role_name, format_name, encoding))
+    for item in tool_inputs:
+        safe_path, reason = canonical_relative_path(item["filename"])
+        if safe_path is None:
+            return None, _input_contract_error(reason or "input_path_invalid", "Invalid input path")
+        key = (item["role"], safe_path)
+        if key in seen_paths:
+            return None, _input_contract_error(
+                "input_namespace_collision",
+                "Two inputs resolve to the same path within one role.",
+                role=item["role"],
+            )
+        seen_paths.add(key)
+        validated.append(
+            (
+                SimpleNamespace(filename=item["filename"], source_path=item["source_path"], source=item["source"]),
+                safe_path,
+                item["role"],
+                item["format"],
+                IDENTITY,
+            )
+        )
     # A path may not also be a directory prefix of another path in the same role:
     # ``x.pdb`` cannot be both a file and the directory ``x.pdb/`` the other path
     # needs.  The collision set above only catches exact repeats, so a prefix
@@ -1756,12 +2014,18 @@ def _quarantine_uploaded_inputs(
     metadata = _request_metadata()
     saved: list[dict[str, Any]] = []
     quarantined: list[str] = []
-    limits = DecodeLimits(
+    upload_limits = DecodeLimits(
         encoded_max_bytes=int(current_app.config["MAX_CONTENT_LENGTH"]),
         decoded_max_bytes=int(current_app.config["MAX_INPUT_FILE_BYTES"]),
         decoded_total_max_bytes=int(current_app.config["MAX_INPUT_TOTAL_BYTES"]),
     )
-    budget = DecodeBudget(limits.decoded_total_max_bytes)
+    upload_budget = DecodeBudget(upload_limits.decoded_total_max_bytes)
+    tool_output_limits = DecodeLimits(
+        encoded_max_bytes=int(current_app.config["MAX_TOOL_OUTPUT_INPUT_BYTES"]),
+        decoded_max_bytes=int(current_app.config["MAX_TOOL_OUTPUT_INPUT_BYTES"]),
+        decoded_total_max_bytes=int(current_app.config["MAX_TOOL_OUTPUT_INPUT_BYTES"]),
+    )
+    tool_output_budget = DecodeBudget(tool_output_limits.decoded_total_max_bytes)
     try:
         for uploaded, relative_path, role, format_name, encoding in uploads:
             temp_name = f".tmp_{os.urandom(8).hex()}_{os.path.basename(relative_path)}"
@@ -1776,17 +2040,46 @@ def _quarantine_uploaded_inputs(
                 "format": format_name,
             }
             file_bytes = 0
+            # An uploaded part owns its Flask stream; a server-owned Tool output
+            # is opened here and closed once its bytes are quarantined. The two
+            # sources have separate quotas: a Tool output was already bounded by
+            # the Tool's own output ceiling, while an upload stays under the
+            # browser-facing Task cap.
+            source_path = getattr(uploaded, "source_path", None)
+            if source_path is None:
+                stream = uploaded.stream
+                limits, budget = upload_limits, upload_budget
+            else:
+                stream, limits, budget = None, tool_output_limits, tool_output_budget
+                try:
+                    # Do not follow a link swapped in after reference
+                    # verification; the digest check below is the second guard.
+                    descriptor = os.open(source_path, os.O_RDONLY | os.O_NOFOLLOW)
+                    stream = os.fdopen(descriptor, "rb")
+                except OSError as exc:
+                    raise InputPreflightError(
+                        item, "tool_output_reference_unavailable", "Tool output is no longer available"
+                    ) from exc
             with open(temp_path, "wb") as handle:
                 try:
-                    decoded = DecodedStream(uploaded.stream, encoding, limits, budget=budget)
+                    decoded = DecodedStream(stream, encoding, limits, budget=budget)
                     while chunk := decoded.read(65536):
                         file_bytes += len(chunk)
                         handle.write(chunk)
                         hasher.update(chunk)
                 except UploadEncodingError as exc:
                     raise InputPreflightError(item, exc.code, str(exc)) from exc
+                finally:
+                    if source_path is not None:
+                        stream.close()
             item["hash"] = hasher.hexdigest()
             item["size"] = file_bytes
+            if source := getattr(uploaded, "source", None):
+                if item["hash"] != source.get("sha256") or item["size"] != source.get("size"):
+                    raise InputPreflightError(
+                        item, "tool_output_reference_mismatch", "Tool output changed during materialization"
+                    )
+                item["source"] = source
             saved.append(item)
         tt = _get_task_type(task_type)[0]
         for item in saved:
@@ -2327,6 +2620,10 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     raw_form = request.form.to_dict(flat=True)
     raw_form.pop("input_paths", None)
     raw_form.pop("input_roles", None)
+    # Server-owned Tool output references are an input-source binding consumed
+    # by the quarantine boundary, not typed Task parameters.
+    raw_form.pop("tool_output_references", None)
+    raw_form.pop("tool_output_roles", None)
     # The per-part encoding declaration is transport metadata consumed by the
     # quarantine boundary, not part of the typed Task submission contract.
     raw_form.pop(DECLARATION_FIELD, None)
@@ -2837,7 +3134,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         for spec in expected_roles.values()
         for input_role in spec.get("inputs", [])
     }
-    supplied_input_roles = set(request.form.getlist("input_roles"))
+    supplied_input_roles = set(request.form.getlist("input_roles")) | set(request.form.getlist("tool_output_roles"))
     missing_reuse_inputs = required_reuse_inputs - supplied_input_roles
     if missing_reuse_inputs:
         input_role = sorted(missing_reuse_inputs)[0]
@@ -3073,7 +3370,12 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                     ),
                     normalized_params=coerced_params,
                     inputs=[
-                        {"role": item["role"], "format": item["format"], "path": item["relative_path"]}
+                        {
+                            "role": item["role"],
+                            "format": item["format"],
+                            "path": item["relative_path"],
+                            **({"source": item["source"]} if item.get("source") else {}),
+                        }
                         for item in saved_inputs
                     ],
                 ).model_dump(exclude_none=True)
@@ -3114,6 +3416,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 # prove the snapshot it will execute is this byte stream; a
                 # status projection would be a second, weaker assertion.
                 "validation_receipt": item["validation_receipt"],
+                **({"source": item["source"]} if item.get("source") else {}),
                 "snapshot_path": _safe_join(snapshot_root, item["role"], *item["relative_path"].split("/")),
                 "snapshot_root": snapshot_root,
                 "workspace_key": workspace_key,
@@ -3187,6 +3490,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 "sha256": entity["hash"],
                 "size": entity["size"],
                 "validation_receipt": entity["validation_receipt"],
+                **({"source": entity["source"]} if entity.get("source") else {}),
             }
         )
     # Runner protocol v4: additive.  ``params`` and ``inputs`` are byte-for-byte

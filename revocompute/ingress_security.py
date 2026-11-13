@@ -97,6 +97,9 @@ REASON_CODES: dict[Phase, frozenset[str]] = {
             "input_role_format",
             "input_role_unknown",
             "input_role_cardinality",
+            "tool_output_reference_invalid",
+            "tool_output_reference_unavailable",
+            "tool_output_reference_mismatch",
         }
     ),
     Phase.ADMISSION: frozenset(
@@ -162,6 +165,7 @@ _BOUNDARY_SOURCES = (
     "input_validators/isolated_worker.py",
     "input_validators/fasta.py",
     "input_validators/json_file.py",
+    "input_validators/md.py",
     "input_validators/mmcif.py",
     "input_validators/pdb.py",
     "input_validators/profiles.py",

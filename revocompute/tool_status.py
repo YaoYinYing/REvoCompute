@@ -25,6 +25,7 @@ def collect_status() -> list[dict]:
         enabled=set(config.enabled_families),
         image_root=config.image_dir,
         maximum_timeout=config.call_timeout_seconds,
+        maximum_request_bytes=config.request_max_bytes,
     )
     manager = ToolRuntimeManager(
         config.runtime_state_root,

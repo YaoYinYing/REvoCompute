@@ -91,3 +91,37 @@ def test_tool_contract_cannot_raise_deployment_timeout(tmp_path):
 
     with pytest.raises(ValueError, match="between 1 and 60"):
         ToolRegistry.discover(tmp_path, enabled={"fixture"}, maximum_timeout=60)
+
+
+def _limits_family(root: Path, limits: dict) -> None:
+    _family(root)
+    path = root / "fixture" / "tools" / "inspect" / "tool.yaml"
+    manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+    manifest["limits"] = limits
+    path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+
+def test_tool_request_tier_cannot_exceed_the_deployment_ceiling(tmp_path):
+    _limits_family(tmp_path, {"request_bytes": 2000})
+
+    with pytest.raises(ValueError, match="TOOL_REQUEST_MAX_BYTES"):
+        ToolRegistry.discover(tmp_path, enabled={"fixture"}, maximum_request_bytes=1000)
+
+
+def test_tool_limits_must_name_declared_input_roles_and_fit_the_request(tmp_path):
+    _limits_family(tmp_path, {"request_bytes": 1000, "input_bytes": {"unknown": 500}})
+    with pytest.raises(ValueError, match="unknown input role"):
+        ToolRegistry.discover(tmp_path, enabled={"fixture"}, maximum_request_bytes=1000)
+
+    second = tmp_path / "second"
+    _limits_family(second, {"request_bytes": 500, "input_bytes": {"structure": 900}})
+    with pytest.raises(ValueError, match="between 1 and request_bytes"):
+        ToolRegistry.discover(second, enabled={"fixture"}, maximum_request_bytes=1000)
+
+
+def test_ordinary_tool_applies_the_smaller_of_its_budget_and_the_ceiling(tmp_path):
+    _family(tmp_path)
+
+    ordinary = ToolRegistry.discover(tmp_path, enabled={"fixture"}, maximum_request_bytes=5_000_000)
+    assert ordinary.get("inspect").request_max_bytes == 5_000_000
+    assert ordinary.get("inspect").input_max_bytes == {}

@@ -305,6 +305,7 @@ def diagnose_tools(
     enabled: set[str],
     image_root: str | Path | None = None,
     maximum_timeout: int = 300,
+    maximum_request_bytes: int | None = None,
     probe: bool = False,
 ) -> DoctorReport:
     diagnostics: list[Diagnostic] = []
@@ -315,6 +316,7 @@ def diagnose_tools(
             enabled=enabled,
             image_root=image_root,
             maximum_timeout=maximum_timeout,
+            maximum_request_bytes=maximum_request_bytes,
         )
     except Exception as exc:
         diagnostics.append(Diagnostic("E5001", "error", "tool", f"Tool discovery failed: {exc}", source=str(tools_root)))
@@ -377,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
             enabled=enabled_tools,
             image_root=config.image_dir,
             maximum_timeout=config.call_timeout_seconds,
+            maximum_request_bytes=config.request_max_bytes,
             probe=args.probe,
         )
         diagnostics.extend(tool_report.diagnostics)

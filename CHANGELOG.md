@@ -15,6 +15,49 @@ invented release numbers or dates.
 ## [Unreleased]
 
 ### Added
+- MD trajectory conversion Tool:
+  - Add the opt-in `mdconvert` Tool family: one GROMACS GRO topology and one
+    XTC trajectory become a CAVER reference PDB plus at most 50 ordered
+    single-model snapshots and a `conversion_manifest.json`.
+  - Pin MDAnalysis 2.9.0 and every dependency wheel by exact version and hash
+    in the family's isolated image; do not install that stack into the Server
+    or a Runner SIF.
+  - Record source digests, parser identity, the GRO nm-to-Angstrom unit
+    contract, atom map, selection, original frame times, unit cells, periodic
+    treatment, warnings and output hashes. Unsupported format pairs and
+    unwrapping without bond evidence are refused with typed diagnostics. GRO's
+    missing chain and element identity is recorded as a warning; atoms whose
+    chain/residue/atom identity would collide under PDB chain `X` are refused.
+  - Add a Tool-scoped input tier: `limits.request_bytes` cannot exceed the
+    deployment `TOOL_REQUEST_MAX_BYTES`, and `limits.input_bytes` bounds each
+    role separately. `mdconvert`'s `tool.yaml` declares 100,000,000 decoded
+    trajectory bytes, 8,000,000 topology bytes and 108,000,000 bytes in
+    aggregate; those manifest-owned limits are authoritative and are projected
+    by the Tool API. The Core GRO/XTC transport caps are independent limits.
+    Ordinary Tools keep the 16 MiB budget.
+  - Charge verified Task-artifact references to the same per-role and aggregate
+    decoded budget as uploads.
+  - Publish a child-declared typed failure as the Tool call's `error_class` and
+    `error`.
+  - Gate the mdconvert scientific and CAVER compatibility tests in CI with the
+    exact hashed Tool stack.
+- Task inputs:
+  - Bind a finished, same-user Tool output to a declared input role through
+    `tool_output_references`/`tool_output_roles`; submission checks role names,
+    cardinality, file count and the server-owned declared-size quota before it
+    reads any output bytes, verifies the bytes against the Tool result
+    manifest, and preserves the Tool call provenance in the immutable input
+    snapshot.
+  - Admit server-owned Tool-output references under a separate
+    `MAX_TOOL_OUTPUT_INPUT_BYTES` quota equal to `TOOL_OUTPUT_MAX_BYTES`, so a
+    complete 32 MiB Tool output can reach a Task without raising the 16 MiB
+    browser-upload budget. Preflight projects structured provenance instead of
+    rejecting it as a string map.
+- Input validation:
+  - Add Core transport validators for GRO and XTC containers; scientific frame
+    decoding remains in the pinned Tool parser. Deploy note: the validator
+    content revision moves, so drain queued/pending submissions before
+    deploying or they fail closed with `input_snapshot_mismatch`.
 - Transport:
   - Accept declared per-file-part `gzip` uploads through a bounded decode path
     that validates the gzip stream, enforces encoded/decoded/per-file/total and
@@ -120,6 +163,27 @@ invented release numbers or dates.
     - Pin the existing Task Snapshot submit rail to the visible viewport bottom,
       respecting safe-area insets, the mobile visual viewport, and reduced
       motion, without adding a second submit control.
+
+### Fixed
+- Tools:
+  - Reclaim a submitting user's terminal workspaces when only the per-user
+    storage share is exhausted, while leaving running calls and other tenants'
+    terminal workspaces untouched.
+  - Make workspace deletion idempotent when a concurrent reclaimer already
+    removed the same call directory.
+  - Translate the documented comma-separated `resid` selection form into the
+    pinned parser's accepted expression grammar.
+- Input validation:
+  - Stop deriving the minimum XTC size from uncompressed atom coordinates;
+    compressed XTC frames are now admitted under the byte cap and the pinned
+    parser remains responsible for frame decompression and truncation.
+- Task inputs:
+  - Refuse expired Tool-output references instead of accepting them until the
+    call row is physically removed.
+- Documentation:
+  - Retire the PR campaign DESIGN/TODO notes into the canonical Tool runtime,
+    operator Tool and Task-contract pages, and point operators at the Tool API
+    for the manifest-owned byte limits instead of restating them.
 
 ## [0.1.0+2890609] - 2026-11-12
 

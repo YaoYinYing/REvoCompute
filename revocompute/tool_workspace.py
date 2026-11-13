@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -15,11 +16,26 @@ from typing import Any, BinaryIO
 from werkzeug.utils import secure_filename
 
 from revocompute.tool_calls import normalize_tool_call_id
-from revocompute.tool_types import ToolType
+from revocompute.tool_types import DEFAULT_TOOL_REQUEST_BYTES, ToolType
 
 
 class ToolWorkspaceError(ValueError):
     pass
+
+
+_TOOL_ERROR_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,31}\Z")
+_MAX_TOOL_ERROR_BYTES = 64 * 1024
+
+
+def _typed_error(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    code, message = value.get("code"), value.get("message")
+    if not isinstance(code, str) or not _TOOL_ERROR_PATTERN.fullmatch(code):
+        return None
+    if not isinstance(message, str) or not message.strip() or len(message) > 2000:
+        return None
+    return {"code": code, "message": message.strip()}
 
 
 def tree_bytes(root: Path) -> int:
@@ -63,6 +79,7 @@ class ToolWorkspace:
         filename: str,
         accepted_formats: tuple[str, ...],
         stream: BinaryIO,
+        max_bytes: int | None = None,
     ) -> dict[str, Any]:
         safe_name = secure_filename(Path(filename).name)
         if not safe_name:
@@ -75,10 +92,11 @@ class ToolWorkspace:
             raise ToolWorkspaceError("Tool input filenames must be unique within a role")
         digest = hashlib.sha256()
         size = 0
+        limit = DEFAULT_TOOL_REQUEST_BYTES if max_bytes is None else max_bytes
         with target.open("xb") as output:
             while chunk := stream.read(65536):
                 size += len(chunk)
-                if size > self.request_max_bytes:
+                if size > limit:
                     raise ToolWorkspaceError("Tool request input limit exceeded")
                 digest.update(chunk)
                 output.write(chunk)
@@ -101,6 +119,7 @@ class ToolWorkspace:
         filename: str,
         accepted_formats: tuple[str, ...],
         source: str | Path,
+        max_bytes: int | None = None,
     ) -> dict[str, Any]:
         source_path = Path(source)
         if source_path.is_symlink() or not source_path.is_file():
@@ -112,6 +131,7 @@ class ToolWorkspace:
                 filename=filename,
                 accepted_formats=accepted_formats,
                 stream=stream,
+                max_bytes=max_bytes,
             )
 
     def write_request(self, tool_call_id: str, tool: ToolType, inputs: dict[str, list[dict]], parameters: dict) -> Path:
@@ -123,10 +143,20 @@ class ToolWorkspace:
             for role, values in inputs.items()
         }
         target = self.call_root(tool_call_id) / "scratch" / "request.json"
-        target.write_text(
-            json.dumps({"tool": tool.name, "parameters": parameters, "inputs": public_inputs}, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        document = {
+            "tool": tool.name,
+            "parameters": parameters,
+            "inputs": public_inputs,
+        }
+        if tool.input_max_bytes:
+            # A Tool that declared its own tier receives the Server-owned
+            # budget so the child re-checks the same bound; an ordinary Tool
+            # keeps the existing request shape and the deployment cap alone.
+            document["limits"] = {
+                "request_bytes": tool.request_max_bytes,
+                "input_bytes": dict(tool.input_max_bytes),
+            }
+        target.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
         target.chmod(0o400)
         return target
 
@@ -168,7 +198,11 @@ class ToolWorkspace:
                 total_size += size
                 if total_size > self.output_max_bytes:
                     raise ToolWorkspaceError("Tool output limit exceeded")
-                digest = hashlib.sha256(physical.read_bytes()).hexdigest()
+                digest = hashlib.sha256()
+                with physical.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                digest = digest.hexdigest()
                 collected.append(
                     {
                         "path": relative.name,
@@ -188,10 +222,31 @@ class ToolWorkspace:
         provenance = {"declared": backend}
         return result, warnings, provenance
 
+    def failure_detail(self, tool_call_id: str) -> dict[str, str] | None:
+        """Read a child-declared typed failure diagnostic, if it wrote one.
+
+        The child cannot mutate the call row, so a known refusal records a
+        bounded ``{"code", "message"}`` document and exits non-zero; the worker
+        turns that into the call's ``error_class``/``error`` so the client sees
+        a stable reason instead of only prose from stderr.
+        """
+        path = self.call_root(tool_call_id) / "output" / ".tool-error.json"
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > _MAX_TOOL_ERROR_BYTES:
+                return None
+            return _typed_error(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            return None
+
     def bytes_used(self, tool_call_id: str) -> int:
         return tree_bytes(self.call_root(tool_call_id))
 
     def delete(self, tool_call_id: str) -> None:
         call_root = self.call_root(tool_call_id)
-        if call_root.exists() and not call_root.is_symlink():
+        if call_root.is_symlink():
+            return
+        try:
             shutil.rmtree(call_root)
+        except FileNotFoundError:
+            # A concurrent reclaimer already removed the workspace.
+            return
