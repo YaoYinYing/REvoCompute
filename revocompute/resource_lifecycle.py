@@ -172,6 +172,41 @@ def ensure_task_purged(
     return purge_task_data(task_store, task, remove_artifacts=remove_artifacts, at=at)
 
 
+def settle_disposal_claim(
+    task_store: TaskDatabase,
+    task: dict[str, Any],
+    *,
+    claim_status: str,
+    requested_by_user_id: int | None,
+    at: float,
+) -> bool:
+    """Complete one disposal claim in the lane its recorded request names.
+
+    A user or Admin request settles to ``deleted:*`` with the audit fields the
+    delete route writes; an automatic retention request names no actor and
+    settles to ``cleaned:*``.  The claim row is the compare-and-set, so a
+    concurrent finisher of the same claim simply loses.
+    """
+    user_requested = requested_by_user_id is not None
+    fields: dict[str, Any] = {}
+    if claim_status == task_state.DELETING_CANCELLED or not task.get("finished_at"):
+        fields["finished_at"] = at
+    if user_requested:
+        fields["error"] = "Task deleted by user"
+        if task.get("walltime") is None and task.get("started_at"):
+            fields["walltime"] = at - float(task["started_at"])
+    return task_store.complete_task_cleanup(
+        task["md5sum"],
+        claim_status=claim_status,
+        cleaned_status=(
+            task_state.cleanup_termination(claim_status)
+            if user_requested
+            else task_state.cleanup_completion(claim_status)
+        ),
+        **fields,
+    )
+
+
 def settle_purged_claims(
     task_store: TaskDatabase,
     *,
@@ -182,32 +217,17 @@ def settle_purged_claims(
 
     ``PURGED`` is written only after the artifacts are gone and the charge was
     released, so these Tasks have nothing left to purge and no client should keep
-    polling them.  The lane comes from the recorded request: a user or Admin
-    request settles to ``deleted:*``, an automatic retention request (which names
-    no actor) to ``cleaned:*``, so the final state keeps its provenance.
+    polling them.  Only the lane decision and its audit fields remain.
     """
     timestamp = time.time() if at is None else at
     settled = 0
     for task, requested_by_user_id in task_store.list_purged_disposal_claims(limit=limit):
-        claim_status = task_state.normalize(task.get("status"))
-        user_requested = requested_by_user_id is not None
-        fields: dict[str, Any] = {}
-        if claim_status == task_state.DELETING_CANCELLED or not task.get("finished_at"):
-            fields["finished_at"] = timestamp
-        if user_requested:
-            fields["error"] = "Task deleted by user"
-            if task.get("walltime") is None and task.get("started_at"):
-                fields["walltime"] = timestamp - float(task["started_at"])
-        cleaned_status = (
-            task_state.cleanup_termination(claim_status)
-            if user_requested
-            else task_state.cleanup_completion(claim_status)
-        )
-        if task_store.complete_task_cleanup(
-            task["md5sum"],
-            claim_status=claim_status,
-            cleaned_status=cleaned_status,
-            **fields,
+        if settle_disposal_claim(
+            task_store,
+            task,
+            claim_status=task_state.normalize(task.get("status")),
+            requested_by_user_id=requested_by_user_id,
+            at=timestamp,
         ):
             settled += 1
     return settled

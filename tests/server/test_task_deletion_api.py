@@ -229,6 +229,32 @@ def test_maintenance_keeps_retention_provenance(monkeypatch, tmp_path):
     assert not status.startswith("deleted:")
 
 
+def test_retention_finishes_a_user_claim_without_relabelling_it(monkeypatch, tmp_path):
+    """Whichever pass settles a resumed claim keeps the lane its request recorded."""
+    from revocompute.maintenance.tasks import result_cleanup
+
+    module, _client, _auth = _app(monkeypatch, tmp_path)
+    md5sum, result_dir, _artifact, user_id = _seed_task(module, tmp_path, status="deleting:finished")
+    _purged_claim(module, md5sum, actor_user_id=user_id)
+
+    def _must_not_run(_task):
+        raise AssertionError("a completed purge must not remove artifacts again")
+
+    monkeypatch.setattr(result_cleanup, "delete_task_artifacts", _must_not_run)
+
+    cleaned = result_cleanup.cleanup_expired_task_artifacts(
+        0.1,
+        task_store=module.task_store,
+        results_folder=str(module.app.config["RESULTS_FOLDER"]),
+    )
+
+    assert cleaned == 1
+    task = module.task_store.get_task(md5sum)
+    assert (task["status"], task["error"]) == ("deleted:finshed", "Task deleted by user")
+    assert not result_dir.exists()
+    assert _releases(module, user_id) == [GIB]
+
+
 def test_maintenance_settles_the_cancel_lane_and_dates_it(monkeypatch, tmp_path):
     """A cancelled Task's claim gains the completion time the live route would write."""
     module, _client, _auth = _app(monkeypatch, tmp_path)

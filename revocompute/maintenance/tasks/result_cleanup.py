@@ -24,11 +24,6 @@ from revocompute.storage import StorageResolver
 
 _TASK_ID_PATTERN = re.compile(r"[a-fA-F0-9]{32}$")
 
-#: The retention status a cleanup claim resumes into.
-_CLAIMED_CLEANUPS = {
-    claim: task_state.cleanup_completion(claim) for claim in task_state.DISPOSAL_CLAIMS
-}
-
 
 def _path_is_within(base_dir: str, candidate: str) -> bool:
     base_abs = os.path.abspath(base_dir)
@@ -153,8 +148,9 @@ def cleanup_expired_task_artifacts(
     quota consumed forever for data that is gone.
 
     The status marker the UI and API present (``deleting:*`` while a deletion is
-    in flight, ``cleaned:*`` once the bytes are gone) is *derived from the purge
-    outcome* rather than maintained as a parallel cleanup state machine: it is
+    in flight, then the terminal lane its recorded request names) is *derived
+    from the purge outcome* rather than maintained as a parallel cleanup state
+    machine: it is
     claimed before the purge so a resubmission cannot be retired by mistake, and
     completed only once the purge reports the data is gone.
     """
@@ -167,17 +163,15 @@ def cleanup_expired_task_artifacts(
     cleaned = 0
     for task in task_store.list_tasks():
         status = task_state.normalize(task.get("status"))
-        if status in _CLAIMED_CLEANUPS:
+        if status in task_state.DISPOSAL_CLAIMS:
             # A deletion that was already claimed and interrupted: resume it
             # from the durable claim rather than deciding eligibility again.
             claim_status = status
-            cleaned_status = _CLAIMED_CLEANUPS[status]
         elif status in task_state.OUTCOMES:
             finished_at = task.get("finished_at")
             if finished_at is None or finished_at > cutoff:
                 continue
             claim_status = task_state.disposal(status).claim
-            cleaned_status = task_state.cleanup_completion(claim_status)
             if not task_store.claim_task_cleanup(
                 task["md5sum"],
                 expected_status=status,
@@ -193,10 +187,13 @@ def cleanup_expired_task_artifacts(
             # The lifecycle row records the failure and keeps the charge, so the
             # next pass retries it; the claim stays in place meanwhile.
             continue
-        if not task_store.complete_task_cleanup(
-            task["md5sum"],
+        record = task_store.get_data_lifecycle(task["md5sum"]) or {}
+        if not resource_lifecycle.settle_disposal_claim(
+            task_store,
+            task,
             claim_status=claim_status,
-            cleaned_status=cleaned_status,
+            requested_by_user_id=record.get("requested_by_user_id"),
+            at=timestamp,
         ):
             logging.warning("Cleanup claim changed before completion for task %s", task["md5sum"])
             continue
