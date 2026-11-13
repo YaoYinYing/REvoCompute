@@ -92,12 +92,25 @@ parser versions, the atom-map digest, representation policy, selected frame
 times and boxes, transitions, warnings and output hashes. Child refusals are
 published as typed `error_class`/`error` values.
 
-Accepted evidence for this release is: the SIF build, `%test` and health; an
-isolated local API-to-Tool call with a 100 MB-class GRO/XTC pair, 51 frames,
-verified digests, read-only binds, deterministic output and bounded RSS; and
-the scientific/CAVER-parser contracts in the hashed-dependency CI lane. A real
-deployment call through Slurm, a CAVER JAR run and production promotion remain
-separate acceptance gates.
+Accepted evidence for this release:
+
+- SIF build, `%test` and health for the current mdconvert tree.
+- The scientific and CAVER-parser contracts in the hashed-dependency CI lane.
+- Historical host-local evidence at head `02c1b6ad`: an isolated local
+  API-to-Tool call with a 100 MB-class GRO/XTC pair and 51 frames, verified
+  digests, read-only binds, deterministic output and bounded RSS. Its mdconvert
+  SIF (`2643194a…`) is superseded. `requirements.lock` and the family definition
+  are byte-identical to the current tree; its `tool_cli.py` differs only in the
+  `_selection_expression` comma-grammar fix, which that run's `selection: all`
+  path does not reach. An exact-head 100 MB-class, 51-frame run has not been
+  executed.
+- Host-local Tool-output → Task → CAVER handoff: the pinned CAVER SIF/JAR was
+  executed against the server-produced Task snapshot and produced 23 tunnels in
+  8 clusters with deterministic output hashes. This is host-local Apptainer
+  evidence, not Slurm or production.
+
+Slurm-managed deployment calls, production live-test receipts and production
+promotion remain separate acceptance gates and are not claimed here.
 
 Use `revocompute-tool-status --json` inside the Tool worker to inspect image identity, COLD/WARM/UNAVAILABLE state, active calls, last use, recent startup failure, cold starts, warm hits, and idle shutdowns. This output contains no user filenames, parameters, sequences, structures, or molecules.
 

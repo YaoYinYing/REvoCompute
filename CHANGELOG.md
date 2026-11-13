@@ -30,9 +30,11 @@ invented release numbers or dates.
     chain/residue/atom identity would collide under PDB chain `X` are refused.
   - Add a Tool-scoped input tier: `limits.request_bytes` cannot exceed the
     deployment `TOOL_REQUEST_MAX_BYTES`, and `limits.input_bytes` bounds each
-    role separately. `mdconvert` admits 100,000,000 decoded trajectory bytes,
-    8,000,000 topology bytes and 108,000,000 bytes in aggregate; ordinary
-    Tools keep the 16 MiB budget.
+    role separately. `mdconvert`'s `tool.yaml` declares 100,000,000 decoded
+    trajectory bytes, 8,000,000 topology bytes and 108,000,000 bytes in
+    aggregate; those manifest-owned limits are authoritative and are projected
+    by the Tool API. The Core GRO/XTC transport caps are independent limits.
+    Ordinary Tools keep the 16 MiB budget.
   - Charge verified Task-artifact references to the same per-role and aggregate
     decoded budget as uploads.
   - Publish a child-declared typed failure as the Tool call's `error_class` and

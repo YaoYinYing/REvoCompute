@@ -8,6 +8,11 @@ These checks prove the container is the declared serialization and bounded in
 size and atom count.  They never interpret chemistry or coordinates as a
 scientific decision: the pinned Tool parser owns the topology/atom mapping,
 unit conversion and frame selection.
+
+The byte caps here are independent Core transport limits, not the Tool's
+declared input tier. The owning `tool.yaml` is authoritative for
+`limits.input_bytes` and `limits.request_bytes` and is projected by
+`GET /compute/api/tools/<id>`; a Tool may declare a smaller per-role bound.
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ from pathlib import Path
 from revocompute.input_validators.common import _read_text
 
 MAX_MD_ATOMS = 99_999
+# Core transport caps, independent of the Tool tier declared in tool.yaml.
 MAX_GRO_BYTES = 8_000_000
 MAX_XTC_BYTES = 100_000_000
 _XTC_MAGIC = 1995
