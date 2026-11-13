@@ -5447,7 +5447,10 @@ class TaskDatabase:
 
         A request that names an actor records it; one that names nobody (an
         automatic retention retry) keeps the actor already recorded, so the
-        deletion's lane survives however many passes re-drive it.
+        deletion's lane survives however many passes re-drive it.  A named actor
+        arriving on an already-requested row likewise records provenance without
+        moving the lifecycle state, so a user deletion that races retention still
+        settles in the user's lane.
         """
         timestamp = time.time() if at is None else at
         terminal = (
@@ -5480,6 +5483,18 @@ class TaskDatabase:
                 )
                 return True
             if existing["state"] in terminal:
+                if actor_user_id is not None:
+                    # A user or Admin requested deletion of a Task that is
+                    # already awaiting, purging, or purged.  Provenance is the
+                    # most recent explicit actor, so record it without touching
+                    # the state: a crash or a settlement race must still land in
+                    # the user's lane.  An automatic retention request names no
+                    # actor and never overwrites a recorded one.
+                    conn.execute(
+                        update(self.data_lifecycle_table)
+                        .where(self.data_lifecycle_table.c.task_id == task_id)
+                        .values(requested_by_user_id=actor_user_id, updated_at=timestamp)
+                    )
                 return False
             values: dict[str, Any] = {
                 "state": rloan.DataLifecycleState.DELETE_REQUESTED.value,
@@ -5637,7 +5652,9 @@ class TaskDatabase:
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
-    def reclaim_stale_purge(self, task_id: str, *, at: float | None = None) -> bool:
+    def reclaim_stale_purge(
+        self, task_id: str, *, expected_claimed_at: float, at: float | None = None
+    ) -> bool:
         """Return an abandoned ``PURGING`` claim to ``DELETE_REQUESTED``.
 
         The caller owns the staleness decision — it is the only party that knows
@@ -5646,6 +5663,12 @@ class TaskDatabase:
         retried: ``begin_data_purge`` requires ``DELETE_REQUESTED``, so a worker
         that died between its claim and its completion would hold its subject's
         quota forever.
+
+        The update fences on the claim the caller observed, so two reclaimers
+        holding the same stale observation cannot both win: the first returns
+        the row to ``DELETE_REQUESTED`` and a fresh owner may claim it, while the
+        second matches no row and changes nothing instead of stealing that fresh
+        claim.
         """
         timestamp = time.time() if at is None else at
         stmt = (
@@ -5653,6 +5676,10 @@ class TaskDatabase:
             .where(
                 self.data_lifecycle_table.c.task_id == task_id,
                 self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGING.value,
+                func.coalesce(
+                    self.data_lifecycle_table.c.claimed_at, self.data_lifecycle_table.c.updated_at
+                )
+                == expected_claimed_at,
             )
             .values(state=rloan.DataLifecycleState.DELETE_REQUESTED.value, updated_at=timestamp)
         )

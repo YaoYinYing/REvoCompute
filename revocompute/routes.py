@@ -5255,12 +5255,11 @@ def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> bool:
         return True
     if status in task_state.DISPOSAL_CLAIMS:
         claim_status = status
-        deleted_status = task_state.cleanup_termination(status)
     else:
         disposal = task_state.disposal(status)
         if disposal is None:
             return False
-        claim_status, deleted_status = disposal.claim, disposal.deleted
+        claim_status = disposal.claim
         if not task_store.claim_task_cleanup(
             md5sum,
             expected_status=status,
@@ -5299,21 +5298,12 @@ def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> bool:
     ):
         logging.warning("Data purge for task %s did not complete; it will be retried", md5sum)
         return False
-    now = time.time()
-    started_at = task.get("started_at")
-    walltime = task.get("walltime")
-    if walltime is None and started_at:
-        walltime = now - started_at
-    finished_at = task.get("finished_at")
-    if deleted_status == task_state.DELETED_CANCELLED or not finished_at:
-        finished_at = now
-    if not task_store.complete_task_cleanup(
-        md5sum,
+    if not resource_lifecycle.settle_disposal_claim(
+        task_store,
+        task,
         claim_status=claim_status,
-        cleaned_status=deleted_status,
-        finished_at=finished_at,
-        walltime=walltime,
-        error="Task deleted by user",
+        requested_by_user_id=int(g.current_user["id"]),
+        at=time.time(),
     ):
         # Another finisher (a concurrent request or the maintenance pass) may
         # have settled the same claim first; that is the outcome this request

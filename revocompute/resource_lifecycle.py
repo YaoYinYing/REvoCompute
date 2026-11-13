@@ -165,7 +165,7 @@ def ensure_task_purged(
         claimed_at = float(record.get("claimed_at") or record.get("updated_at") or 0.0)
         if timestamp - claimed_at < PURGE_STALE_SECONDS:
             return False
-        if not task_store.reclaim_stale_purge(task_id, at=at):
+        if not task_store.reclaim_stale_purge(task_id, expected_claimed_at=claimed_at, at=at):
             return False
     elif state != rloan.DataLifecycleState.DELETE_REQUESTED.value:
         return False
@@ -186,10 +186,17 @@ def settle_disposal_claim(
     delete route writes; an automatic retention request names no actor and
     settles to ``cleaned:*``.  The claim row is the compare-and-set, so a
     concurrent finisher of the same claim simply loses.
+
+    ``finished_at`` is stamped when the Task has none, or when a user-owned
+    deletion of a cancelled Task needs the completion time the delete route
+    writes.  Retention leaves a present ``finished_at`` alone, so it never
+    overwrites the Task's real cancellation time.
     """
     user_requested = requested_by_user_id is not None
     fields: dict[str, Any] = {}
-    if claim_status == task_state.DELETING_CANCELLED or not task.get("finished_at"):
+    if not task.get("finished_at") or (
+        claim_status == task_state.DELETING_CANCELLED and user_requested
+    ):
         fields["finished_at"] = at
     if user_requested:
         fields["error"] = "Task deleted by user"
@@ -340,7 +347,9 @@ def retry_stale_purges(
             # A fresh claim is a live purge; a stale one is a crash.  Recovery is
             # the reclaim itself, so a pass that reclaims but cannot finish leaves
             # a retryable row for the next pass instead of a permanent wedge.
-            if not task_store.reclaim_stale_purge(task_id, at=timestamp):
+            if not task_store.reclaim_stale_purge(
+                task_id, expected_claimed_at=float(claimed_at), at=timestamp
+            ):
                 continue
         elif state == rloan.DataLifecycleState.ERROR.value:
             # ERROR goes back to DELETE_REQUESTED through the same guard the
