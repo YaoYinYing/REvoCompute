@@ -156,17 +156,19 @@ const jaagBuilder: WorkspacePlugin = {
     let engaged = false;
     let generated: File | null = null;
     let errors: string[] = [];
+    let refreshing = false;
+    let destroyed = false;
 
     const ownsRole = (): boolean => {
       const files = context.roleFiles(role);
       return generated !== null && files.length === 1 && files[0] === generated;
     };
 
-    const clearOwnOutput = (): void => {
+    const clearOwnOutput = (notify = true): void => {
       if (!ownsRole()) return;
       context.setRoleFiles(role, []);
       generated = null;
-      context.filesChanged();
+      if (notify) context.filesChanged();
     };
 
     const collect = (): { model: Record<string, unknown>; parseErrors: string[] } => {
@@ -200,29 +202,37 @@ const jaagBuilder: WorkspacePlugin = {
     };
 
     const refresh = (): void => {
-      errors = [];
-      error.hidden = true;
-      if (!roleExists) {
-        errors = [`The builder cannot bind to unknown input role "${role}".`];
-      } else if (engaged) {
-        const { model, parseErrors } = collect();
-        const result = core().build(model, dialect);
-        errors = [...parseErrors, ...result.errors];
-        if (!errors.length && result.data != null) {
-          generated = fileFor(dialect, result.data);
-          context.setRoleFiles(role, [generated]);
-          status.textContent = `System YAML ready: ${rows.length} entities.`;
-          context.filesChanged();
+      // ``filesChanged`` asks the host to refresh every mounted capability. The
+      // generated file must not make that refresh rewrite the role again.
+      if (refreshing || destroyed) return;
+      refreshing = true;
+      try {
+        errors = [];
+        error.hidden = true;
+        if (!roleExists) {
+          errors = [`The builder cannot bind to unknown input role "${role}".`];
+        } else if (engaged) {
+          const { model, parseErrors } = collect();
+          const result = core().build(model, dialect);
+          errors = [...parseErrors, ...result.errors];
+          if (!errors.length && result.data != null) {
+            generated = fileFor(dialect, result.data);
+            context.setRoleFiles(role, [generated]);
+            status.textContent = `System YAML ready: ${rows.length} entities.`;
+            context.filesChanged();
+          } else {
+            clearOwnOutput();
+            status.textContent = 'System YAML is not ready.';
+          }
         } else {
-          clearOwnOutput();
-          status.textContent = 'System YAML is not ready.';
+          status.textContent = 'Fill the entities, then generate the System YAML.';
         }
-      } else {
-        status.textContent = 'Fill the entities, then generate the System YAML.';
-      }
-      if (errors.length) {
-        error.textContent = errors.join('; ');
-        error.hidden = false;
+        if (errors.length) {
+          error.textContent = errors.join('; ');
+          error.hidden = false;
+        }
+      } finally {
+        refreshing = false;
       }
     };
 
@@ -302,7 +312,7 @@ const jaagBuilder: WorkspacePlugin = {
       readValue: () => ({ active: engaged, target: dialect, entities: rows.length }),
       summarize: () => (engaged && generated ? { label: 'System YAML', value: `JAAG builder · ${rows.length} entities` } : null),
       validate: () => (engaged || !roleExists ? errors : []),
-      destroy: () => { clearOwnOutput(); },
+      destroy: () => { destroyed = true; clearOwnOutput(false); },
     };
   },
 };

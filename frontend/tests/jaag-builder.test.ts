@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { jaagBuilder } from '../src/features/create-task/input-workspace/jaag-builder';
-import type { WorkspaceContext } from '../src/features/create-task/input-workspace/plugin-contract';
+import type { WorkspaceContext, WorkspacePluginInstance } from '../src/features/create-task/input-workspace/plugin-contract';
 import type { TaskFormDefinition, WorkspaceCapability } from '../src/features/create-task/types';
 import { HarnessNode, installHarness } from './dom-harness';
 
@@ -22,11 +22,12 @@ const definition: WorkspaceCapability = {
   stepId: 'material',
 };
 
-function mount(initial: File[] = []) {
+function mount(initial: File[] = [], reentrant = false) {
   installHarness(vi.stubGlobal as never);
   const target = document.createElement('div') as unknown as HarnessNode;
   const roleFiles = new Map<string, File[]>([['system', initial]]);
-  const changed = vi.fn();
+  let instance: WorkspacePluginInstance | undefined;
+  const changed = vi.fn(() => { if (reentrant) instance?.refresh?.(); });
   const context = {
     form,
     roleFiles: (role: string) => [...(roleFiles.get(role) ?? [])],
@@ -42,7 +43,7 @@ function mount(initial: File[] = []) {
     summaries: () => [], changed,
     filesChanged: changed,
   } as unknown as WorkspaceContext;
-  const instance = jaagBuilder.mount(target as unknown as HTMLElement, definition, context, { fetch })!;
+  instance = jaagBuilder.mount(target as unknown as HTMLElement, definition, context, { fetch })!;
   const byPlaceholder = (tag: string, placeholder: string): HarnessNode => {
     const match = target.querySelectorAll(tag).find(node => (node as unknown as { placeholder?: string }).placeholder === placeholder);
     if (!match) throw new Error(`missing ${tag} with placeholder ${placeholder}`);
@@ -105,5 +106,15 @@ describe('JAAG builder input workspace capability', () => {
     const yaml = await file.text();
     expect(yaml).toContain('entity_type: ligand');
     expect(yaml).toContain('ccd_code: NAG');
+  });
+
+  it('terminates when the host refresh follows its own change notification', () => {
+    // ``filesChanged`` refreshes every mounted capability, including this one.
+    // Regenerating during that refresh would rewrite the role forever.
+    const { roleFiles, byPlaceholder } = mount([], true);
+    const sequence = byPlaceholder('textarea', 'sequence');
+    (sequence as unknown as { value: string }).value = 'ACDEFGHIK';
+    expect(() => sequence.dispatch('input', {})).not.toThrow();
+    expect(roleFiles.get('system')).toHaveLength(1);
   });
 });
