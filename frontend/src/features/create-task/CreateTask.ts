@@ -99,6 +99,9 @@ export class CreateTask {
   private clonePlan: ClonePlan | null = null;
   private cloneBaseline: WorkspacePreset | null = null;
   private cloneApplied: Record<string, string> | null = null;
+  // The values the panel last showed, so a later keystroke updates its view
+  // instead of leaving a stale "current value" behind.
+  private cloneRendered: Record<string, string> | null = null;
   private readonly cloneResolved = new Set<string>();
   private readonly cloneEdited = new Set<string>();
   private applyingClone = false;
@@ -515,14 +518,15 @@ export class CreateTask {
     const current = this.workspace.snapshot().parameters;
     let changed = false;
     Object.entries(current).forEach(([name, value]) => {
-      if (this.cloneApplied![name] === value) return;
-      // An edit is an explicit replacement: the panel must not keep claiming the
-      // value came from the plan.
-      if (!this.cloneEdited.has(name)) { this.cloneEdited.add(name); changed = true; }
-      if (blocked.has(name) && !this.cloneResolved.has(name)) {
-        this.cloneResolved.add(name);
-        changed = true;
+      if (this.cloneApplied![name] !== value) {
+        // An edit is an explicit replacement: the panel must not keep claiming
+        // the value came from the plan.
+        this.cloneEdited.add(name);
+        if (blocked.has(name)) this.cloneResolved.add(name);
       }
+      // The panel shows an edited value as the control now holds it, so a
+      // later keystroke re-renders instead of leaving the first one behind.
+      if (this.cloneEdited.has(name) && (this.cloneRendered?.[name] ?? this.cloneApplied![name]) !== value) changed = true;
     });
     if (changed) this.renderClone();
   }
@@ -547,6 +551,7 @@ export class CreateTask {
     this.clonePlan = null;
     this.cloneBaseline = null;
     this.cloneApplied = null;
+    this.cloneRendered = null;
     this.cloneResolved.clear();
     this.cloneEdited.clear();
     this.clonePanel?.remove();
@@ -595,6 +600,7 @@ export class CreateTask {
       onKeepCurrent: name => this.keepCurrentCloneValue(name),
     } : {});
     this.clonePanel = panel;
+    if (interactive) this.cloneRendered = this.workspace.snapshot().parameters;
     const grid = interactive ? this.workbench.querySelector<HTMLElement>('.ct-workbench-grid') : null;
     if (grid) this.workbench.insertBefore(panel, grid);
     else this.chooser.append(panel);

@@ -169,6 +169,12 @@ describe('a cloned draft with blocked settings', () => {
     expect(seedRow.textContent).toContain('Edited in this draft');
     expect(seedRow.textContent).not.toContain('From the source task');
     expect(seedRow.textContent).toContain('9');
+    // A later keystroke updates the value the panel shows; it must not keep the
+    // first edit's value.
+    (seed as unknown as { value: string }).value = '99';
+    seed.dispatch('input', {});
+    const updated = root.querySelectorAll('.ct-clone-parameters li').find(row => row.textContent.includes('seed'))!;
+    expect(updated.textContent).toContain('99');
 
     while (root.querySelectorAll('.ct-clone-conflicts button').length) {
       root.querySelectorAll('.ct-clone-conflicts button')[0]!.dispatch('click', {});
