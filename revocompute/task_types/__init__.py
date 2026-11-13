@@ -865,6 +865,9 @@ _INPUT_CAPABILITY_PLUGINS = {
     "regions",
     "parameters",
     "review",
+    # Frontend builtin: a pinned third-party serializer that binds generated
+    # content to a declared input role. The Server still owns role validation.
+    "jaag-builder",
 }
 _INPUT_CAPABILITY_OPTION_KEYS = {
     "files": {"primary_role"},
@@ -873,6 +876,7 @@ _INPUT_CAPABILITY_OPTION_KEYS = {
     "regions": {"source", "fields", "syntax", "modes"},
     "parameters": set(),
     "review": {"show_paths"},
+    "jaag-builder": {"role", "target"},
 }
 
 _RESULT_VIEW_SOURCE_KEYS = {

@@ -206,6 +206,15 @@ invented release numbers or dates.
   - Publish the common `topology.cif`, `samples.xtc`, `system.yaml` and
     `physicality.json` result files; `command.txt` is an optional diagnostic and
     the FASTA echo is removed.
+  - Add a pinned JAAG System YAML builder to the Create Task workspace. It
+    validates the model with the pinned serializer and binds the generated YAML
+    to the `system` role; plain YAML upload remains a first-class path. The
+    Apache-2.0 builder core is fetched at build time from a pinned commit and
+    checksum, not committed to the repository.
+  - Add parameterized pinned-upstream acceptance under the family's scientific
+    tests: the pinned SIF commit, the real System YAML parser, and the real Click
+    acceptance of all three mode commands. Scientific result acceptance remains
+    a separate authorized live run.
 
 ### Fixed
 - Tools:

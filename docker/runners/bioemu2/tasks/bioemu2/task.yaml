@@ -62,12 +62,21 @@ input_workspace:
   steps:
   - id: material
     title: Provide the molecular system
-    description: Upload a BioEmu2 System YAML. Propagation also needs the starting
-      mmCIF structure.
+    description: Upload a BioEmu2 System YAML or build one with JAAG. Propagation
+      also needs the starting mmCIF structure.
     capabilities:
     - plugin: files
       id: source_files
       title: System and starting structure
+    - plugin: jaag-builder
+      id: jaag_system_builder
+      title: Build a System YAML
+      description: Author and validate a System YAML with the pinned JAAG builder.
+        The generated YAML is bound to the system role and replaces an upload when
+        you generate it.
+      options:
+        target: bioemu2
+        role: system
   - id: settings
     title: Set the experiment
     description: Choose the scientific mode and adjust only the controls that matter

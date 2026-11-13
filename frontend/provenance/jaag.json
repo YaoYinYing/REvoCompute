@@ -1,0 +1,17 @@
+{
+  "component": "JAAG core (jaag-core global bundle)",
+  "repository": "https://github.com/YaoYinYing/JAAG",
+  "repository_path": "YaoYinYing/JAAG",
+  "commit": "6bc0ff50d6dbe98093b08d3f4287afa2e799d415",
+  "asset": "dist/jaag-core.global.js",
+  "asset_path": "vendor/jaag-core.global.js",
+  "sha256": "c24f0413c5ad8a4ea8d2a5a3e3b62764b467d78dd6ca0833884ab0f279cd2370",
+  "size": 76059,
+  "license": "Apache-2.0",
+  "copyright": "Copyright (c) 2025 University of Georgia",
+  "distribution": "Fetched at build time by scripts/fetch-jaag-core.mjs and verified against this checksum; not committed to the repository.",
+  "limitations": [
+    "Contact conditioning is not collected by the builder.",
+    "File-backed and custom userCCD components are rejected by the BioEmu2 serializer."
+  ]
+}

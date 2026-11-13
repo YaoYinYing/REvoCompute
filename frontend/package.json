@@ -8,6 +8,10 @@
   },
   "scripts": {
     "dev": "vite",
+    "jaag:fetch": "node scripts/fetch-jaag-core.mjs",
+    "pretypecheck": "npm run jaag:fetch",
+    "pretest": "npm run jaag:fetch",
+    "prebuild": "npm run jaag:fetch",
     "generate:api-types": "openapi-typescript ../revocompute/static/openapi.json -o src/api/schema.generated.ts",
     "check:api-types": "node scripts/check-api-types.mjs",
     "verify:lock": "node scripts/verify-lock.mjs",
