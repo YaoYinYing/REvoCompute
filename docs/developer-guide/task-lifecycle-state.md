@@ -115,7 +115,9 @@ retention resumes its purge through the data lifecycle, never races a live
 `PURGING` claim, and settles the Task only when that lifecycle records `PURGED`;
 a claim stale for `PURGE_STALE_SECONDS` is reclaimed. A purge that completed
 before the process died leaves `PURGED` with its claim still in place; resource
-maintenance finishes that status write without touching the removed data.
+maintenance finishes that status write without touching the removed data,
+settling the lane the recorded request names — `deleted:*` when a user or Admin
+asked, `cleaned:*` when automatic retention did.
 Deleting an already-`DISPOSED` Task succeeds without touching the row.
 
 ## What consumers must do

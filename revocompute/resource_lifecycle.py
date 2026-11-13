@@ -182,20 +182,31 @@ def settle_purged_claims(
 
     ``PURGED`` is written only after the artifacts are gone and the charge was
     released, so these Tasks have nothing left to purge and no client should keep
-    polling them.  A claim records no initiator, so this pass settles the lane of
-    the deletions users and Admins authorized; retention resumes its own claims.
+    polling them.  The lane comes from the recorded request: a user or Admin
+    request settles to ``deleted:*``, an automatic retention request (which names
+    no actor) to ``cleaned:*``, so the final state keeps its provenance.
     """
     timestamp = time.time() if at is None else at
     settled = 0
-    for task in task_store.list_purged_disposal_claims(limit=limit):
+    for task, requested_by_user_id in task_store.list_purged_disposal_claims(limit=limit):
         claim_status = task_state.normalize(task.get("status"))
+        user_requested = requested_by_user_id is not None
         fields: dict[str, Any] = {}
         if claim_status == task_state.DELETING_CANCELLED or not task.get("finished_at"):
             fields["finished_at"] = timestamp
+        if user_requested:
+            fields["error"] = "Task deleted by user"
+            if task.get("walltime") is None and task.get("started_at"):
+                fields["walltime"] = timestamp - float(task["started_at"])
+        cleaned_status = (
+            task_state.cleanup_termination(claim_status)
+            if user_requested
+            else task_state.cleanup_completion(claim_status)
+        )
         if task_store.complete_task_cleanup(
             task["md5sum"],
             claim_status=claim_status,
-            cleaned_status=task_state.cleanup_termination(claim_status),
+            cleaned_status=cleaned_status,
             **fields,
         ):
             settled += 1

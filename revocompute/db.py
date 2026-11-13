@@ -5653,16 +5653,22 @@ class TaskDatabase:
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
-    def list_purged_disposal_claims(self, *, limit: int = 500) -> list[dict[str, Any]]:
+    def list_purged_disposal_claims(
+        self, *, limit: int = 500
+    ) -> list[tuple[dict[str, Any], int | None]]:
         """Tasks still in a disposal claim whose purge already completed.
 
         A crash between ``complete_data_purge`` and ``complete_task_cleanup``
         leaves exactly this pair: the bytes are gone and the charge was released,
         and only the status write is missing.  The join reads the claim and its
         lifecycle as one fact instead of scanning Tasks and looking each up.
+
+        Each entry also carries the deletion request's ``requested_by_user_id``,
+        which is the only record of whether a user or automatic retention asked:
+        a user or Admin request names the actor, retention requests ``None``.
         """
         stmt = (
-            select(self.tasks_table)
+            select(self.tasks_table, self.data_lifecycle_table.c.requested_by_user_id)
             .select_from(
                 self.tasks_table.join(
                     self.data_lifecycle_table,
@@ -5677,7 +5683,16 @@ class TaskDatabase:
             .limit(limit)
         )
         with self.engine.connect() as conn:
-            return [self._normalize_task_row(row) for row in conn.execute(stmt).mappings().all()]
+            rows = conn.execute(stmt).mappings().all()
+        return [
+            (
+                self._normalize_task_row(
+                    {name: row[name] for name in self.tasks_table.c.keys()}
+                ),
+                row["requested_by_user_id"],
+            )
+            for row in rows
+        ]
 
     def list_data_lifecycle(
         self, *, user_id: int | None = None, states: tuple[str, ...] = (), limit: int = 500

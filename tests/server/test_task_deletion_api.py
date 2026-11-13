@@ -174,36 +174,74 @@ def test_settled_purge_is_not_rerun(monkeypatch, tmp_path):
     assert _releases(module, user_id) == released_before
 
 
-def test_maintenance_settles_a_completed_purge_left_in_its_claim(monkeypatch, tmp_path):
-    """A crash after PURGED and before the status write is finished without a re-purge."""
-    from revocompute.maintenance.tasks import resource_maintenance
-
-    module, _client, _auth = _app(monkeypatch, tmp_path)
-    md5sum, result_dir, _artifact, user_id = _seed_task(module, tmp_path, status="deleting:finished")
+def _purged_claim(module, md5sum, *, actor_user_id):
+    """Leave the durable state of a crash after PURGED and before the status write."""
     task = module.task_store.get_task(md5sum)
-    assert resource_lifecycle.request_data_deletion(module.task_store, task, actor_user_id=None)
+    assert resource_lifecycle.request_data_deletion(module.task_store, task, actor_user_id=actor_user_id)
     assert resource_lifecycle.purge_task_data(
         module.task_store, task, remove_artifacts=_route_globals(module)["_delete_task_artifacts"]
     )
-    before = module.task_store.get_data_lifecycle(md5sum)
-    assert _releases(module, user_id) == [GIB]
+    return module.task_store.get_data_lifecycle(md5sum)
+
+
+def _settle_with_maintenance(module, monkeypatch):
+    from revocompute.maintenance.tasks import resource_maintenance
 
     def _must_not_run(_task):
         raise AssertionError("a completed purge must not remove artifacts again")
 
     monkeypatch.setattr(resource_maintenance, "delete_task_artifacts", _must_not_run)
     monkeypatch.setattr(resource_maintenance, "fetch_scheduler_evidence", lambda store, *args, **kwargs: {})
-
-    report = resource_maintenance.run_resource_maintenance(
+    return resource_maintenance.run_resource_maintenance(
         task_store=module.task_store,
         results_folder=str(module.app.config["RESULTS_FOLDER"]),
     )
 
+
+def test_maintenance_settles_a_user_purge_left_in_its_claim(monkeypatch, tmp_path):
+    """A crash after PURGED and before the status write is finished without a re-purge."""
+    module, _client, _auth = _app(monkeypatch, tmp_path)
+    md5sum, result_dir, _artifact, user_id = _seed_task(module, tmp_path, status="deleting:finished")
+    before = _purged_claim(module, md5sum, actor_user_id=user_id)
+    assert _releases(module, user_id) == [GIB]
+
+    report = _settle_with_maintenance(module, monkeypatch)
+
     assert report["settled_claims"] == 1
-    assert module.task_store.get_task(md5sum)["status"] == "deleted:finshed"
+    task = module.task_store.get_task(md5sum)
+    assert (task["status"], task["error"]) == ("deleted:finshed", "Task deleted by user")
     assert not result_dir.exists()
     assert module.task_store.get_data_lifecycle(md5sum)["purged_at"] == before["purged_at"]
     assert _releases(module, user_id) == [GIB]
+
+
+def test_maintenance_keeps_retention_provenance(monkeypatch, tmp_path):
+    """A claim retention requested settles as cleaned, never as a user deletion."""
+    module, _client, _auth = _app(monkeypatch, tmp_path)
+    md5sum, _result_dir, _artifact, user_id = _seed_task(module, tmp_path, status="deleting:finished")
+    _purged_claim(module, md5sum, actor_user_id=None)
+
+    report = _settle_with_maintenance(module, monkeypatch)
+
+    assert report["settled_claims"] == 1
+    status = module.task_store.get_task(md5sum)["status"]
+    assert status == "cleaned:finished"
+    assert not status.startswith("deleted:")
+
+
+def test_maintenance_settles_the_cancel_lane_and_dates_it(monkeypatch, tmp_path):
+    """A cancelled Task's claim gains the completion time the live route would write."""
+    module, _client, _auth = _app(monkeypatch, tmp_path)
+    md5sum, _result_dir, _artifact, user_id = _seed_task(module, tmp_path, status="deleting:cancel")
+    before = module.task_store.get_task(md5sum)
+    _purged_claim(module, md5sum, actor_user_id=user_id)
+
+    report = _settle_with_maintenance(module, monkeypatch)
+
+    assert report["settled_claims"] == 1
+    after = module.task_store.get_task(md5sum)
+    assert after["status"] == "deleted:cancel"
+    assert after["finished_at"] != before["finished_at"]
 
 
 def test_batch_delete_reports_a_live_purge_as_ignored(monkeypatch, tmp_path):
