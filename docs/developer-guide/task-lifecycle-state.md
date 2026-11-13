@@ -110,11 +110,13 @@ Retention settles to `cleaned:*` (audit row kept, artifacts gone) and a user
 deletion settles to `deleted:*`. Both are hidden from history.
 
 The claim is the crash boundary. A process that dies after claiming leaves a
-`deleting:*` row, and a repeated deletion request or the maintenance pass (when
-retention is enabled) resumes its purge through the data lifecycle, never races
-a live `PURGING` claim, and settles the Task only when that lifecycle records
-`PURGED`; a claim stale for `PURGE_STALE_SECONDS` is reclaimed. Deleting an
-already-`DISPOSED` Task succeeds without touching the row.
+`deleting:*` row, and a repeated deletion request, resource maintenance, or
+retention resumes its purge through the data lifecycle, never races a live
+`PURGING` claim, and settles the Task only when that lifecycle records `PURGED`;
+a claim stale for `PURGE_STALE_SECONDS` is reclaimed. A purge that completed
+before the process died leaves `PURGED` with its claim still in place; resource
+maintenance finishes that status write without touching the removed data.
+Deleting an already-`DISPOSED` Task succeeds without touching the row.
 
 ## What consumers must do
 

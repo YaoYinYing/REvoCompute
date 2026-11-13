@@ -174,6 +174,59 @@ def test_settled_purge_is_not_rerun(monkeypatch, tmp_path):
     assert _releases(module, user_id) == released_before
 
 
+def test_maintenance_settles_a_completed_purge_left_in_its_claim(monkeypatch, tmp_path):
+    """A crash after PURGED and before the status write is finished without a re-purge."""
+    from revocompute.maintenance.tasks import resource_maintenance
+
+    module, _client, _auth = _app(monkeypatch, tmp_path)
+    md5sum, result_dir, _artifact, user_id = _seed_task(module, tmp_path, status="deleting:finished")
+    task = module.task_store.get_task(md5sum)
+    assert resource_lifecycle.request_data_deletion(module.task_store, task, actor_user_id=None)
+    assert resource_lifecycle.purge_task_data(
+        module.task_store, task, remove_artifacts=_route_globals(module)["_delete_task_artifacts"]
+    )
+    before = module.task_store.get_data_lifecycle(md5sum)
+    assert _releases(module, user_id) == [GIB]
+
+    def _must_not_run(_task):
+        raise AssertionError("a completed purge must not remove artifacts again")
+
+    monkeypatch.setattr(resource_maintenance, "delete_task_artifacts", _must_not_run)
+    monkeypatch.setattr(resource_maintenance, "fetch_scheduler_evidence", lambda store, *args, **kwargs: {})
+
+    report = resource_maintenance.run_resource_maintenance(
+        task_store=module.task_store,
+        results_folder=str(module.app.config["RESULTS_FOLDER"]),
+    )
+
+    assert report["settled_claims"] == 1
+    assert module.task_store.get_task(md5sum)["status"] == "deleted:finshed"
+    assert not result_dir.exists()
+    assert module.task_store.get_data_lifecycle(md5sum)["purged_at"] == before["purged_at"]
+    assert _releases(module, user_id) == [GIB]
+
+
+def test_batch_delete_reports_a_live_purge_as_ignored(monkeypatch, tmp_path):
+    """A batch entry whose purge is live is not reported deleted and stays resumable."""
+    module, client, auth = _app(monkeypatch, tmp_path)
+    md5sum, result_dir, artifact, user_id = _seed_task(module, tmp_path)
+    now = time.time()
+    task = module.task_store.get_task(md5sum)
+    assert resource_lifecycle.request_data_deletion(module.task_store, task, actor_user_id=None, at=now)
+    assert module.task_store.begin_data_purge(md5sum, at=now)
+
+    response = client.post("/compute/api/delete", headers=auth, json={"md5sums": [md5sum]})
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["deleted"] == []
+    assert body["ignored"] == [md5sum]
+    assert module.task_store.get_task(md5sum)["status"] == "deleting:finished"
+    assert artifact.is_file()
+    assert result_dir.exists()
+    assert _releases(module, user_id) == []
+
+
 def test_a_repeated_delete_resumes_the_interrupted_claim(monkeypatch, tmp_path):
     """The claim is durable, so the same request can finish what a crash left."""
     module, client, auth = _app(monkeypatch, tmp_path)

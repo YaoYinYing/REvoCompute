@@ -5315,6 +5315,12 @@ def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> bool:
         walltime=walltime,
         error="Task deleted by user",
     ):
+        # Another finisher (a concurrent request or the maintenance pass) may
+        # have settled the same claim first; that is the outcome this request
+        # asked for, not a failure of it.
+        current = task_store.get_task(md5sum) or {}
+        if task_state.normalize(current.get("status")) in task_state.DISPOSED:
+            return True
         logging.warning("Delete claim changed before completion for task %s", md5sum)
         return False
     return True

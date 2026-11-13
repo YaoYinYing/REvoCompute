@@ -172,6 +172,36 @@ def ensure_task_purged(
     return purge_task_data(task_store, task, remove_artifacts=remove_artifacts, at=at)
 
 
+def settle_purged_claims(
+    task_store: TaskDatabase,
+    *,
+    at: float | None = None,
+    limit: int = 500,
+) -> int:
+    """Finish the status write for deletions whose purge already completed.
+
+    ``PURGED`` is written only after the artifacts are gone and the charge was
+    released, so these Tasks have nothing left to purge and no client should keep
+    polling them.  A claim records no initiator, so this pass settles the lane of
+    the deletions users and Admins authorized; retention resumes its own claims.
+    """
+    timestamp = time.time() if at is None else at
+    settled = 0
+    for task in task_store.list_purged_disposal_claims(limit=limit):
+        claim_status = task_state.normalize(task.get("status"))
+        fields: dict[str, Any] = {}
+        if claim_status == task_state.DELETING_CANCELLED or not task.get("finished_at"):
+            fields["finished_at"] = timestamp
+        if task_store.complete_task_cleanup(
+            task["md5sum"],
+            claim_status=claim_status,
+            cleaned_status=task_state.cleanup_termination(claim_status),
+            **fields,
+        ):
+            settled += 1
+    return settled
+
+
 def _finish_orphan_purge(task_store: TaskDatabase, task_id: str, *, at: float) -> bool:
     """Complete the purge transaction for a Task row that no longer exists.
 

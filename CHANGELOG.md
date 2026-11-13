@@ -233,7 +233,9 @@ invented release numbers or dates.
     cleanup, diagnostics and publication reporting are removed.
   - Resume an interrupted deletion from its durable `deleting:*` claim and make
     deleting an already-retired Task a no-op, instead of leaving a Task no
-    surface can delete again.
+    surface can delete again. A Task settles only once its data lifecycle
+    records `PURGED`, and resource maintenance finishes a purge whose status
+    write was lost.
   - Give Tool calls the same closed transition check.
 
 ### Fixed

@@ -5653,6 +5653,32 @@ class TaskDatabase:
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
+    def list_purged_disposal_claims(self, *, limit: int = 500) -> list[dict[str, Any]]:
+        """Tasks still in a disposal claim whose purge already completed.
+
+        A crash between ``complete_data_purge`` and ``complete_task_cleanup``
+        leaves exactly this pair: the bytes are gone and the charge was released,
+        and only the status write is missing.  The join reads the claim and its
+        lifecycle as one fact instead of scanning Tasks and looking each up.
+        """
+        stmt = (
+            select(self.tasks_table)
+            .select_from(
+                self.tasks_table.join(
+                    self.data_lifecycle_table,
+                    self.tasks_table.c.md5sum == self.data_lifecycle_table.c.task_id,
+                )
+            )
+            .where(
+                self.tasks_table.c.status.in_(tuple(task_state.DISPOSAL_CLAIMS)),
+                self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGED.value,
+            )
+            .order_by(self.tasks_table.c.uploaded_at)
+            .limit(limit)
+        )
+        with self.engine.connect() as conn:
+            return [self._normalize_task_row(row) for row in conn.execute(stmt).mappings().all()]
+
     def list_data_lifecycle(
         self, *, user_id: int | None = None, states: tuple[str, ...] = (), limit: int = 500
     ) -> list[dict[str, Any]]:
