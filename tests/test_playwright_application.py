@@ -14,9 +14,16 @@ import pytest
 
 from browser_frontend_assets import result_dist
 from frontend_fixtures import builders
-from frontend_fixtures.router import serve_environment
+from frontend_fixtures.router import serve_environment, task_history_page
 
 pytestmark = pytest.mark.browser
+
+
+def _task_history(tasks: list[dict]):
+    """Serve the bounded History envelope for a fixed Task list."""
+    return lambda route: route.fulfill(
+        json=task_history_page(tasks, parse_qs(urlsplit(route.request.url).query))
+    )
 
 ORIGIN = "https://revocompute.example"
 TASK_ID = "0123456789abcdef0123456789abcdef"
@@ -280,7 +287,7 @@ def _install_app(page: Page) -> list[str]:
         "task_id": TASK_ID, "task_type": "sequence_demo", "display_name": "sample.fasta", "status": "queued",
         "terminal": False, "status_url": f"/compute/api/running/{TASK_ID}", "results_url": f"/compute/api/results/{TASK_ID}", "result_available": False,
     }))
-    page.route(f"{ORIGIN}/compute/api/tasks", lambda route: route.fulfill(json={"tasks": [_task_summary()]}))
+    page.route(f"{ORIGIN}/compute/api/tasks*", _task_history([_task_summary()]))
     page.route(f"{ORIGIN}/compute/api/running/{TASK_ID}", lambda route: route.fulfill(json={
         "task_id": TASK_ID, "task_type": "sequence_demo", "display_name": "sample.fasta", "status": "finished",
         "terminal": True, "status_url": f"/compute/api/running/{TASK_ID}", "results_url": f"/compute/api/results/{TASK_ID}", "result_available": True,
@@ -722,7 +729,7 @@ def test_admin_dashboard_batch_action_uses_authorized_api(page: Page) -> None:
     )
     admin_task = _task_summary()
     admin_task["owner"] = "tester"
-    page.route(f"{ORIGIN}/compute/api/tasks", lambda route: route.fulfill(json={"tasks": [admin_task]}))
+    page.route(f"{ORIGIN}/compute/api/tasks*", _task_history([admin_task]))
     deleted: list[str] = []
     page.route(
         f"{ORIGIN}/compute/api/delete",

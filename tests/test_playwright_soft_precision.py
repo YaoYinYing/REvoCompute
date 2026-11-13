@@ -711,7 +711,9 @@ def test_advanced_search_is_subordinate_and_obviously_active(page: Page) -> None
     panel = page.locator("[data-advanced-panel]")
     expect(panel).to_be_visible()
     panel.get_by_label("Submitted from").fill("2026-01-01")
-    panel.get_by_label("Regular expression").click()
+    panel.get_by_label("Submitted to").fill("2026-02-01")
+    # Two advanced bounds make the reveal state its activity without a second
+    # control group crowding the search field.
     expect(page.get_by_role("button", name="Advanced search, 2 active")).to_be_visible()
 
 

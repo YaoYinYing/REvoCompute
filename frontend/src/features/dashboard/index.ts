@@ -1,16 +1,23 @@
 import { Archive, Ban, Download, ExternalLink, RefreshCw, Search, Trash2 } from 'lucide';
 import { createIcons } from 'lucide';
-import { deleteTaskBatch, getTasks, prepareArchive, runTaskAction, type CurrentUser, type TaskSummary } from '../../api/app-api';
+import { deleteTaskBatch, getTaskPage, getTaskStatus, prepareArchive, runTaskAction, type CurrentUser, type TaskStatus, type TaskSummary } from '../../api/app-api';
 import { ApiError } from '../../app/session';
 import { confirmAction, openDialog } from '../../app/dialogs';
 import { mountTaskDiagnostics } from '../tasks/diagnostics';
 import { t } from '../../app/i18n';
 import { guidedTour, recordTourResult } from '../../app/guided-tour';
 import type { AppShell } from '../../app/shell';
-import { initialTaskQuery, queryTasks, type TaskQuery } from './task-query';
+import { hasActiveFilters, historyParams, initialTaskQuery, type TaskQuery } from './task-query';
 import './dashboard.css';
 
 const pollMilliseconds = 12_000;
+const debounceMilliseconds = 250;
+const pageSize = 30;
+// One bounded register: every loaded card stays in the DOM, so history browsing
+// stops rather than growing the document without limit. Refining a filter starts
+// a fresh traversal.
+const maxLoadedTasks = 500;
+const maxPolledTasks = 20;
 const dashboardIcons = { Archive, Ban, Download, ExternalLink, RefreshCw, Search, Trash2 };
 
 // Machine facts keep a stable, locale-neutral format: dates and durations compare
@@ -26,13 +33,27 @@ function textNode<K extends keyof HTMLElementTagNameMap>(tag: K, value: string, 
 
 export class Dashboard {
   private tasks: TaskSummary[] = [];
+  // Bulk selection is scoped to the IDs actually loaded, never to the whole
+  // filtered history the server has not returned.
   private readonly archiveRequests = new Map<string, number>();
   private query: TaskQuery = initialTaskQuery();
+  // Selection covers only the Task IDs loaded so far, never an unreturned page.
   private selected = new Set<string>();
   private previewViewers = new Map<string, { dispose(): void }>();
   private poll: number | null = null;
+  private pollController: AbortController | null = null;
+  private requestController: AbortController | null = null;
+  private debounce: number | null = null;
+  private nextCursor: string | null = null;
+  private hasMore = false;
+  private loading = false;
+  private cursorReset = false;
+  private visibleIds = new Set<string>();
+  private cardObserver: IntersectionObserver | null = null;
+  private sentinelObserver: IntersectionObserver | null = null;
   private controller = new AbortController();
-  private list!: HTMLElement; private stats!: HTMLElement; private count!: HTMLElement; private error!: HTMLElement; private batch!: HTMLButtonElement;
+  private list!: HTMLElement; private stats!: HTMLElement; private count!: HTMLElement; private batch!: HTMLButtonElement;
+  private state!: HTMLElement; private loadMoreButton!: HTMLButtonElement; private sentinel!: HTMLElement;
   private filterDisclosure!: HTMLDetailsElement; private filterSummary!: HTMLElement;
   private advancedToggle!: HTMLButtonElement; private advancedPanel!: HTMLElement;
   private selectAll!: HTMLInputElement; private selectAllLabel!: HTMLElement;
@@ -40,15 +61,124 @@ export class Dashboard {
   private page!: HTMLElement;
 
   constructor(private root: HTMLElement, private shell: AppShell, private user: CurrentUser) { this.build(); }
+
+  /** Start a fresh traversal from page one. */
   async load(): Promise<void> {
-    try { this.tasks = await getTasks(this.controller.signal);
-      // The result step walks to a real result; record the first available one so the
-      // tour never fabricates a task id or requests an id-less result route.
-      recordTourResult(this.tasks.find(task => task.result.available)?.result.page_url);
-      this.render(); this.schedule(); }
-    catch (error) { if ((error as Error).name !== 'AbortError') this.fail(error); }
+    this.resetTraversal();
+    await this.fetchPage();
   }
-  destroy(): void { this.controller.abort(); if (this.poll != null) clearTimeout(this.poll); this.disposePreviews(); }
+
+  destroy(): void {
+    this.controller.abort();
+    this.requestController?.abort();
+    this.pollController?.abort();
+    if (this.poll != null) window.clearTimeout(this.poll);
+    if (this.debounce != null) window.clearTimeout(this.debounce);
+    this.cardObserver?.disconnect();
+    this.sentinelObserver?.disconnect();
+    this.disposePreviews();
+  }
+
+  private resetTraversal(): void {
+    this.requestController?.abort();
+    this.cancelDebounce();
+    this.nextCursor = null;
+    this.hasMore = false;
+    this.loading = false;
+    this.cursorReset = false;
+    this.tasks = [];
+    this.selected.clear();
+    this.visibleIds.clear();
+    this.cardObserver?.disconnect();
+    this.sentinelObserver?.disconnect();
+    this.disposePreviews();
+  }
+
+  /**
+   * Fetch one server page. A continuation appends only the new rows, so focus,
+   * scroll position and already-mounted previews survive an infinite-scroll step.
+   */
+  private async fetchPage(cursor?: string): Promise<void> {
+    if (this.loading) return;
+    if (cursor && (!this.hasMore || this.tasks.length >= maxLoadedTasks)) return;
+    this.requestController?.abort();
+    const controller = new AbortController();
+    this.requestController = controller;
+    const append = Boolean(cursor);
+    // A keyboard activation keeps the control focused while the page loads;
+    // only an activation from that control owns focus settlement.
+    const activatedFromControl = document.activeElement === this.loadMoreButton;
+    this.loading = true;
+    this.renderState();
+    try {
+      const page = await getTaskPage(historyParams(this.query, cursor, pageSize), controller.signal);
+      if (controller.signal.aborted) return;
+      this.cursorReset = Boolean(page.cursor_reset);
+      this.nextCursor = page.next_cursor;
+      this.hasMore = page.has_more;
+      const incoming = page.tasks;
+      if (append && !this.cursorReset) {
+        const known = new Set(this.tasks.map(task => task.task_id));
+        const added = incoming.filter(task => !known.has(task.task_id));
+        this.tasks = [...this.tasks, ...added].slice(0, maxLoadedTasks);
+        this.renderStats();
+        this.appendTasks(added);
+        this.renderState();
+      } else {
+        // A cursor reset is a new page one, not a continuation: replace the set
+        // instead of deduplicating the new page into the stale traversal, and
+        // drop selections whose Task is no longer loaded.
+        this.tasks = incoming.slice(0, maxLoadedTasks);
+        const loadedIds = new Set(this.tasks.map(task => task.task_id));
+        this.selected = new Set([...this.selected].filter(taskId => loadedIds.has(taskId)));
+        // The result step walks to a real result; record the first available one so
+        // the tour never fabricates a task id or requests an id-less result route.
+        recordTourResult(this.tasks.find(task => task.result.available)?.result.page_url);
+        this.render();
+      }
+      this.schedule();
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') this.fail(error);
+    } finally {
+      if (this.requestController === controller) {
+        this.requestController = null;
+        this.loading = false;
+        this.renderState();
+        if (activatedFromControl) this.settleLoadMoreFocus();
+      }
+    }
+  }
+
+  /** Keep focus on the control, or move it to the announced result state. */
+  private settleLoadMoreFocus(): void {
+    if (!this.loadMoreButton.hidden) {
+      this.loadMoreButton.focus();
+      return;
+    }
+    const target = this.list.querySelector<HTMLElement>('.error-state') ?? this.state;
+    target.tabIndex = -1;
+    target.focus();
+  }
+
+  private loadNextPage(): void {
+    if (!this.nextCursor || this.loading) return;
+    void this.fetchPage(this.nextCursor);
+  }
+
+  private scheduleFilterReload(immediate = false): void {
+    this.cancelDebounce();
+    const run = (): void => {
+      this.debounce = null;
+      this.resetTraversal();
+      void this.fetchPage();
+    };
+    if (immediate) run();
+    else this.debounce = window.setTimeout(run, debounceMilliseconds);
+  }
+
+  private cancelDebounce(): void {
+    if (this.debounce != null) { window.clearTimeout(this.debounce); this.debounce = null; }
+  }
 
   private build(): void {
     // The Dashboard's own layout belongs on its own page root, not on the shared
@@ -67,7 +197,7 @@ export class Dashboard {
 
     // Filtering answers "which tasks?" and lives in one aligned tool band.
     const controls = document.createElement('section'); controls.className = 'work-toolbar'; controls.setAttribute('aria-label', t('dashboard.filters.label'));
-    controls.innerHTML = `<div class="search-control"><label for="dashboard-search"><span>${t('dashboard.filter.search')}</span><span class="input-with-action"><i data-lucide="search" aria-hidden="true"></i><input type="search" id="dashboard-search" data-filter="search" placeholder="${t('dashboard.filter.searchPlaceholder')}" autocomplete="off"></span></label><small data-query-error role="status" aria-live="polite"></small></div>
+    controls.innerHTML = `<div class="search-control"><label for="dashboard-search"><span>${t('dashboard.filter.search')}</span><span class="input-with-action"><i data-lucide="search" aria-hidden="true"></i><input type="search" id="dashboard-search" data-filter="search" placeholder="${t('dashboard.filter.searchPlaceholder')}" autocomplete="off" aria-describedby="dashboard-search-hint"></span></label><small id="dashboard-search-hint">${t('dashboard.filter.searchHint')}</small></div>
       <label><span>${t('dashboard.filter.status')}</span><select data-filter="status"><option value="">${t('dashboard.filter.allStatuses')}</option><option value="pending">${t('dashboard.filter.status.pending')}</option><option value="running">${t('dashboard.filter.status.running')}</option><option value="finished">${t('dashboard.filter.status.finished')}</option><option value="failed">${t('dashboard.filter.status.failed')}</option><option value="cancelled">${t('dashboard.filter.status.cancelled')}</option><option value="attention">${t('dashboard.stats.attention')}</option></select></label>
       <label><span>${t('dashboard.filter.type')}</span><input type="search" data-filter="taskType" placeholder="${t('dashboard.filter.typePlaceholder')}"></label>
       ${this.user.role === 'admin' ? `<label><span>${t('dashboard.filter.owner')}</span><input type="search" data-filter="owner" placeholder="${t('dashboard.filter.ownerPlaceholder')}"></label>` : ''}
@@ -78,7 +208,6 @@ export class Dashboard {
         <label><span>${t('dashboard.filter.submittedTo')}</span><input type="date" data-filter="submittedTo"></label>
         <label><span>${t('dashboard.filter.finishedFrom')}</span><input type="date" data-filter="finishedFrom"></label>
         <label><span>${t('dashboard.filter.finishedTo')}</span><input type="date" data-filter="finishedTo"></label>
-        <label class="advanced-regex"><span>${t('dashboard.filter.regex')}</span><button type="button" data-toggle-regex aria-pressed="false" title="${t('dashboard.filter.regex')}">.*</button></label>
       </div>`;
     // A phone opens on the work, with the secondary filters behind one disclosure; a
     // desktop exposes those same controls directly. The disclosure state and the layout
@@ -94,7 +223,6 @@ export class Dashboard {
     const narrow = window.matchMedia('(max-width: 56rem)');
     const syncFilters = (): void => { this.filterDisclosure.open = !narrow.matches; };
     syncFilters(); narrow.addEventListener('change', syncFilters, { signal: this.controller.signal });
-    this.error = controls.querySelector('[data-query-error]')!;
     this.advancedToggle = controls.querySelector('[data-advanced]')!;
     this.advancedPanel = controls.querySelector('[data-advanced-panel]')!;
 
@@ -121,19 +249,33 @@ export class Dashboard {
     viewToolbar.prepend(selectAllLabel);
     this.selectAllLabel = selectAllLabel;
     this.selectAll.addEventListener('change', () => {
-      const shown = queryTasks(this.tasks, this.query).tasks;
+      // Only loaded, individually deletable Tasks can be batch-selected.
+      const shown = this.tasks.filter(task => task.actions.delete.allowed);
       if (this.selectAll.checked) shown.forEach(task => this.selected.add(task.task_id));
       else shown.forEach(task => this.selected.delete(task.task_id));
       this.syncSelectionState();
     });
 
     this.list = document.createElement('section'); this.list.className = 'task-list'; this.list.setAttribute('aria-live', 'polite');
-    this.page.append(head, this.stats, controls, viewToolbar, this.list);
-    controls.addEventListener('input', event => { const target = event.target as HTMLInputElement | HTMLSelectElement; const key = target.dataset.filter as keyof TaskQuery | undefined; if (key) { (this.query as unknown as Record<string, unknown>)[key] = target.value; this.renderList(); } });
-    controls.querySelector('[data-toggle-regex]')?.addEventListener('click', event => { this.query.regex = !this.query.regex; const target = event.currentTarget as HTMLButtonElement; target.setAttribute('aria-pressed', String(this.query.regex)); target.classList.toggle('active', this.query.regex); this.renderList(); });
+    this.state = textNode('p', '', 'list-state'); this.state.setAttribute('role', 'status'); this.state.setAttribute('aria-live', 'polite');
+    this.loadMoreButton = button(t('dashboard.list.loadMore'), 'load-more', 'refresh-cw');
+    this.loadMoreButton.classList.add('load-more');
+    this.loadMoreButton.hidden = true;
+    this.loadMoreButton.addEventListener('click', () => this.loadNextPage());
+    // The sentinel is a scroll affordance only; the button above it is the
+    // accessible control that works without IntersectionObserver.
+    this.sentinel = document.createElement('div'); this.sentinel.className = 'list-sentinel'; this.sentinel.hidden = true;
+    this.page.append(head, this.stats, controls, viewToolbar, this.list, this.state, this.loadMoreButton, this.sentinel);
+    controls.addEventListener('input', event => {
+      const target = event.target as HTMLInputElement | HTMLSelectElement;
+      const key = target.dataset.filter as keyof TaskQuery | undefined;
+      if (!key) return;
+      (this.query as unknown as Record<string, unknown>)[key] = target.value;
+      this.scheduleFilterReload(target.tagName === 'SELECT');
+    });
     this.advancedToggle.addEventListener('click', () => this.toggleAdvanced());
     controls.addEventListener('change', () => this.updateAdvancedState());
-    viewToolbar.querySelectorAll<HTMLButtonElement>('[data-layout]').forEach(item => item.addEventListener('click', () => { this.query.layout = item.dataset.layout as TaskQuery['layout']; viewToolbar.querySelectorAll('[data-layout]').forEach(button => button.setAttribute('aria-pressed', String(button === item))); this.renderList(); }));
+    viewToolbar.querySelectorAll<HTMLButtonElement>('[data-layout]').forEach(item => item.addEventListener('click', () => { this.query.layout = item.dataset.layout as TaskQuery['layout']; viewToolbar.querySelectorAll<HTMLButtonElement>('[data-layout]').forEach(button => button.setAttribute('aria-pressed', String(button === item))); this.renderList(); }));
     this.page.addEventListener('click', event => void this.handleAction(event));
     createIcons({ icons: dashboardIcons, root: this.page });
     guidedTour.resumeIfActive();
@@ -152,15 +294,85 @@ export class Dashboard {
   }
 
   private updateAdvancedState(): void {
-    const count = ['submittedFrom', 'submittedTo', 'finishedFrom', 'finishedTo'].filter(key => Boolean((this.query as unknown as Record<string, unknown>)[key])).length + (this.query.regex ? 1 : 0);
+    const count = ['submittedFrom', 'submittedTo', 'finishedFrom', 'finishedTo'].filter(key => Boolean((this.query as unknown as Record<string, unknown>)[key])).length;
     this.advancedToggle.classList.toggle('has-active', count > 0);
     const label = count ? t('dashboard.filter.advancedActive', { count }) : t('dashboard.filter.advanced');
     this.advancedToggle.textContent = label;
     if (count) { const badge = document.createElement('span'); badge.className = 'advanced-count'; badge.textContent = String(count); this.advancedToggle.append(badge); }
   }
 
-  private schedule(): void { if (this.poll != null) clearTimeout(this.poll); if (this.tasks.some(task => !task.terminal)) this.poll = window.setTimeout(() => void this.load(), pollMilliseconds); }
+  /** Poll only visible non-terminal Tasks; history traversal is never re-run for status. */
+  private schedule(): void {
+    if (this.poll != null) window.clearTimeout(this.poll);
+    this.poll = null;
+    if (!this.pollableTasks().length) return;
+    this.poll = window.setTimeout(() => void this.pollStatuses(), pollMilliseconds);
+  }
+
+  private pollableTasks(): TaskSummary[] {
+    const visible = this.visibleIds.size
+      ? this.tasks.filter(task => this.visibleIds.has(task.task_id))
+      : this.tasks;
+    return visible.filter(task => !task.terminal).slice(0, maxPolledTasks);
+  }
+
+  private async pollStatuses(): Promise<void> {
+    const tasks = this.pollableTasks();
+    if (!tasks.length) return;
+    this.pollController?.abort();
+    const controller = new AbortController();
+    this.pollController = controller;
+    await Promise.all(tasks.map(async task => {
+      try {
+        const status = await getTaskStatus(task.task_id, controller.signal);
+        if (!controller.signal.aborted) this.reconcileStatus(task.task_id, status);
+      } catch (error) {
+        // A Task deleted between the page and the poll simply stops being polled.
+        if ((error as Error).name === 'AbortError') return;
+        if (error instanceof ApiError && error.status === 404) task.terminal = true;
+      }
+    }));
+    if (controller.signal.aborted) return;
+    this.renderStats();
+    this.schedule();
+  }
+
+  private reconcileStatus(taskId: string, status: TaskStatus): void {
+    const task = this.tasks.find(item => item.task_id === taskId);
+    if (!task) return;
+    const changed = task.status !== status.status || task.terminal !== status.terminal;
+    task.status = status.status;
+    task.terminal = status.terminal;
+    task.error = status.error ?? task.error;
+    task.result = {
+      ...task.result,
+      available: status.result_available,
+      publication: status.result_publication ?? task.result.publication,
+    };
+    if (changed) this.updateStatusVisual(task);
+  }
+
+  /** Update the card or row the reader already has, without re-sorting the page. */
+  private updateStatusVisual(task: TaskSummary): void {
+    const card = this.list.querySelector<HTMLElement>(`article.task-card[data-task-id="${task.task_id}"]`);
+    if (card) {
+      card.dataset.status = task.status;
+      const pill = card.querySelector<HTMLElement>('.task-state .status');
+      if (pill) {
+        pill.textContent = statusText(task);
+        pill.className = `status status-${task.status.replace(/:/g, '-')}`;
+      }
+    }
+    const row = this.list.querySelector<HTMLElement>(`tr[data-poll-task="${task.task_id}"]`);
+    if (row) {
+      row.dataset.status = task.status;
+      const cell = row.querySelector<HTMLElement>('.state-cell');
+      if (cell) cell.textContent = statusText(task);
+    }
+  }
+
   private render(): void { this.renderStats(); this.renderList(); }
+
   private renderStats(): void {
     const values: Array<[string, number, boolean]> = [
       [t('dashboard.stats.total'), this.tasks.length, false], [t('dashboard.stats.pending'), this.tasks.filter(task => task.status === 'pending').length, false],
@@ -168,33 +380,107 @@ export class Dashboard {
       [t('dashboard.stats.attention'), this.tasks.filter(task => ['failed', 'cancelled'].includes(task.status)).length, true],
     ];
     const keys = ['', 'pending', 'running', 'finished', 'attention'];
-    this.stats.replaceChildren(...values.map(([label, value, attention], index) => { const item = document.createElement('button'); item.type = 'button'; item.dataset.status = keys[index]; if (attention) item.dataset.attention = ''; item.setAttribute('aria-pressed', String(this.query.status === keys[index])); item.append(textNode('span', label), textNode('strong', String(value))); item.addEventListener('click', () => { this.query.status = keys[index]!; this.page.querySelector<HTMLSelectElement>('[data-filter="status"]')!.value = this.query.status; this.renderList(); }); return item; }));
+    this.stats.setAttribute('aria-label', t('dashboard.stats.loadedLabel', { count: this.tasks.length }));
+    this.stats.replaceChildren(...values.map(([label, value, attention], index) => { const item = document.createElement('button'); item.type = 'button'; item.dataset.status = keys[index]; if (attention) item.dataset.attention = ''; item.setAttribute('aria-pressed', String(this.query.status === keys[index])); item.append(textNode('span', label), textNode('strong', String(value))); item.addEventListener('click', () => { this.query.status = keys[index]!; this.page.querySelector<HTMLSelectElement>('[data-filter="status"]')!.value = this.query.status; this.scheduleFilterReload(true); }); return item; }));
   }
+
   private renderList(): void {
     this.stats.querySelectorAll<HTMLElement>('[data-status]').forEach(node => node.setAttribute('aria-pressed', String(node.dataset.status === this.query.status)));
     this.disposePreviews();
     this.selectionBoxes.clear();
-    const result = queryTasks(this.tasks, this.query); this.error.textContent = result.error || '';
-    this.count.textContent = result.tasks.length < this.tasks.length
-      ? t('dashboard.list.count', { shown: result.tasks.length, total: this.tasks.length }) : '';
+    this.count.textContent = t(this.hasMore ? 'dashboard.list.loadedMore' : 'dashboard.list.loaded', { count: this.tasks.length });
     const batchLabel = `${t('dashboard.card.deleteSelected')} (${this.selected.size})`;
     this.batch.hidden = this.user.role !== 'admin' || this.selected.size === 0;
     this.batch.title = batchLabel;
     this.batch.setAttribute('aria-label', batchLabel);
     this.batch.querySelector('span')!.textContent = batchLabel;
-    this.syncSelectionState(result.tasks);
+    this.syncSelectionState(this.tasks);
     this.updateAdvancedState();
-    const active = Boolean(this.query.status || this.query.taskType || this.query.owner || this.query.submittedFrom || this.query.submittedTo || this.query.finishedFrom || this.query.finishedTo || this.query.regex || this.query.sort !== 'submitted');
-    this.filterSummary.textContent = t(active ? 'dashboard.filters.active' : 'dashboard.filters.summary');
-    this.list.dataset.layout = this.query.layout; this.list.replaceChildren();
-    if (!result.tasks.length) { const empty = document.createElement('p'); empty.className = 'empty-state'; empty.textContent = result.error
-      ? t('dashboard.list.fixExpression')
-      : this.tasks.length ? t('dashboard.list.empty') : t('dashboard.list.noTasks'); this.list.append(empty); return; }
-    if (this.query.layout === 'table') this.renderTable(result.tasks); else result.tasks.forEach(task => this.list.append(this.taskCard(task)));
+    this.filterSummary.textContent = t(hasActiveFilters(this.query) ? 'dashboard.filters.active' : 'dashboard.filters.summary');
+    this.list.dataset.layout = this.query.layout;
+    this.list.replaceChildren();
+    this.cardObserver?.disconnect();
+    this.visibleIds.clear();
+    if (!this.tasks.length) {
+      // A completed first page with no rows is a genuinely empty result set. A
+      // filtered empty answer says so; an unfiltered one says nothing exists yet.
+      const empty = document.createElement('p');
+      empty.className = 'empty-state';
+      empty.textContent = t(hasActiveFilters(this.query) ? 'dashboard.list.empty' : 'dashboard.list.noTasks');
+      this.list.append(empty);
+      this.renderState();
+      return;
+    }
+    if (this.query.layout === 'table') this.renderTable(this.tasks); else this.tasks.forEach(task => this.list.append(this.taskCard(task)));
     createIcons({ icons: dashboardIcons, root: this.list });
+    this.observeCards();
+    this.renderState();
+  }
+
+  /** Append one fetched page without rebuilding the cards the reader already has. */
+  private appendTasks(tasks: TaskSummary[]): void {
+    if (!tasks.length) return;
+    if (this.query.layout === 'table') {
+      const body = this.list.querySelector('tbody');
+      if (body) this.appendTableRows(body, tasks);
+      else this.renderList();
+    } else {
+      tasks.forEach(task => this.list.append(this.taskCard(task)));
+      createIcons({ icons: dashboardIcons, root: this.list });
+    }
+    this.syncSelectionState(this.tasks);
+    this.observeCards();
+  }
+
+  private renderState(): void {
+    const capped = this.hasMore && this.tasks.length >= maxLoadedTasks;
+    // The control stays mounted while a page loads so keyboard focus survives
+    // the request; `aria-busy` reports the state and loadNextPage guards it.
+    const available = this.hasMore && !capped;
+    this.loadMoreButton.hidden = !available;
+    this.loadMoreButton.setAttribute('aria-busy', String(this.loading));
+    this.loadMoreButton.setAttribute('aria-disabled', String(this.loading));
+    this.sentinel.hidden = !available;
+    if (this.loading) this.state.textContent = t('dashboard.list.loading');
+    else if (capped) this.state.textContent = t('dashboard.list.capped', { count: this.tasks.length });
+    else if (this.cursorReset) this.state.textContent = t('dashboard.list.cursorReset');
+    else if (this.hasMore) this.state.textContent = t('dashboard.list.loadedMore', { count: this.tasks.length });
+    else if (this.tasks.length) this.state.textContent = t('dashboard.list.end');
+    else this.state.textContent = '';
+    if (available && !this.loading) this.observeSentinel();
+    else this.sentinelObserver?.disconnect();
+  }
+
+  private observeCards(): void {
+    const nodes = this.list.querySelectorAll<HTMLElement>('[data-poll-task]');
+    if (typeof IntersectionObserver === 'undefined') {
+      nodes.forEach(node => { const id = node.dataset.pollTask; if (id) this.visibleIds.add(id); });
+      this.schedule();
+      return;
+    }
+    this.cardObserver ??= new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        const id = (entry.target as HTMLElement).dataset.pollTask;
+        if (!id) continue;
+        if (entry.isIntersecting) this.visibleIds.add(id); else this.visibleIds.delete(id);
+      }
+      this.schedule();
+    }, { rootMargin: '80px' });
+    nodes.forEach(node => this.cardObserver!.observe(node));
+    this.schedule();
+  }
+
+  private observeSentinel(): void {
+    if (typeof IntersectionObserver === 'undefined') return;
+    this.sentinelObserver ??= new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) this.loadNextPage();
+    }, { rootMargin: '200px' });
+    this.sentinelObserver.disconnect();
+    this.sentinelObserver.observe(this.sentinel);
   }
   private taskCard(task: TaskSummary): HTMLElement {
     const card = document.createElement('article'); card.className = 'task-card'; card.dataset.status = task.status;
+    card.dataset.taskId = task.task_id; card.dataset.pollTask = task.task_id;
     const identity = document.createElement('div'); identity.className = 'task-identity';
     identity.append(textNode('h2', task.display_name), textNode('p', task.task_type, 'task-card-type'));
     const taskId = textNode('p', task.task_id, 'task-identity-id'); taskId.setAttribute('aria-label', `${t('dashboard.card.taskId')}: ${task.task_id}`); identity.append(taskId);
@@ -243,14 +529,15 @@ export class Dashboard {
    * drop focus, and make the batch action flicker. Only the boxes' own state, the
    * select-all control, and the batch action's count change here.
    */
-  private syncSelectionState(tasks = queryTasks(this.tasks, this.query).tasks): void {
+  private syncSelectionState(tasks = this.tasks): void {
     const batchLabel = `${t('dashboard.card.deleteSelected')} (${this.selected.size})`;
     this.batch.hidden = this.user.role !== 'admin' || this.selected.size === 0;
     this.batch.title = batchLabel; this.batch.setAttribute('aria-label', batchLabel);
     this.batch.querySelector('span')!.textContent = batchLabel;
-    this.selectAllLabel.hidden = this.user.role !== 'admin' || !tasks.length;
-    this.selectAll.checked = this.user.role === 'admin' && tasks.length > 0 && tasks.every(task => this.selected.has(task.task_id));
-    this.selectAll.indeterminate = this.user.role === 'admin' && !this.selectAll.checked && tasks.some(task => this.selected.has(task.task_id));
+    const selectable = tasks.filter(task => task.actions.delete.allowed);
+    this.selectAllLabel.hidden = this.user.role !== 'admin' || !selectable.length;
+    this.selectAll.checked = this.user.role === 'admin' && selectable.length > 0 && selectable.every(task => this.selected.has(task.task_id));
+    this.selectAll.indeterminate = this.user.role === 'admin' && !this.selectAll.checked && selectable.some(task => this.selected.has(task.task_id));
     this.selectionBoxes.forEach((input, taskId) => { input.checked = this.selected.has(taskId); });
   }
   private taskActions(task: TaskSummary): HTMLElement {
@@ -286,8 +573,14 @@ export class Dashboard {
     // task's own independent actions. The two never mix: a selection box is a
     // state, an action is a verb, and the table keeps one column for each.
     const selectionHeading = this.user.role === 'admin' ? `<th><span class="sr-only">${t('dashboard.table.selection')}</span></th>` : '';
-    table.innerHTML = `<thead><tr>${selectionHeading}<th>${t('dashboard.table.name')}</th><th>${t('dashboard.card.type')}</th>${this.user.role === 'admin' ? `<th>${t('dashboard.card.owner')}</th>` : ''}<th>${t('dashboard.card.submitted')}</th><th>${t('dashboard.filter.status')}</th><th><span class="sr-only">${t('dashboard.table.actions')}</span></th></tr></thead>`; const body = document.createElement('tbody');
-    tasks.forEach(task => { const row = document.createElement('tr'); if (this.user.role === 'admin') { const cell = document.createElement('td'); cell.className = 'task-select-cell'; if (task.actions.delete.allowed) cell.append(this.selectControl(task, t('dashboard.select.task', { name: task.display_name }))); row.append(cell); } const cells = [task.display_name, task.task_type, ...(this.user.role === 'admin' ? [task.owner || '-'] : []), formatDate(task.submitted_at), statusText(task)]; cells.forEach((value, index) => { const cell = document.createElement('td'); cell.textContent = value; if (index === cells.length - 1) cell.className = 'state-cell'; row.append(cell); }); const actionCell = document.createElement('td'); actionCell.append(this.taskActions(task)); row.append(actionCell); body.append(row); }); table.append(body); this.list.append(table);
+    table.innerHTML = `<thead><tr>${selectionHeading}<th>${t('dashboard.table.name')}</th><th>${t('dashboard.card.type')}</th>${this.user.role === 'admin' ? `<th>${t('dashboard.card.owner')}</th>` : ''}<th>${t('dashboard.card.submitted')}</th><th>${t('dashboard.filter.status')}</th><th><span class="sr-only">${t('dashboard.table.actions')}</span></th></tr></thead>`;
+    const body = document.createElement('tbody');
+    table.append(body);
+    this.appendTableRows(body, tasks);
+    this.list.append(table);
+  }
+  private appendTableRows(body: HTMLElement, tasks: TaskSummary[]): void {
+    tasks.forEach(task => { const row = document.createElement('tr'); row.dataset.taskId = task.task_id; row.dataset.pollTask = task.task_id; row.dataset.status = task.status; if (this.user.role === 'admin') { const cell = document.createElement('td'); cell.className = 'task-select-cell'; if (task.actions.delete.allowed) cell.append(this.selectControl(task, t('dashboard.select.task', { name: task.display_name }))); row.append(cell); } const cells = [task.display_name, task.task_type, ...(this.user.role === 'admin' ? [task.owner || '-'] : []), formatDate(task.submitted_at), statusText(task)]; cells.forEach((value, index) => { const cell = document.createElement('td'); cell.textContent = value; if (index === cells.length - 1) cell.className = 'state-cell'; row.append(cell); }); const actionCell = document.createElement('td'); actionCell.append(this.taskActions(task)); row.append(actionCell); body.append(row); });
   }
   private async handleAction(event: Event): Promise<void> {
     const target = (event.target as Element).closest<HTMLElement>('[data-action]'); if (!target) return; const action = target.dataset.action;
@@ -329,7 +622,13 @@ export class Dashboard {
   }
   private async mutate(operation: () => Promise<unknown>, message: string): Promise<void> { try { await operation(); this.shell.notify(message, 'success'); await this.load(); } catch (error) { this.shell.notify((error as Error).message, 'error'); } }
   private disposePreviews(): void { this.previewViewers.forEach(viewer => viewer.dispose()); this.previewViewers.clear(); }
-  private fail(error: unknown): void { if (error instanceof ApiError && error.status === 401) { location.assign(`/compute/login?return_to=${encodeURIComponent(location.pathname)}`); return; } this.list.replaceChildren(); const state = document.createElement('p'); state.className = 'empty-state error-state'; state.textContent = (error as Error).message || t('dashboard.error.load'); this.list.append(state); }
+  private fail(error: unknown): void {
+    if (error instanceof ApiError && error.status === 401) { location.assign(`/compute/login?return_to=${encodeURIComponent(location.pathname)}`); return; }
+    this.tasks = []; this.hasMore = false; this.nextCursor = null;
+    this.loadMoreButton.hidden = true; this.sentinel.hidden = true; this.state.textContent = '';
+    this.list.replaceChildren();
+    const state = document.createElement('p'); state.className = 'empty-state error-state'; state.textContent = (error as Error).message || t('dashboard.error.load'); this.list.append(state);
+  }
 }
 
 /**

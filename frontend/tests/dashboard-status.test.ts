@@ -132,26 +132,25 @@ describe('Dashboard register states', () => {
     const empty = render([], 'detailed');
     expect(empty.querySelector('.task-list .empty-state')?.textContent).toBe('No tasks have been submitted yet.');
     expect(empty.querySelector('.task-list')?.getAttribute('aria-live')).toBe('polite');
-    expect(empty.querySelector('.list-count')?.textContent).toBe('');
+    expect(empty.querySelector('.list-count')?.textContent).toBe('0 tasks loaded');
 
-    const filtered = render([task()], 'detailed', 'user', { search: 'unmatched' });
+    // Filtering is the server's answer: an empty filtered page carries no rows.
+    const filtered = render([], 'detailed', 'user', { search: 'unmatched' });
     expect(filtered.querySelector('.task-list .empty-state')?.textContent).toBe('No tasks match the current filters.');
-    expect(filtered.querySelector('.list-count')?.textContent).toBe('0 of 1 tasks');
+    expect(filtered.querySelector('.list-count')?.textContent).toBe('0 tasks loaded');
     expect(filtered.querySelector('.task-list')?.getAttribute('aria-live')).toBe('polite');
   });
 
-  it('shows a filtered count only when tasks are actually hidden', () => {
-    expect(render([task()], 'detailed').querySelector('.list-count')?.textContent).toBe('');
-    expect(render([task()], 'detailed', 'user', { search: 'model' })
-      .querySelector('.list-count')?.textContent).toBe('');
-    expect(render([task(), task({ task_id: 'b'.repeat(32), display_name: 'other.fasta' })], 'detailed', 'user', { search: 'model' })
-      .querySelector('.list-count')?.textContent).toBe('1 of 2 tasks');
+  it('labels the count as loaded rather than claiming a filtered total', () => {
+    expect(render([task()], 'detailed').querySelector('.list-count')?.textContent).toBe('1 tasks loaded');
+    expect(render([task(), task({ task_id: 'b'.repeat(32), display_name: 'other.fasta' })], 'detailed')
+      .querySelector('.list-count')?.textContent).toBe('2 tasks loaded');
   });
 
   it('keeps the empty and filtered messages localised', () => {
     applyLocale('zh-CN');
     expect(render([], 'detailed').querySelector('.task-list .empty-state')?.textContent).toBe('尚未提交任务。');
-    expect(render([task()], 'detailed', 'user', { search: 'unmatched' })
+    expect(render([], 'detailed', 'user', { search: 'unmatched' })
       .querySelector('.task-list .empty-state')?.textContent).toBe('没有符合当前筛选条件的任务。');
   });
 });

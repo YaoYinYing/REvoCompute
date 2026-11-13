@@ -64,7 +64,6 @@ from revocompute.app import (
     _delete_task_artifacts,
     _is_admin_user,
     _is_binary_file,
-    _is_deleted_status,
     _request_metadata,
     _revoke_celery_task,
     _task_access_allowed,
@@ -115,6 +114,7 @@ from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute import resource_lifecycle
 from revocompute import resource_ledger as rloan
+from revocompute import task_history
 from revocompute.resource_ledger import (
     AdmissionReason,
     LedgerReason,
@@ -4131,17 +4131,77 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
 @app.route("/compute/api/tasks", methods=["GET"])
 @login_required
 def task_list():
-    """List the caller's visible Tasks as stable, presentation-neutral summaries."""
+    """Return one authorized page of Task history, newest first.
+
+    The visibility scope is resolved from the authenticated user before search
+    and pagination, so an ordinary caller only queries their own Tasks and an
+    administrator queries the whole non-deleted history.  Search is a literal,
+    case-insensitive substring of the Task's stored input filename (the source
+    of its display name) and its Task ID.  A cursor is bound to the effective
+    filters, sort, user and traversal anchor; a cursor that no longer matches is
+    answered by restarting at page one with ``cursor_reset`` set.
+    """
     is_admin = _is_admin_user()
-    user_id = str(g.current_user["id"])
-    visible = [
-        task
-        for task in task_store.list_tasks()
-        if (is_admin or str(task.get("submitted_by_user_id")) == user_id)
-        and not _is_deleted_status(task.get("status"))
-    ]
-    visible.sort(key=lambda task: float(task.get("uploaded_at") or 0), reverse=True)
-    return jsonify({"tasks": [_task_list_summary(task, include_owner=is_admin) for task in visible]})
+    user_id = int(g.current_user["id"])
+    try:
+        query = task_history.parse_history_query(request.args, is_admin=is_admin)
+    except task_history.HistoryQueryError as exc:
+        return jsonify({"error": str(exc)}), exc.status
+
+    scope = "admin" if is_admin else f"user:{user_id}"
+    fingerprint = task_history.filter_fingerprint(query)
+    after: tuple[float | None, str] | None = None
+    anchor = time.time()
+    cursor_reset = False
+    if query.cursor:
+        state = task_history.decode_cursor(query.cursor, fingerprint=fingerprint, scope=scope, sort=query.sort)
+        if state is None:
+            cursor_reset = True
+        else:
+            after = (state.timestamp, state.task_id)
+            anchor = state.anchor
+
+    rows, has_more = task_store.query_tasks(
+        visible_user_id=user_id,
+        is_admin=is_admin,
+        limit=query.limit,
+        sort=query.sort,
+        q=query.q,
+        task_type=query.task_type,
+        status=query.status,
+        owner=query.owner,
+        submitted_from=query.submitted_from,
+        submitted_to=query.submitted_to,
+        finished_from=query.finished_from,
+        finished_to=query.finished_to,
+        after=after,
+        anchor=anchor if after is not None else None,
+    )
+    summaries = [_task_list_summary(task, include_owner=is_admin) for task in rows]
+    next_cursor = None
+    if has_more and rows:
+        last = rows[-1]
+        last_timestamp = last.get("finished_at") if query.sort == "finished" else last.get("uploaded_at")
+        next_cursor = task_history.encode_cursor(
+            timestamp=None if last_timestamp is None else float(last_timestamp),
+            task_id=str(last["md5sum"]),
+            fingerprint=fingerprint,
+            scope=scope,
+            sort=query.sort,
+            anchor=anchor,
+        )
+    response = jsonify(
+        {
+            "tasks": summaries,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+            "returned": len(summaries),
+            "cursor_reset": cursor_reset,
+            "query": query.projection(),
+        }
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @app.route("/compute/api/auth/admin/placement/explain/<task_type>", methods=["GET"])

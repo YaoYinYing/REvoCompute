@@ -15,6 +15,22 @@ invented release numbers or dates.
 ## [Unreleased]
 
 ### Added
+- Task history:
+  - Server:
+    - Paginate `GET /compute/api/tasks` with bounded `limit`, an opaque signed
+      `cursor`, literal search, domain/date filters and submitted/finished
+      keyset sorts. Visibility is resolved from the authenticated user before
+      search, sort and limit, so an ordinary caller never scans another
+      user's Tasks; the owner filter is administrator-only.
+    - Return `{tasks, next_cursor, has_more, returned, cursor_reset, query}`
+      without an unbounded complete-list default or a fabricated filtered
+      total.
+  - Frontend:
+    - Fetch the Dashboard register page by page with 250 ms debounced search,
+      request cancellation, an accessible Load more fallback and a bounded DOM.
+    - Poll only visible non-terminal Tasks and reconcile their state in place,
+      without re-sorting the history traversal.
+    - Replace the browser regular-expression filter with plain literal search.
 - Release governance:
   - Server:
     - Add the signed-in `GET /compute/api/version` projection and the

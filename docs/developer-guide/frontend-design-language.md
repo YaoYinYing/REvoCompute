@@ -648,7 +648,9 @@ fixed navigation. A closed disclosure must state when its filters are active;
 closing it or changing view must preserve their effect. Desktop exposes those
 controls directly.
 
-Date bounds and regular expressions enter an **Advanced search** mode.
+Date bounds enter an **Advanced search** mode. Search is case-insensitive
+literal text evaluated by the server across the authorized history; the
+register exposes no browser regular-expression mode.
 
 Search/filter controls should align as a system rather than looking like a row
 of unrelated form fields.
@@ -670,6 +672,25 @@ View mode answers:
 
 Detailed, Compact, and Table belong in their own compact control group, separated
 from search/filter semantics.
+
+### 14.5 Loading history
+
+The register reads Task history one bounded page at a time and appends older
+pages. Text search is debounced and a superseded request is cancelled. A filter
+or sort change starts a new traversal and discards selection state from the
+previous one; selection always covers loaded Task IDs, and counters describe
+the loaded set rather than a fabricated filtered total.
+
+An accessible **Load more** control accompanies the scroll affordance. Neither
+may withdraw while a page is loading, and keyboard focus stays on the control
+that requested the page or moves to the announced end state when the traversal
+is exhausted. If the server restarts a traversal because its page token no
+longer matches, the register replaces the loaded set and says so. The number of
+loaded rows is bounded; filters are how a reader reaches older history beyond
+that bound.
+
+Live status refreshes visible non-terminal Tasks only and reconciles their rows
+in place; it never re-sorts the traversal or reloads loaded pages.
 
 ---
 

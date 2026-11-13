@@ -32,6 +32,25 @@ identical content addresses the same Task (see [Submitting
 Tasks](submitting-tasks.md)), and starting the method again creates a new Task
 with a new ID.
 
+## Finding past Tasks
+
+The Dashboard reads Task history one bounded page at a time. Search is a
+case-insensitive literal substring of the submitted filename (the displayed
+name) and the Task ID. It runs on the server over the caller's authorized,
+non-deleted Tasks, so it also finds Tasks that have not been loaded yet.
+Regular expressions are not supported. Administrators can additionally filter by
+owner. Type, status, owner and date filters are applied before the page is cut.
+
+Older pages load as you scroll or through **Load more**. The register keeps at
+most 500 loaded Tasks; refine the filters to start a fresh traversal. Counters
+describe the loaded set, not a full filtered total, and bulk selection covers
+only loaded Task IDs.
+
+An in-progress traversal excludes Tasks submitted after its first page. It is
+not an immutable snapshot: a status change can move a Task between pages, and a
+deletion removes it. A page token that no longer matches the current filters,
+sort or signed-in user restarts the traversal at page one.
+
 ## Result delivery
 
 `finished` means `manifest.json` has been atomically published in the

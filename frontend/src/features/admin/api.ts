@@ -99,7 +99,28 @@ export const adminApi = {
 
   getConfiguration: (): Promise<AdminConfiguration> => authorizedJson('/compute/api/auth/admin/config'),
   updateConfiguration: (update: Partial<Pick<AdminConfiguration, 'task_types' | 'resources' | 'slurm'>>): Promise<{ message: string }> => json('/compute/api/auth/admin/config', 'PUT', update),
-  listTasks: (): Promise<TaskSummary[]> => authorizedJson<components['schemas']['TaskList']>('/compute/api/tasks').then(data => data.tasks),
+  /**
+   * Read the Admin placement register through the bounded History API.
+   *
+   * The placement view needs a corpus wide enough to explain any Task, so it
+   * follows cursors up to an explicit ceiling rather than asking the server for
+   * an unbounded response. Above the ceiling the view reports the tasks it could
+   * load; it never claims the list is complete.
+   */
+  listTasks: async (maxTasks = 2000): Promise<TaskSummary[]> => {
+    const tasks: TaskSummary[] = [];
+    let cursor: string | undefined;
+    // A page-count bound keeps a misbehaving `has_more` from looping forever.
+    for (let page = 0; page <= Math.ceil(maxTasks / 100) && tasks.length < maxTasks; page += 1) {
+      const query = new URLSearchParams({ limit: '100' });
+      if (cursor) query.set('cursor', cursor);
+      const data = await authorizedJson<components['schemas']['TaskList']>(`/compute/api/tasks?${query.toString()}`);
+      tasks.push(...data.tasks);
+      if (!data.has_more || !data.next_cursor) break;
+      cursor = data.next_cursor;
+    }
+    return tasks.slice(0, maxTasks);
+  },
   getUserEntitlement: (userId: number): Promise<ResourceEntitlement> => authorizedJson(`/compute/api/auth/admin/users/${userId}/resource-entitlement`),
   /** One subject's complete resource position, from the same canonical reads. */
   getResourceReport: (userId: number, limit?: number): Promise<AdminResourceSubjectReport> =>

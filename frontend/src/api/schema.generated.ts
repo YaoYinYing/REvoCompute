@@ -1277,8 +1277,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List visible tasks
-         * @description Ordinary users receive their own non-deleted Tasks. Administrators receive every non-deleted Task and its owner. Values are domain state and capabilities rather than presentation labels.
+         * List authorized Task history, one page at a time
+         * @description Returns one authorized page of non-deleted Task summaries, newest first. The visibility scope is resolved from the authenticated user before search, sort and limit: ordinary users only query their own Tasks, while administrators query the whole history and may filter by owner. Search (`q`) is a case-insensitive literal substring of the Task's stored input filename (the source of its display name) and its Task ID; regular expressions are not evaluated. Follow `next_cursor` to continue. A cursor is bound to the effective filters, sort, caller and traversal anchor; a malformed, expired, replayed or filter-changed cursor is answered by restarting at page one with `cursor_reset` set. Results are observed-consistency, not an immutable snapshot: Tasks inserted after the first page are excluded from that traversal, while a status change can move a Task between pages.
          */
         get: operations["listTasks"];
         put?: never;
@@ -2720,6 +2720,33 @@ export interface components {
         };
         TaskList: {
             tasks: components["schemas"]["TaskSummary"][];
+            /** @description Signed continuation cursor; null when this is the last page. */
+            next_cursor: string | null;
+            /** @description Whether another page was observed after this one. */
+            has_more: boolean;
+            /** @description Number of summaries in this page, not a full filtered total. */
+            returned: number;
+            /** @description True when a supplied cursor was rejected and this response is page one. */
+            cursor_reset: boolean;
+            query: components["schemas"]["TaskHistoryQuery"];
+        };
+        TaskHistoryQuery: {
+            q: string | null;
+            task_type: string | null;
+            status: string | null;
+            /** @description Echoed owner filter; always null for ordinary users. */
+            owner: string | null;
+            /** Format: date-time */
+            submitted_from: string | null;
+            /** Format: date-time */
+            submitted_to: string | null;
+            /** Format: date-time */
+            finished_from: string | null;
+            /** Format: date-time */
+            finished_to: string | null;
+            /** @enum {string} */
+            sort: "submitted" | "finished";
+            limit: number;
         };
         TaskStageItem: {
             index: number;
@@ -5785,14 +5812,37 @@ export interface operations {
     };
     listTasks: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Requested page size. Defaults to 30; invalid or non-positive values fall back to the default and values above the maximum are clamped to 100. */
+                limit?: number;
+                /** @description Opaque signed continuation cursor from a previous `next_cursor`. */
+                cursor?: string;
+                /** @description Case-insensitive literal substring of the stored input filename, display-name source, or Task ID; `%` and `_` are literal. */
+                q?: string;
+                /** @description Case-insensitive literal substring of the Task type. */
+                task_type?: string;
+                /** @description Exact lifecycle status, or `attention` for failed and cancelled Tasks. */
+                status?: string;
+                /** @description Administrator-only case-insensitive substring of the owner username. */
+                owner?: string;
+                /** @description Inclusive lower submitted bound: `YYYY-MM-DD` (UTC day start) or an offset ISO 8601 timestamp. */
+                submitted_from?: string;
+                /** @description Inclusive upper submitted bound: `YYYY-MM-DD` (whole UTC day) or an offset ISO 8601 timestamp. */
+                submitted_to?: string;
+                /** @description Inclusive lower finished bound: `YYYY-MM-DD` (UTC day start) or an offset ISO 8601 timestamp. */
+                finished_from?: string;
+                /** @description Inclusive upper finished bound: `YYYY-MM-DD` (whole UTC day) or an offset ISO 8601 timestamp. */
+                finished_to?: string;
+                /** @description `submitted` orders by `uploaded_at DESC, task_id DESC`; `finished` orders by `finished_at DESC NULLS LAST, task_id DESC`. */
+                sort?: "submitted" | "finished";
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Visible Tasks in descending submission order */
+            /** @description One authorized history page with its continuation cursor */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5801,7 +5851,9 @@ export interface operations {
                     "application/json": components["schemas"]["TaskList"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     getTaskStatus: {

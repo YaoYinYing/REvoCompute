@@ -212,6 +212,98 @@ class _ScenarioState:
         return index
 
 
+def task_history_page(tasks: list[Mapping[str, Any]], query: Mapping[str, list[str]]) -> dict[str, Any]:
+    """Project the bounded History contract over an in-memory Task list.
+
+    This is the one test-double implementation of `GET /compute/api/tasks`: it
+    applies the same scope-free filters, literal search and keyset-equivalent
+    offset pagination the server offers, so every browser double can serve the
+    real envelope instead of returning an unfiltered list.
+    """
+    def first(name: str) -> str:
+        return (query.get(name) or [""])[0]
+
+    def field(task: Mapping[str, Any], name: str) -> str:
+        return str(task.get(name) or "")
+
+    rows = list(tasks)
+    needle = first("q").strip().lower()
+    if needle:
+        rows = [
+            task for task in rows
+            if needle in field(task, "display_name").lower() or needle in field(task, "task_id").lower()
+        ]
+    status = first("status")
+    if status == "attention":
+        rows = [task for task in rows if task.get("status") in {"failed", "cancelled"}]
+    elif status:
+        rows = [task for task in rows if task.get("status") == status]
+    task_type = first("task_type").strip().lower()
+    if task_type:
+        rows = [task for task in rows if task_type in field(task, "task_type").lower()]
+    owner = first("owner").strip().lower()
+    if owner:
+        rows = [task for task in rows if owner in field(task, "owner").lower()]
+    for name, key in (
+        ("submitted_from", "submitted_at"), ("submitted_to", "submitted_at"),
+        ("finished_from", "finished_at"), ("finished_to", "finished_at"),
+    ):
+        bound = first(name)
+        if not bound:
+            continue
+        upper = name.endswith("_to")
+        rows = [
+            task for task in rows
+            if field(task, key)
+            and (field(task, key)[:len(bound)] <= bound if upper else field(task, key)[:len(bound)] >= bound)
+        ]
+    if first("sort") == "finished":
+        finished = sorted(
+            (task for task in rows if task.get("finished_at")),
+            key=lambda task: (field(task, "finished_at"), field(task, "task_id")),
+            reverse=True,
+        )
+        unfinished = sorted(
+            (task for task in rows if not task.get("finished_at")),
+            key=lambda task: field(task, "task_id"),
+            reverse=True,
+        )
+        rows = finished + unfinished
+    else:
+        rows = sorted(
+            rows, key=lambda task: (field(task, "submitted_at"), field(task, "task_id")), reverse=True
+        )
+    try:
+        limit = max(1, min(int(first("limit") or 30), 100))
+    except ValueError:
+        limit = 30
+    try:
+        start = max(0, int(first("cursor") or 0))
+    except ValueError:
+        start = 0
+    page = rows[start:start + limit]
+    has_more = len(rows) > start + limit
+    return {
+        "tasks": page,
+        "next_cursor": str(start + limit) if has_more else None,
+        "has_more": has_more,
+        "returned": len(page),
+        "cursor_reset": False,
+        "query": {
+            "q": first("q") or None,
+            "task_type": first("task_type") or None,
+            "status": first("status") or None,
+            "owner": first("owner") or None,
+            "submitted_from": None,
+            "submitted_to": None,
+            "finished_from": None,
+            "finished_to": None,
+            "sort": "finished" if first("sort") == "finished" else "submitted",
+            "limit": limit,
+        },
+    }
+
+
 class UnexpectedRequest(AssertionError):
     """Raised when the browser requests an endpoint the scenario does not declare."""
 
@@ -657,7 +749,8 @@ class FrontendFixtureRouter:
         route.fulfill(status=status, headers={"Location": payload["status_url"]}, json=payload)
 
     def _task_list(self, route: Any, query: Any) -> None:
-        return route.fulfill(json={"tasks": self.scenario.summary_payloads()})
+        """Serve the bounded, filtered History response the dashboard now requests."""
+        return route.fulfill(json=task_history_page(self.scenario.summary_payloads(), query))
 
     def _status(self, route: Any, query: Any, task_id: str = "", **_: str) -> None:
         definition = self.scenario.runner_for_task(task_id)

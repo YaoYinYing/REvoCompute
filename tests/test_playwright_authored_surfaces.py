@@ -409,6 +409,42 @@ def test_narrow_admin_register_tolerates_wider_font_metrics(page: Page, tour_com
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+def test_load_more_keeps_keyboard_focus_through_pagination(page: Page) -> None:
+    page.set_viewport_size({"width": 1280, "height": 780})
+    # The accessible control, not the scroll sentinel, drives this case: the
+    # observer would load the second page as soon as focus scrolls the button
+    # into view and the activation under test would never happen.
+    page.add_init_script("delete window.IntersectionObserver;")
+    scenario = controlled_scenario()
+    summaries = []
+    for index in range(65):
+        summary = build_task_summary(
+            f"{index:032x}", scenario.runner, owner=scenario.session.username,
+            submitted_at=f"2026-09-20T10:{59 - index // 60:02d}:{59 - index % 60:02d}Z",
+        )
+        summary["display_name"] = f"History task {index:02d}"
+        summaries.append(summary)
+    mount_scenario(page, scenario.with_task_summaries(summaries))
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card")).to_have_count(30)
+
+    more = page.get_by_role("button", name="Load more")
+    more.focus()
+    page.keyboard.press("Enter")
+    expect(page.locator(".task-card")).to_have_count(60)
+    # A continuation leaves the reader on the control that asked for it.
+    expect(more).to_be_focused()
+    expect(page.locator("body")).not_to_be_focused()
+
+    page.keyboard.press("Enter")
+    expect(page.locator(".task-card")).to_have_count(65)
+    expect(page.locator(".list-state")).to_have_text("End of task history.")
+    # The control retires at the end; focus moves to the announced end state
+    # rather than falling back to the document body.
+    expect(page.locator(".list-state")).to_be_focused()
+    expect(page.locator("body")).not_to_be_focused()
+
+
 def _overflow(page: Page) -> int:
     return page.evaluate(
         "document.documentElement.scrollWidth - document.documentElement.clientWidth"
@@ -444,22 +480,24 @@ def test_card_layouts_keep_the_page_within_the_viewport(page: Page, width: int) 
 
 
 @pytest.mark.parametrize("width", [320, 1280])
-def test_invalid_search_pattern_error_is_announced_by_a_pre_existing_live_region(page: Page, width: int) -> None:
+def test_search_explains_literal_text_and_offers_no_regex_mode(page: Page, width: int) -> None:
     page.set_viewport_size({"width": width, "height": 780})
     mount_scenario(page, controlled_scenario())
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card")).to_be_visible()
-    # The region has to exist before the message so assistive technology
-    # receives the update; a region created alongside its text is silent.
-    region = page.locator("[data-query-error]")
-    expect(region).to_have_count(1)
-    expect(region).to_have_role("status")
-    assert region.evaluate("node => node.closest('[aria-live]') !== null")
-    expect(region).to_be_empty()
-    if not page.locator("[data-filter='status']").is_visible():
-        page.locator(".dashboard-filters > summary").click()
-    if not page.locator("[data-toggle-regex]").is_visible():
-        page.locator("[data-advanced]").click()
-    page.locator("[data-toggle-regex]").click()
+    # Search runs on the server as literal text over the authorized history; the
+    # browser exposes no pattern mode and says what the field does.
+    expect(page.locator("[data-toggle-regex]")).to_have_count(0)
+    hint = page.locator("#dashboard-search-hint")
+    expect(hint).to_have_count(1)
+    expect(hint).to_contain_text("literal")
+    # The explanation is the field's accessible description at every width; it is
+    # painted on desktop and visually collapsed on a phone so it cannot displace
+    # the first Task identity below the opening viewport.
+    expect(page.locator("#dashboard-search")).to_have_attribute(
+        "aria-describedby", "dashboard-search-hint"
+    )
+    if width > 820:
+        expect(hint).to_be_visible()
     page.locator("[data-filter='search']").fill("[")
-    expect(region).to_have_text("Invalid regular expression")
+    expect(page.locator("[data-query-error]")).to_have_count(0)

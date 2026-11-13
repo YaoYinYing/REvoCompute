@@ -79,6 +79,12 @@ _MANIFEST_SHA256 = re.compile("[0-9a-f]{64}\\Z")
 _RUNTIME_IMAGE_SHA256 = re.compile("sha256:[0-9a-f]{64}\\Z")
 
 
+def _literal_like(value: str) -> str:
+    """A ``LIKE`` pattern that matches *value* literally, wildcards included."""
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def _runtime_image_digest(value: Any) -> str | None:
     """A normalized image digest, or ``None`` for absent/malformed evidence."""
     if not isinstance(value, str):
@@ -1640,6 +1646,100 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             rows = conn.execute(stmt).mappings().all()
         return [self._normalize_task_row(row) for row in rows]
+
+    #: Statuses the History API never publishes: their artifacts are gone.
+    #: ``deleting:*`` claims stay visible while cleanup is still in flight,
+    #: matching the visibility the un-paginated list had.
+    HISTORY_HIDDEN_STATUSES = DELETED_STATUSES | CLEANUP_STATUSES
+
+    def query_tasks(
+        self,
+        *,
+        visible_user_id: int,
+        is_admin: bool,
+        limit: int,
+        sort: str,
+        q: str | None = None,
+        task_type: str | None = None,
+        status: str | None = None,
+        owner: str | None = None,
+        submitted_from: float | None = None,
+        submitted_to: float | None = None,
+        finished_from: float | None = None,
+        finished_to: float | None = None,
+        after: tuple[float | None, str] | None = None,
+        anchor: float | None = None,
+    ) -> tuple[list[dict], bool]:
+        """Return one authorized, filtered, keyset-paginated page of Tasks.
+
+        The owner/visibility scope is applied here, in SQLite, before search,
+        sort and limit: an ordinary caller only ever scans rows they own, and an
+        administrator scans the whole non-deleted history.  ``after`` is the
+        ``(timestamp, task_id)`` of the previous page's last row and ``anchor``
+        bounds continuation pages to Tasks that existed when the traversal
+        started, so a concurrent insert cannot slip into an already-started
+        walk.  The requested page plus one row is read; only the page itself is
+        normalized and returned.
+        """
+        table = self.tasks_table
+        if owner and not is_admin:
+            raise ValueError("owner filter requires administrator scope")
+        conditions: list[Any] = [table.c.status.notin_(tuple(self.HISTORY_HIDDEN_STATUSES))]
+        if not is_admin:
+            conditions.append(table.c.submitted_by_user_id == visible_user_id)
+        if anchor is not None:
+            conditions.append(table.c.uploaded_at <= anchor)
+        if q:
+            needle = _literal_like(q)
+            conditions.append(
+                or_(table.c.filename.ilike(needle, escape="\\"), table.c.md5sum.ilike(needle, escape="\\"))
+            )
+        if task_type:
+            conditions.append(table.c.task_type.ilike(_literal_like(task_type), escape="\\"))
+        if status == "attention":
+            conditions.append(table.c.status.in_(("failed", "cancelled")))
+        elif status:
+            conditions.append(table.c.status == status)
+        if owner:
+            conditions.append(table.c.username.ilike(_literal_like(owner), escape="\\"))
+        if submitted_from is not None:
+            conditions.append(table.c.uploaded_at >= submitted_from)
+        if submitted_to is not None:
+            conditions.append(table.c.uploaded_at <= submitted_to)
+        if finished_from is not None:
+            conditions.append(table.c.finished_at >= finished_from)
+        if finished_to is not None:
+            conditions.append(table.c.finished_at <= finished_to)
+        if after is not None:
+            conditions.append(self._history_keyset_predicate(sort, after))
+
+        if sort == "finished":
+            order = (desc(table.c.finished_at).nullslast(), desc(table.c.md5sum))
+        else:
+            order = (desc(table.c.uploaded_at), desc(table.c.md5sum))
+        stmt = select(table).where(*conditions).order_by(*order).limit(limit + 1)
+        with self.engine.connect() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        has_more = len(rows) > limit
+        return [self._normalize_task_row(row) for row in rows[:limit]], has_more
+
+    def _history_keyset_predicate(self, sort: str, after: tuple[float | None, str]):
+        """Rows strictly after the cursor position in the requested sort order."""
+        table = self.tasks_table
+        timestamp, task_id = after
+        if sort == "finished":
+            if timestamp is None:
+                # The traversal is inside the NULL-finish group, which sorts last.
+                return and_(table.c.finished_at.is_(None), table.c.md5sum < task_id)
+            return or_(
+                table.c.finished_at.is_(None),
+                table.c.finished_at < timestamp,
+                and_(table.c.finished_at == timestamp, table.c.md5sum < task_id),
+            )
+        return or_(
+            table.c.uploaded_at < timestamp,
+            and_(table.c.uploaded_at == timestamp, table.c.md5sum < task_id),
+        )
 
     def count_user_active_tasks(self, user_id: int) -> int:
         """Count pending, queued, and running tasks for a user."""
