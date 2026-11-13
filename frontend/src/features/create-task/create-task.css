@@ -58,7 +58,25 @@
 .ct-preview-caption { display:flex; align-items:center; justify-content:space-between; gap:12px; }.ct-preview-dimensions { font:14px var(--font-mono); color:var(--ct-ink); }
 .ct-preview-foot { border-top:1px solid var(--ct-line); margin:0; padding:10px 13px; font-size:14px; line-height:1.7; color:var(--ct-muted); }.ct-preview-foot p { margin:0; }.ct-preview-foot p+p { margin-top:6px; }.ct-preview-warning { color:var(--ct-error); }
 .ct-input-contract { margin-top:16px; font-size:14px; color:var(--ct-muted); }.ct-input-contract summary { cursor:pointer; }
-.ct-snapshot-panel { box-shadow:var(--shadow-surface); display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px 28px; margin-top:28px; padding:20px 24px; background:var(--app-soft); border:1px solid var(--ct-line); border-radius:6px; }
+/* The one existing submit rail is pinned to the visible viewport bottom while
+   the workbench scrolls. It stays in flow, so it never needs a floating
+   duplicate; --ct-vv-offset lifts it above a mobile virtual keyboard. */
+.ct-snapshot-panel { position:sticky; bottom:calc(var(--ct-vv-offset, 0px) + env(safe-area-inset-bottom, 0px)); z-index:4; max-height:calc(100dvh - 32px); overflow:auto; overscroll-behavior:contain; box-shadow:var(--shadow-surface); display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px 28px; margin-top:28px; padding:20px 24px calc(20px + env(safe-area-inset-bottom, 0px)); background:var(--app-soft); border:1px solid var(--ct-line); border-radius:6px; }
+/* The browser scrolls the focused control, not its field wrapper, into view;
+   reserve the sticky rail's rendered height on the control so the last field is
+   never left underneath it. The height is measured, not assumed: validation
+   rows grow the rail after it mounts. */
+.create-task :is(input,select,textarea,button,summary) { scroll-margin-bottom:calc(var(--ct-rail-space, 0px) + 16px + env(safe-area-inset-bottom, 0px)); }
+/* A cloned draft states its reconciliation above the input columns. */
+.ct-clone { display:grid; gap:10px; margin-top:24px; padding:18px 20px; border:1px solid var(--ct-line); border-left:3px solid var(--ct-accent); border-radius:6px; background:var(--app-soft); }
+.ct-clone h2 { margin:0; font:500 21px/1.25 var(--font-display); letter-spacing:-.3px; }
+.ct-clone p { margin:0; }
+.ct-clone-label { font:10px var(--font-mono); letter-spacing:1px; text-transform:uppercase; color:var(--ct-muted); }
+.ct-clone-warnings,.ct-clone-blocked,.ct-clone-files,.ct-clone-inputs { margin:0; padding-left:20px; display:grid; gap:4px; font-size:14px; overflow-wrap:anywhere; }
+.ct-clone-parameters { margin:0; padding:0; list-style:none; display:grid; gap:4px; }
+.ct-clone-parameters li { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:10px; align-items:baseline; font-size:14px; overflow-wrap:anywhere; }
+.ct-clone-parameters small { color:var(--ct-muted); }
+.ct-clone .ct-actions { justify-content:flex-start; flex-wrap:wrap; }
 .ct-feedback { display:grid; gap:10px; min-width:0; }.ct-feedback>:empty { display:none; }.ct-validation { list-style:none; padding:0; margin:0; display:grid; gap:6px; }.ct-validation-row { display:flex; gap:10px; align-items:baseline; font-size:14px; }.ct-validation-marker { width:8px; height:8px; border:1px solid var(--ct-muted); border-radius:50%; flex:none; }.ct-validation-row.ok .ct-validation-marker { background:var(--ct-success); }.ct-validation-row.error .ct-validation-marker { background:var(--ct-error); }.ct-validation-summary { margin:0; font-size:14px; }.ct-status { margin:0; font-size:14px; }.ct-status.error,.ct-field-error,.ct-component-error { color:var(--ct-error); }.ct-field-error,.ct-component-error { font-size:14px; margin:5px 0; }.ct-status.busy { color:var(--ct-amber); }.ct-actions { display:flex; gap:10px; align-items:center; }
 .ct-environment-notice { display:flex; align-items:center; gap:12px; margin-bottom:20px; padding:10px 14px; border:1px solid var(--ct-line); border-left:3px solid var(--ct-amber); border-radius:4px; background:var(--ct-raised); }.ct-environment-notice p { margin:0; font-size:14px; color:var(--ct-ink); }
 .ct-snapshot-details { grid-column:1/-1; font-size:14px; color:var(--ct-muted); }.ct-snapshot-details summary { cursor:pointer; }.ct-snapshot { display:grid; grid-template-columns:auto 1fr; gap:7px 20px; margin:15px 0 0; font-size:14px; }.ct-snapshot dd { margin:0; overflow-wrap:anywhere; }
@@ -87,8 +105,8 @@
 .ct-access-panel { padding:18px 0; border-bottom:1px solid var(--ct-line); font-size:14px; }
 .ct-catalog-controls { display:grid; grid-template-columns:1fr 220px; gap:16px; margin:24px 0; }.ct-method-group { border-top:1px solid var(--ct-line); padding:20px 0; }.ct-method-group h3 { font:500 21px var(--font-display); }.ct-method-grid { display:grid; gap:0; }.ct-method { display:grid; gap:7px; text-align:left; border:0; border-bottom:1px solid var(--ct-line); border-radius:0; padding:16px 0; background:transparent; color:inherit; cursor:pointer; }.ct-method strong { font:500 18px var(--font-display); overflow-wrap:anywhere; }.ct-method span,.ct-method small { font-size:14px; color:var(--ct-muted); }
 @container(max-width:1150px) { .create-task { padding-inline:28px; }.ct-workspace { gap:28px; }.ct-protocol-step { padding:20px; } }
-@container(max-width:820px) { .create-task { padding-inline:20px; }.ct-workspace { grid-template-columns:1fr; }.ct-method-header h1 { font-size:32px; }.ct-method-header { align-items:start; flex-wrap:wrap; }.ct-snapshot-panel { grid-template-columns:1fr; }.ct-actions { justify-content:space-between; }.ct-method-facts { grid-template-columns:1fr; }.ct-catalog-controls { grid-template-columns:1fr; } }
-@container(max-width:480px) { .ct-parameter-grid { grid-template-columns:minmax(0,1fr); } .ct-file-well { flex-wrap:wrap; }.ct-file-identity { flex-basis:calc(100% - 50px); }.ct-file-button { margin-left:38px; }.ct-snapshot-panel { position:static; } .ct-parameter-grid { gap:20px 16px; }.ct-step-title { font-size:21px; }.ct-role-id { display:none; }.ct-method-header h1 { font-size:29px; }.ct-snapshot-panel { padding:18px; }
+@container(max-width:820px) { .create-task { padding-inline:20px; }/* One flow, not two grid rows: the sticky bottom rail needs a containing block that spans the inputs it stays in front of. */.ct-workspace { display:block; }.ct-method-header h1 { font-size:32px; }.ct-method-header { align-items:start; flex-wrap:wrap; }.ct-snapshot-panel { grid-template-columns:1fr; }.ct-actions { justify-content:space-between; }.ct-method-facts { grid-template-columns:1fr; }.ct-catalog-controls { grid-template-columns:1fr; } }
+@container(max-width:480px) { .ct-parameter-grid { grid-template-columns:minmax(0,1fr); } .ct-file-well { flex-wrap:wrap; }.ct-file-identity { flex-basis:calc(100% - 50px); }.ct-file-button { margin-left:38px; }.ct-parameter-grid { gap:20px 16px; }.ct-step-title { font-size:21px; }.ct-role-id { display:none; }.ct-method-header h1 { font-size:29px; }.ct-snapshot-panel { padding:18px; }
   /* A top-layer dialog has the viewport, not the page gutter, so it reserves its
      own edge on a narrow screen and keeps both actions reachable. */
   .ct-dialog { width:calc(100% - 16px); max-height:calc(100dvh - 16px); padding:18px; border-radius:6px; }

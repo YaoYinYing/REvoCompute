@@ -18,7 +18,12 @@ export interface SubmissionSource {
   executionMode(): string;
 }
 
-export function buildSubmissionFormData(form: TaskFormDefinition, source: SubmissionSource, values: WorkspaceValues): FormData {
+export function buildSubmissionFormData(
+  form: TaskFormDefinition,
+  source: SubmissionSource,
+  values: WorkspaceValues,
+  clonedFrom: string | null = null,
+): FormData {
   const inputFiles = source.inputFiles(); const sequence = source.sequence();
   if (sequence) {
     const roleId = source.sequenceRole(); const role = form.inputs.find(item => item.id === roleId);
@@ -29,6 +34,8 @@ export function buildSubmissionFormData(form: TaskFormDefinition, source: Submis
   const data = new FormData();
   inputFiles.forEach(item => { data.append('files', item.file); data.append('input_paths', (item.file as File & { webkitRelativePath?: string }).webkitRelativePath || item.file.name); data.append('input_roles', item.role); });
   data.append('task_type', form.name); data.append('execution_mode', source.executionMode());
+  // Provenance, not an input: only a cloned draft names its source.
+  if (clonedFrom) data.append('cloned_from', clonedFrom);
   data.append('workspace', JSON.stringify({ version: 2, capabilities: values }));
   Object.entries(source.parameters()).forEach(([name, value]) => data.append(`params[${name}]`, value));
   return data;

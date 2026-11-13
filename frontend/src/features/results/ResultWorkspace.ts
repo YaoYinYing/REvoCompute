@@ -1,4 +1,5 @@
 import { ApiError, beginDownload, downloadName, downloadUrl, getResultManifest, loadAuthorizedResult, requestResultArchive, taskIdFromLocation } from '../../api/result-api';
+import { createClonePlan } from '../../api/app-api';
 import { getTaskType } from '../../api/app-api';
 import { resultFileName, type ArtifactRole, type LogicalResultFile, type ResultArtifact, type ResultFile, type ResultManifest,
   type ResultView, type TaskStatus } from '../../api/result-types';
@@ -255,6 +256,14 @@ export class ResultWorkspace {
     const title = element('h1', '', this.local ? t('results.title') : t('results.taskTitle', { id: this.taskId }));
     const meta = element('p', 'result-meta', this.sourceLabel()); identity.append(methodRow, title, meta, badge);
     const actions = element('div', 'result-header-actions'); const dashboard = element('a', 'result-button', t('shell.nav.dashboard')); dashboard.href = '/compute/dashboard';
+    // A local folder and a replayed bundle have no authorized source Task to
+    // clone; only a real remote result offers the draft.
+    if (!this.local && !this.demoSource) {
+      const clone = element('button', 'result-button', t('results.clone')) as HTMLButtonElement;
+      clone.type = 'button';
+      clone.addEventListener('click', () => void this.cloneAction(clone));
+      actions.append(clone);
+    }
     const refresh = element('button', 'result-icon-button') as HTMLButtonElement; refresh.type = 'button'; refresh.title = t('results.refresh'); refresh.setAttribute('aria-label', t('results.refresh')); setButtonIcon(refresh, 'RefreshCw');
     refresh.addEventListener('click', () => void this.load()); actions.append(refresh); header.append(identity, actions);
     const status = element('section', 'result-status'); status.setAttribute('aria-live', 'polite');
@@ -742,6 +751,25 @@ export class ResultWorkspace {
     const available = Boolean(archive?.request_url || archive?.download_url);
     this.nodes.archive.hidden = !available; this.nodes.archive.disabled = !available || this.archiveBusy;
     this.nodes.archive.textContent = archive?.ready && archive.download_url ? t('results.archiveDownload') : t(this.archiveBusy ? 'results.archiveBuilding' : 'results.archiveCreate');
+  }
+  /** Open a new draft seeded from this authorized Task; never rerun it. */
+  private async cloneAction(control: HTMLButtonElement): Promise<void> {
+    // Disabling the focused control blurs it to the document, so remember
+    // whether the reader was operating it by keyboard before the request.
+    const restoreFocus = document.activeElement === control;
+    control.disabled = true;
+    try {
+      const plan = await createClonePlan(this.taskId);
+      // The URL carries only the opaque reference, never inputs, digests, or a
+      // download URL. The Create Task route resolves the plan itself.
+      window.location.assign(`/compute/create_task?clone=${encodeURIComponent(plan.plan_id)}`);
+    } catch {
+      // Re-enable before focusing: a disabled control cannot take focus.
+      control.disabled = false;
+      this.nodes.status.hidden = false;
+      this.nodes.status.replaceChildren(element('strong', '', t('results.cloneFailed')));
+      if (restoreFocus) control.focus();
+    }
   }
   private async archiveAction(): Promise<void> {
     const archive = this.manifest?.archive; if (!archive || this.archiveBusy) return;

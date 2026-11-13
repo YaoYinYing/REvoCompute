@@ -160,6 +160,8 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         "/compute/api/post": {"post"},
         "/compute/api/preflight/{task_type}": {"post"},
         "/compute/api/tasks": {"get"},
+        "/compute/api/tasks/{task_id}/clone-plan": {"post"},
+        "/compute/api/clone-plans/{plan_id}": {"get"},
         "/compute/api/tasks/{task_id}/diagnostics": {"get"},
         "/compute/api/tasks/{task_id}/diagnostics/{stream}": {"get"},
         "/compute/api/running/{task_id}": {"get"},
@@ -180,6 +182,18 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         {"apiKeyAuth": []},
     ]
     assert spec["paths"]["/compute/api/preflight/{task_type}"]["post"]["security"] == [
+        {"bearerAuth": []},
+        {"apiKeyAuth": []},
+    ]
+    # The POST refuses cookie-only callers (``require_bearer_auth``), so the
+    # contract must not advertise session auth for it. The plan's GET is a
+    # read-only document and keeps the cookie option.
+    assert spec["paths"]["/compute/api/tasks/{task_id}/clone-plan"]["post"]["security"] == [
+        {"bearerAuth": []},
+        {"apiKeyAuth": []},
+    ]
+    assert spec["paths"]["/compute/api/clone-plans/{plan_id}"]["get"]["security"] == [
+        {"cookieAuth": []},
         {"bearerAuth": []},
         {"apiKeyAuth": []},
     ]

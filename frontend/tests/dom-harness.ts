@@ -72,6 +72,12 @@ export class HarnessNode {
   setAttribute(name: string, value: string): void { this.attrs.set(name, String(value)); }
   hasAttribute(name: string): boolean { return this.attrs.has(name); }
   removeAttribute(name: string): void { this.attrs.delete(name); }
+  toggleAttribute(name: string, force?: boolean): boolean {
+    const on = force ?? !this.hasAttribute(name);
+    on ? this.setAttribute(name, '') : this.removeAttribute(name);
+    return on;
+  }
+  checkValidity(): boolean { return true; }
 
   get hidden(): boolean { return this.hasAttribute('hidden'); }
   set hidden(value: boolean) { value ? this.setAttribute('hidden', '') : this.removeAttribute('hidden'); }
@@ -139,6 +145,14 @@ export class HarnessNode {
     const index = siblings.indexOf(this);
     if (index >= 0) siblings.splice(index, 1);
     this.parent = null;
+  }
+  after(...nodes: Array<HarnessNode | string>): void {
+    const siblings = this.parent?.nodes;
+    const index = siblings?.indexOf(this) ?? -1;
+    if (!siblings || index < 0) return;
+    const inserted = nodes.map(node => typeof node === 'string' ? textNode(node) : node);
+    inserted.forEach(node => node.remove());
+    inserted.forEach((node, offset) => { node.parent = this.parent; siblings.splice(index + 1 + offset, 0, node); });
   }
   removeChild(node: HarnessNode): void { node.remove(); }
   contains(node: HarnessNode): boolean { return node === this || this.nodes.some(child => child.contains(node)); }
@@ -235,6 +249,19 @@ export const harnessDocument = {
   body: new HarnessNode('BODY'),
   head: new HarnessNode('HEAD'),
   querySelectorAll: (): HarnessNode[] => [],
+  querySelector: (selector: string): HarnessNode | null =>
+    harnessDocument.body.querySelector(selector) ?? harnessDocument.documentElement.querySelector(selector),
+  getElementById: (id: string): HarnessNode | null => {
+    const find = (node: HarnessNode): HarnessNode | null => {
+      if (node.id === id) return node;
+      for (const child of node.nodes) {
+        const found = find(child);
+        if (found) return found;
+      }
+      return null;
+    };
+    return find(harnessDocument.documentElement) ?? find(harnessDocument.body);
+  },
   addEventListener: (): void => {},
 };
 

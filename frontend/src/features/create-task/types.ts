@@ -14,6 +14,8 @@ export interface ParameterDefinition {
   description: string;
   help: string;
   unit: string;
+  /** Presentation-only example text from the owning schema; never a value. */
+  placeholder?: string;
   required: boolean;
   defaultValue?: string | number | boolean;
   choices: Array<string | number | boolean>;

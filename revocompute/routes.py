@@ -47,6 +47,7 @@ from werkzeug.http import parse_range_header
 from revocompute.account_pages import register_account_pages
 from revocompute.admin_pages import register_admin_pages
 from revocompute import admin_reports
+from revocompute import clone_plan
 from revocompute.access_control import (
     authorize,
     policy_state,
@@ -63,6 +64,7 @@ from revocompute.app import (
     _delete_task_artifacts,
     _is_admin_user,
     _is_binary_file,
+    _is_deleted_status,
     _request_metadata,
     _revoke_celery_task,
     _task_access_allowed,
@@ -1863,6 +1865,7 @@ def _derive_task_id(
     user_storage_key: str,
     execution_mode: str = "full",
     reuse: dict[str, Any] | None = None,
+    cloned_from: str | None = None,
 ) -> str:
     """Derive the prospective Task ID after security and contract normalization.
 
@@ -1889,6 +1892,11 @@ def _derive_task_id(
     # identities of this branch keep the exact value they had before reuse.
     if reuse:
         identity["reuse"] = reuse
+    # Only a clone adds this key, so ordinary submissions keep the exact identity
+    # they had before cloning existed. A clone of unchanged content is still a
+    # distinct draft lineage rather than a silent dedupe onto its source.
+    if cloned_from:
+        identity["cloned_from"] = cloned_from
     content_id = hashlib.sha256(
         json.dumps(identity, separators=(",", ":"), sort_keys=True).encode("utf-8")
     ).hexdigest()
@@ -2376,6 +2384,33 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         tt, runner = _get_task_type(task_type)
     except KeyError:
         return jsonify({"error": f"Unknown task type: {task_type}"}), 400
+    # Clone provenance is an assertion about the caller's own history, so it is
+    # verified against the same visibility rule as every Task read. An
+    # unavailable source is refused rather than silently dropped: a draft that
+    # names provenance must not become one that quietly has none.
+    cloned_source: dict[str, Any] | None = None
+    if submission.cloned_from is not None:
+        candidate = task_store.get_task(submission.cloned_from)
+        if (
+            candidate is None
+            or _is_deleted_status(candidate.get("status"))
+            or not _task_access_allowed(candidate)
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": "The source Task is not available for clone provenance",
+                        "details": [
+                            {
+                                "code": "clone_source_unavailable",
+                                "message": "Open Clone & Reuse again from a Task you can see.",
+                            }
+                        ],
+                    }
+                ),
+                404,
+            )
+        cloned_source = candidate
     # A mode selects a declared subset of this Task's own graph; a Task with no
     # modes accepts only `full`. Refuse anything else before reuse resolution or
     # task-id derivation, which folds the mode in: an ignored string must not
@@ -2849,7 +2884,13 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                         {role: tuple(paths) for role, paths in input_paths.items()},
                     )
         md5sum = _derive_task_id(
-            saved_inputs, task_type, coerced_params, workspace_key, submission.execution_mode, reuse_identity
+            saved_inputs,
+            task_type,
+            coerced_params,
+            workspace_key,
+            submission.execution_mode,
+            reuse_identity,
+            submission.cloned_from,
         )
         if managedb is not None and managedb.slurm_enabled():
             readiness_service = current_app.config["infrastructure_readiness"]
@@ -3119,6 +3160,13 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "workspace": workspace_payload,
         "request_id": g.request_id,
     }
+    if cloned_source is not None:
+        # Provenance only: the source Task ID the caller could already see and
+        # its Task type. No path, snapshot, digest, or other source fact travels.
+        input_form["cloned_from"] = {
+            "task_id": str(cloned_source["md5sum"]),
+            "task_type": str(cloned_source.get("task_type") or ""),
+        }
     if execution_graph is not None:
         input_form["execution_graph"] = execution_graph
 
@@ -4268,6 +4316,151 @@ def task_list():
     )
     response.headers["Cache-Control"] = "private, no-store"
     return response
+
+
+def _clone_plan_store() -> clone_plan.ClonePlanStore:
+    """The bounded, expiring reference store for this application instance."""
+    store = current_app.config.get("clone_plan_store")
+    if store is None:
+        store = clone_plan.ClonePlanStore(os.path.join(CONFIG.server_dir, "clone_plans.sqlite3"))
+        current_app.config["clone_plan_store"] = store
+    return store
+
+
+def _clone_plan_payload(source: dict[str, Any]) -> dict[str, Any]:
+    """Resolve the current contract and the source's recorded values into a plan.
+
+    The source is re-read here, at read time, so a schema refresh, catalog
+    removal, or access-policy change between the click and the draft is observed
+    rather than answered from a stale snapshot.
+    """
+    task_type = str(source.get("task_type") or default_task_type())
+    try:
+        current_type, _runner = _get_task_type(task_type)
+    except KeyError:
+        current_type = None
+    # A deprecated Task is absent from the catalog and its detail endpoint, so a
+    # draft must not present it as an available target either.
+    if current_type is not None and getattr(current_type, "deprecated", False):
+        current_type = None
+    manage_db = current_app.config.get("manage_db")
+    target_enabled = manage_db.task_type_is_enabled(task_type) if manage_db is not None else None
+    access_granted: bool | None = None
+    submission_available: bool | None = None
+    if current_type is not None:
+        access = _runner_access_payload(current_type)
+        if "granted" in access:
+            access_granted = bool(access["granted"])
+        state = _submission_payload(current_type)
+        if state is not None:
+            submission_available = (
+                bool(state.get("submittable")) if "submittable" in state else bool(state.get("ready"))
+            )
+    files_owned = str(source.get("submitted_by_user_id")) == str(g.current_user["id"])
+    snapshot_root = None
+    try:
+        snapshot_root = current_app.config["storage_resolver"].get_input_root(source)
+    except (KeyError, RuntimeError, ValueError):
+        snapshot_root = None
+    return clone_plan.build_plan(
+        source,
+        current_type=current_type,
+        target_enabled=target_enabled,
+        files_owned=files_owned,
+        snapshot_root=snapshot_root,
+        access_granted=access_granted,
+        submission_available=submission_available,
+    )
+
+
+def _cloneable_source(md5sum: str) -> dict[str, Any] | None:
+    """Resolve a source Task the caller may see, or answer as a missing Task."""
+    task_id = str(md5sum or "").strip().lower()
+    if not clone_plan.task_id_is_valid(task_id):
+        return None
+    source = task_store.get_task(task_id)
+    if source is None or _is_deleted_status(source.get("status")) or not _task_access_allowed(source):
+        return None
+    return source
+
+
+@app.route("/compute/api/tasks/<md5sum>/clone-plan", methods=["POST"])
+@login_required
+@rate_limit(max_requests=60, window_seconds=3600)
+def create_clone_plan(md5sum: str):
+    """Create a short-lived reference to one authorized source Task's plan.
+
+    Read-only against the source: this creates no Task ID, reserves no resource,
+    and stores only the source ID and caller. The typed plan is returned for the
+    caller's immediate use and rebuilt on every later read.
+    """
+    if blocked := _reject_guest():
+        return blocked
+    if blocked := require_bearer_auth():
+        return blocked
+    source = _cloneable_source(md5sum)
+    if source is None:
+        return _task_not_found(str(md5sum or "").strip().lower())
+    ttl = current_app.config.get("CLONE_PLAN_TTL_SECONDS", clone_plan.DEFAULT_TTL_SECONDS)
+    try:
+        ttl_seconds = int(ttl)
+    except (TypeError, ValueError):
+        ttl_seconds = clone_plan.DEFAULT_TTL_SECONDS
+    reference = _clone_plan_store().create(
+        source_task_id=str(source["md5sum"]),
+        user_id=int(g.current_user["id"]),
+        ttl_seconds=ttl_seconds,
+    )
+    return (
+        jsonify(
+            {
+                "plan_id": reference.plan_id,
+                "expires_at": clone_plan.iso_timestamp(reference.expires_at),
+                **_clone_plan_payload(source),
+            }
+        ),
+        201,
+    )
+
+
+@app.route("/compute/api/clone-plans/<plan_id>", methods=["GET"])
+@login_required
+def get_clone_plan(plan_id: str):
+    """Resolve one owner-scoped clone plan against the current Task contract."""
+    if blocked := _reject_guest():
+        return blocked
+    reference = _clone_plan_store().get(plan_id, user_id=int(g.current_user["id"]))
+    if reference is None:
+        return (
+            jsonify(
+                {
+                    "error": "This clone plan has expired or is unavailable",
+                    "details": [{"code": "clone_plan_unavailable", "message": "Open Clone & Reuse again."}],
+                }
+            ),
+            404,
+        )
+    source = _cloneable_source(reference.source_task_id)
+    if source is None:
+        return (
+            jsonify(
+                {
+                    "error": "The source Task is no longer available",
+                    "details": [{"code": "clone_source_unavailable", "message": "Open Clone & Reuse again."}],
+                }
+            ),
+            404,
+        )
+    return (
+        jsonify(
+            {
+                "plan_id": reference.plan_id,
+                "expires_at": clone_plan.iso_timestamp(reference.expires_at),
+                **_clone_plan_payload(source),
+            }
+        ),
+        200,
+    )
 
 
 @app.route("/compute/api/auth/admin/placement/explain/<task_type>", methods=["GET"])

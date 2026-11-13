@@ -84,6 +84,9 @@ function renderParameter(parameter: ParameterDefinition, context: WorkspaceConte
     // the one the user edits.
     input.type = parameter.type === 'int' || parameter.type === 'float' ? 'number' : parameter.dateFormat ? 'date' : 'text';
     input.value = parameter.defaultValue == null ? '' : String(parameter.defaultValue);
+    // A hint is not a value: the field stays empty and is omitted from the
+    // payload exactly as any other empty optional parameter is.
+    if (parameter.placeholder && input.type === 'text') input.placeholder = parameter.placeholder;
     input.required = parameter.required;
     // The spinner hint projects the server's own range: an inclusive bound is
     // used directly, and a side that declares only an exclusive bound seeds the

@@ -64,8 +64,12 @@ a duplicate parameter registry.
   side-track of workflow steps.
 - Upload inputs with **Choose file(s)** or drag and drop. FASTA methods also accept one pasted sequence or one complete FASTA record.
 - The check list in the snapshot rail next to the **Run <method>** action must be valid before that action is enabled. Error rows point at the input that needs attention.
-- Inputs are not reused from earlier tasks. Every submission uploads its own
-  files; the previous artifact-reuse picker has been removed.
+- The Task snapshot rail stays pinned to the bottom of the visible viewport while
+  the workbench scrolls, including on a phone with the on-screen keyboard open.
+  It is the same rail and the same primary action, never a floating duplicate.
+- Parameters may show an example placeholder supplied by the owning Task schema.
+  A placeholder is a hint only: it is not a default, it is not stored, and an
+  empty optional field is omitted from the submission exactly as before.
 - A Task ID is derived from what you submit (method, parameters, input hashes),
   so sending the identical form again addresses the Task it already created
   instead of starting a second one. Once that Task is terminal — for example
@@ -73,6 +77,56 @@ a duplicate parameter registry.
   with the existing task rather than re-running it. Start the method again from
   the create form with the parameters or inputs you want; the changed content
   gives the new run its own ID.
+
+### Clone & reuse an earlier Task
+
+Dashboard cards and a remote Result page offer **Clone & reuse**. It opens a new
+Create Task draft seeded from one authorized earlier Task:
+
+- Only explicitly recorded parameter values are prefilled. Values the source
+  never recorded resolve through the *current* schema and are marked
+  **Current default**; the current schema is always authoritative.
+- A value whose parameter was renamed or removed, whose enum choice is no longer
+  offered, or whose type, range, format, length or array rule no longer fits is
+  reported under **Not carried over** with the recorded value, including an
+  empty, `0`, or `false` value. Nothing is coerced and no other scientific mode
+  is chosen silently: the field keeps the current schema default for display,
+  but **Run** stays blocked until every entry in **Resolve blocked settings** is
+  edited or explicitly resolved: use **Keep current value** when the parameter
+  still exists, or **Acknowledge blocked setting** when it has no current field.
+- Input files belong to the source Task's immutable snapshot, and a Task
+  submission never references another Task's files. Every listed input is
+  re-uploaded and validated normally; a file the source snapshot can no longer
+  verify is called out explicitly.
+- The reconciliation panel names the inputs the source recorded and lists the
+  required re-uploads. **Reset to current defaults** returns every field to the current
+  schema defaults, discarding the cloned values and any later edits;
+  **Revert the clone** restores the form state from before the clone was
+  applied. Both happen only when you choose them. A field you edit is marked
+  **Edited in this draft**, not as coming from the source, and **Clear** or
+  loading a task example ends the clone relationship along with the prefilled
+  values.
+- Opening a clone never submits. Preflight and **Run** are still the only
+  submission boundary, and the resulting Task carries non-sensitive
+  `cloned_from` provenance for the source Task. A cloned submission therefore
+  gets its own Task identity instead of deduplicating onto the source; sending
+  the identical clone draft again still returns the Task it already created.
+  Resetting or reverting ends the clone relationship, so a later submit from
+  that form records no provenance.
+
+API clients can create the same plan explicitly:
+
+```text
+POST /compute/api/tasks/<source-task-id>/clone-plan
+GET  /compute/api/clone-plans/<plan-id>
+```
+
+The POST is read-only against the source and returns the bounded plan plus an
+opaque, owner-scoped, short-lived `plan_id`; the GET re-resolves that plan
+against the current contract, so a schema change between the click and the
+draft is observed. The plan is always `can_submit: false` and never contains a
+source filesystem path, download URL, or file bytes. Submitting a draft may name
+its source with the optional `cloned_from` multipart field.
 
 ### Profile
 

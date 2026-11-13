@@ -404,6 +404,24 @@ class TaskSubmissionRequest(BaseModel):
     #: owning Task, never against a server-side mode registry.
     execution_mode: str = "full"
     reuse: dict[str, dict[str, str]] = Field(default_factory=dict)
+    #: Optional non-sensitive provenance: the authorized Task a draft was
+    #: cloned from. It is not an input or a scientific parameter, and it is
+    #: validated for visibility at the submission boundary.
+    cloned_from: str | None = None
+
+    @field_validator("cloned_from", mode="before")
+    @classmethod
+    def _normalize_cloned_from(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError("cloned_from must be a Task ID")
+        value = v.strip().lower()
+        if not value:
+            return None
+        if len(value) != 32 or any(character not in "0123456789abcdef" for character in value):
+            raise ValueError("cloned_from must be a Task ID")
+        return value
 
     @field_validator("task_type", mode="before")
     @classmethod
