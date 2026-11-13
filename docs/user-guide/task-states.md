@@ -27,6 +27,16 @@ The final `cleaned:*` states identify automatic retention cleanup; `deleted:*`
 states remain reserved for explicit user deletion.
 The `deleted:finshed` spelling is intentionally preserved for runtime compatibility.
 
+Once a Task reaches `finished` or `cancelled`, a late or duplicate worker write
+cannot change it. A `failed` Task may be retried as a new run of the same
+content, or promoted to `finished` when the run itself succeeded but publishing
+its result failed.
+
+A deletion is resumable. If a request is interrupted after its `deleting:*`
+claim, the same delete request resumes it, and deleting a Task whose artifacts
+are already gone succeeds without changing the record. The full transition
+table is in [Task Lifecycle State](../developer-guide/task-lifecycle-state.md).
+
 Every state after `finished`/`failed` keeps the Task ID: a resubmission of
 identical content addresses the same Task (see [Submitting
 Tasks](submitting-tasks.md)), and starting the method again creates a new Task

@@ -43,7 +43,7 @@ from frontend_fixtures import (
     validate_manifest,
     validate_payload,
 )
-from revocompute.db import TaskDatabase
+from revocompute import task_state
 
 OPENAPI = openapi_spec()
 VIEW_PLUGINS = set(OPENAPI["components"]["schemas"]["ResultView"]["properties"]["plugin"]["enum"])
@@ -182,7 +182,7 @@ def test_lifecycle_advances_by_poll_count_and_stops_at_the_last_state() -> None:
     scenario = controlled_scenario().with_lifecycle("queued", "running", "finished")
     states = [scenario.task_status_payload("0123456789abcdef0123456789abcdef", index)[2] for index in range(5)]
     assert states == ["queued", "running", "finished", "finished", "finished"]
-    assert [TaskDatabase.STOP_POLLING_STATUSES.__contains__(state) for state in states] == [False, False, True, True, True]
+    assert [state in task_state.POLLING_COMPLETE for state in states] == [False, False, True, True, True]
 
 
 def test_result_is_available_only_once_the_lifecycle_reaches_a_terminal_state() -> None:

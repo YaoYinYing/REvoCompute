@@ -180,6 +180,10 @@ def test_adapter_reaches_the_application_only_through_canonical_modules():
         'revocompute.result_projection',
         'revocompute.storage',
         'revocompute.task_runtime',
+        # The canonical Task lifecycle vocabulary: the adapter projects the
+        # server's own terminal/cancellable/result-ready answers instead of
+        # mirroring status strings.
+        'revocompute.task_state',
         'revocompute.task_types',
         'revocompute.tool_calls',
         'revocompute.tool_types',

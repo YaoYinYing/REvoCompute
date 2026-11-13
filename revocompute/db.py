@@ -48,6 +48,7 @@ from revocompute import resource_ledger as rloan
 from revocompute import resource_model as rm
 from revocompute import stage_state
 from revocompute import storage_quota as squota
+from revocompute import task_state
 from revocompute.operational_events import emit_event
 from revocompute.schema_epoch import require_current_schema
 from revocompute.sqlite_startup import enter_wal_mode
@@ -289,32 +290,6 @@ class TaskIdReservedError(RuntimeError):
 
 class TaskDatabase:
     """Minimal SQLite-based task tracker for compute jobs."""
-
-    DELETED_STATUSES = {"deleted:finshed", "deleted:cancel"}
-    CLEANUP_STATUSES = {"cleaned:finished", "cleaned:cancel"}
-    CLEANUP_CLAIM_STATUSES = {"deleting:finished", "deleting:cancel"}
-    TERMINAL_STATUSES = DELETED_STATUSES | CLEANUP_STATUSES | CLEANUP_CLAIM_STATUSES | {"cancelled"}
-    # Statuses for which no further transition is coming, including the settled
-    # outcomes. Distinct from TERMINAL_STATUSES in both directions: it adds
-    # finished/failed (which the runtime guard excludes because a task that has
-    # not been finalized may still move), and it drops the deleting:* claim
-    # statuses, which cleanup still advances to cleaned:*.
-    STOP_POLLING_STATUSES = DELETED_STATUSES | CLEANUP_STATUSES | {"cancelled", "finished", "failed"}
-
-    VALID_STATUSES = {
-        "pending",
-        "queued",
-        "running",
-        "finished",
-        "failed",
-        "cancelled",
-        "deleting:finished",
-        "deleting:cancel",
-        "cleaned:finished",
-        "cleaned:cancel",
-        "deleted:finshed",
-        "deleted:cancel",
-    }
 
     def __init__(
         self,
@@ -1270,12 +1245,8 @@ class TaskDatabase:
         return normalized
 
     def _ensure_status(self, status: str) -> None:
-        if status not in self.VALID_STATUSES:
+        if status not in task_state.STATUSES:
             raise ValueError(f"Invalid task status {status}")
-
-    @classmethod
-    def _is_deleted_status(cls, status: Any) -> bool:
-        return str(status or "").strip().lower() in cls.DELETED_STATUSES
 
     def upsert_task(self, task_id: str | None = None, *, refuse_reserved: bool = False, **fields) -> None:
         """Write one task row, named or derived.
@@ -1320,7 +1291,7 @@ class TaskDatabase:
             # be running.
             guard = and_(
                 self.tasks_table.c.md5sum == md5sum,
-                self.tasks_table.c.status.notin_(tuple(self.TERMINAL_STATUSES)),
+                self.tasks_table.c.status.notin_(tuple(task_state.LOCKED)),
                 self.tasks_table.c.slurm_job_id.is_(None),
                 self.tasks_table.c.container_id.is_(None),
             )
@@ -1391,7 +1362,7 @@ class TaskDatabase:
                 if row.get("slurm_job_id") or row.get("container_id"):
                     self._release_preparation_claim(conn, md5sum, token)
                     return PreparationClaim("DISPATCHED", row)
-                if row["status"] == "pending":
+                if row["status"] == task_state.PENDING:
                     if row.get("celery_task_id"):
                         self._release_preparation_claim(conn, md5sum, token)
                         return PreparationClaim("DISPATCHED", row)
@@ -1411,7 +1382,7 @@ class TaskDatabase:
                     conn.execute(self.task_progress_table.delete().where(self.task_progress_table.c.task_id == md5sum))
                     conn.execute(self.task_diagnostics_table.delete().where(self.task_diagnostics_table.c.task_id == md5sum))
                     return PreparationClaim("ABANDONED", row, token)
-                if row["status"] == "queued":
+                if row["status"] == task_state.QUEUED:
                     # A queued row is owned by whatever path queued it: either
                     # actively dispatching or already dispatched.  Re-preparing
                     # it would wipe the snapshot a live allocation is reading,
@@ -1421,7 +1392,7 @@ class TaskDatabase:
                     return PreparationClaim(
                         "DISPATCHED" if row.get("celery_task_id") else "IN_PROGRESS", row
                     )
-                if row["status"] in self.TERMINAL_STATUSES:
+                if row["status"] in task_state.LOCKED:
                     self._release_preparation_claim(conn, md5sum, token)
                     return PreparationClaim("TERMINAL", row)
                 # Active, but with no dispatch state and no resource handle: a
@@ -1456,27 +1427,24 @@ class TaskDatabase:
         if not fields:
             return False
         status = fields.get("status")
+        stmt = update(self.tasks_table).where(self.tasks_table.c.md5sum == md5sum).values(**fields)
         if status:
             self._ensure_status(status)
-        stmt = update(self.tasks_table).where(self.tasks_table.c.md5sum == md5sum).values(**fields)
-        # Terminal tasks (deleted / cancelled) must stay terminal.
-        # Ignore late worker writes (running/finished/run_stage, etc.)
-        # that would otherwise resurrect tasks after user deletion or
-        # cancellation.
-        if status is None or (not self._is_deleted_status(status)):
-            stmt = stmt.where(self.tasks_table.c.status.notin_(tuple(self.TERMINAL_STATUSES)))
-        if status in {"queued", "running"}:
-            # An allocation callback can arrive after the Task settled.  A late
-            # "started" observation must not resurrect a failed/finished Task
-            # (and, during recovery, must not steal the pending claim from the
-            # replacement worker).
-            stmt = stmt.where(self.tasks_table.c.status.notin_(("finished", "failed")))
+            # The compare-and-set is the transition table: a late or duplicated
+            # write that is not a legal step from the row's current status
+            # changes nothing, so no callback can resurrect a settled outcome.
+            stmt = stmt.where(self.tasks_table.c.status.in_(tuple(task_state.accepted_from(status))))
+        else:
+            # A field write never targets a row a cancel, deletion, or retire
+            # owns.  ``finished``/``failed`` stay writable: a failed row with no
+            # allocation may still be prepared again.
+            stmt = stmt.where(self.tasks_table.c.status.notin_(tuple(task_state.LOCKED)))
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
     def claim_task_recovery(self, md5sum: str, *, expected_status: str) -> bool:
         """Atomically move one orphaned active task out of recovery scans."""
-        if expected_status not in {"queued", "running"}:
+        if expected_status not in task_state.EXECUTING:
             return False
         stmt = (
             update(self.tasks_table)
@@ -1484,7 +1452,7 @@ class TaskDatabase:
                 self.tasks_table.c.md5sum == md5sum,
                 self.tasks_table.c.status == expected_status,
             )
-            .values(status="pending")
+            .values(status=task_state.PENDING)
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
@@ -1513,16 +1481,16 @@ class TaskDatabase:
             .where(
                 self.tasks_table.c.md5sum == md5sum,
                 or_(
-                    self.tasks_table.c.status == "pending",
+                    self.tasks_table.c.status == task_state.PENDING,
                     and_(
-                        self.tasks_table.c.status == "queued",
+                        self.tasks_table.c.status == task_state.QUEUED,
                         self.tasks_table.c.celery_task_id.is_(None),
                         self.tasks_table.c.slurm_job_id.is_(None),
                         self.tasks_table.c.started_at.is_(None),
                     ),
                 ),
             )
-            .values(status="queued")
+            .values(status=task_state.QUEUED)
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
@@ -1538,9 +1506,9 @@ class TaskDatabase:
             update(self.tasks_table)
             .where(
                 self.tasks_table.c.md5sum == md5sum,
-                self.tasks_table.c.status.in_(("pending", "queued", "running")),
+                self.tasks_table.c.status.in_(tuple(task_state.ACTIVE)),
             )
-            .values(status="cancelled", **fields)
+            .values(status=task_state.CANCELLED, **fields)
         )
         timestamp = time.time()
         with self.engine.begin() as conn:
@@ -1612,8 +1580,9 @@ class TaskDatabase:
         claim_status: str,
     ) -> bool:
         """Atomically claim one unchanged terminal task for artifact deletion."""
-        if claim_status not in self.CLEANUP_CLAIM_STATUSES:
-            raise ValueError(f"Invalid cleanup claim status {claim_status}")
+        expected = task_state.disposal(expected_status)
+        if expected is None or claim_status != expected.claim:
+            raise ValueError(f"Cleanup claim {claim_status} does not match status {expected_status}")
         stmt = (
             update(self.tasks_table)
             .where(
@@ -1642,10 +1611,14 @@ class TaskDatabase:
 
     def complete_task_cleanup(self, md5sum: str, *, claim_status: str, cleaned_status: str, **fields) -> bool:
         """Finish a claimed cleanup without overwriting a replacement task."""
-        if claim_status not in self.CLEANUP_CLAIM_STATUSES:
+        if claim_status not in task_state.DISPOSAL_CLAIMS:
             raise ValueError(f"Invalid cleanup claim status {claim_status}")
-        if cleaned_status not in self.CLEANUP_STATUSES | self.DELETED_STATUSES:
-            raise ValueError(f"Invalid cleaned status {cleaned_status}")
+        completed = {
+            task_state.cleanup_completion(claim_status),
+            task_state.cleanup_termination(claim_status),
+        }
+        if cleaned_status not in completed:
+            raise ValueError(f"Invalid cleaned status {cleaned_status} for claim {claim_status}")
         stmt = (
             update(self.tasks_table)
             .where(
@@ -1672,7 +1645,7 @@ class TaskDatabase:
     #: Statuses the History API never publishes: their artifacts are gone.
     #: ``deleting:*`` claims stay visible while cleanup is still in flight,
     #: matching the visibility the un-paginated list had.
-    HISTORY_HIDDEN_STATUSES = DELETED_STATUSES | CLEANUP_STATUSES
+    HISTORY_HIDDEN_STATUSES = task_state.HISTORY_HIDDEN
 
     def query_tasks(
         self,
@@ -1719,7 +1692,7 @@ class TaskDatabase:
         if task_type:
             conditions.append(table.c.task_type.ilike(_literal_like(task_type), escape="\\"))
         if status == "attention":
-            conditions.append(table.c.status.in_(("failed", "cancelled")))
+            conditions.append(table.c.status.in_(tuple(task_state.ATTENTION)))
         elif status:
             conditions.append(table.c.status == status)
         if owner:
@@ -1770,7 +1743,7 @@ class TaskDatabase:
             .select_from(self.tasks_table)
             .where(
                 self.tasks_table.c.submitted_by_user_id == user_id,
-                self.tasks_table.c.status.in_(["pending", "queued", "running"]),
+                self.tasks_table.c.status.in_(tuple(task_state.ACTIVE)),
             )
         )
         with self.engine.connect() as conn:
@@ -3012,7 +2985,7 @@ class TaskDatabase:
             ["task_id", "evidence_json", "updated_at"],
             select(self.tasks_table.c.md5sum, literal(encoded), literal(time.time())).where(
                 self.tasks_table.c.md5sum == task_id,
-                self.tasks_table.c.status.notin_(tuple(self.TERMINAL_STATUSES)),
+                self.tasks_table.c.status.notin_(tuple(task_state.LOCKED)),
                 ~select(self.data_lifecycle_table.c.task_id).where(
                     self.data_lifecycle_table.c.task_id == task_id,
                     self.data_lifecycle_table.c.state.notin_(("ACTIVE", "ARCHIVED")),
@@ -3067,7 +3040,7 @@ class TaskDatabase:
             raise ValueError("stage_index must be a non-negative integer")
         timestamp = time.time()
         encoded = json.dumps(planned_resources, sort_keys=True) if planned_resources is not None else None
-        ineligible = self.STOP_POLLING_STATUSES | self.CLEANUP_CLAIM_STATUSES
+        ineligible = task_state.SETTLED
         with self.engine.connect() as conn:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             try:
@@ -3238,7 +3211,10 @@ class TaskDatabase:
         )
         stmt = (
             update(self.stage_runs_table)
-            .where(*identity, self.stage_runs_table.c.status == stage_state.QUEUED)
+            .where(
+                *identity,
+                self.stage_runs_table.c.status.in_(tuple(stage_state.predecessors(stage_state.RUNNING))),
+            )
             .values(
                 status=stage_state.RUNNING,
                 started_at=func.coalesce(self.stage_runs_table.c.started_at, timestamp),

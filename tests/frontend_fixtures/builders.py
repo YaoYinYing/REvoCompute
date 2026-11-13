@@ -792,9 +792,9 @@ def build_task_status(
 
 
 def _terminal(status: str) -> bool:
-    from revocompute.db import TaskDatabase
+    from revocompute import task_state
 
-    return status in TaskDatabase.STOP_POLLING_STATUSES
+    return status in task_state.POLLING_COMPLETE
 
 
 def build_task_summary(

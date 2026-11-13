@@ -50,6 +50,7 @@ from revocompute.account_pages import register_account_pages
 from revocompute.admin_pages import register_admin_pages
 from revocompute import admin_reports
 from revocompute import clone_plan
+from revocompute import task_state
 from revocompute.access_control import (
     authorize,
     policy_state,
@@ -66,7 +67,6 @@ from revocompute.app import (
     _delete_task_artifacts,
     _is_admin_user,
     _is_binary_file,
-    _is_deleted_status,
     _request_metadata,
     _revoke_celery_task,
     _task_access_allowed,
@@ -2251,21 +2251,6 @@ def _cleanup_quarantine(paths: list[str]) -> None:
 _ARTIFACT_REFERENCE_PATTERN = re.compile(r"@([a-fA-F0-9]{32})/(.+)")
 
 
-# Which cleanup claim/deleted-status pair a user deletion of each status uses.
-# Keyed by the status the route observed; the claim compare-and-set means a
-# row that moved since then (including into another claim) is not touched.
-_DELETE_CLAIMS = {
-    "pending": ("deleting:cancel", "deleted:cancel"),
-    "queued": ("deleting:cancel", "deleted:cancel"),
-    "running": ("deleting:cancel", "deleted:cancel"),
-    "finished": ("deleting:finished", "deleted:finshed"),
-    "failed": ("deleting:cancel", "deleted:cancel"),
-    "cancelled": ("deleting:cancel", "deleted:cancel"),
-    "deleted:finshed": ("deleting:finished", "deleted:finshed"),
-    "deleted:cancel": ("deleting:cancel", "deleted:cancel"),
-}
-
-
 def _resolve_task_owner() -> dict[str, Any]:
     user = g.current_user
     storage_key = user.get("storage_key")
@@ -2345,7 +2330,7 @@ def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, Any]:
         "status": status,
         # The server owns which statuses are terminal; clients polling this
         # endpoint stop on this flag rather than mirroring the vocabulary.
-        "terminal": str(status).strip().lower() in task_store.STOP_POLLING_STATUSES,
+        "terminal": task_state.normalize(status) in task_state.POLLING_COMPLETE,
         "status_url": f"/compute/api/running/{md5sum}",
         "results_url": f"/compute/api/results/{md5sum}",
         "result_available": publication == PUBLICATION_AVAILABLE,
@@ -2373,15 +2358,10 @@ def _existing_upload_response(existing_task: dict[str, Any] | None, md5sum: str)
         return None
     if not _task_access_allowed(existing_task):
         return _task_not_found(md5sum)
-    status = str(existing_task["status"] or "").strip().lower()
-    if status == "finished":
-        return _task_submission_response(md5sum, "finished", 302)
-    if status in {
-        "pending",
-        "queued",
-        "running",
-        *task_store.CLEANUP_CLAIM_STATUSES,
-    }:
+    status = task_state.normalize(existing_task["status"])
+    if status == task_state.FINISHED:
+        return _task_submission_response(md5sum, task_state.FINISHED, 302)
+    if status in task_state.ACTIVE | task_state.DISPOSAL_CLAIMS:
         payload = _task_follow_up_payload(md5sum, "Task already queued or running")
         payload["task_status"] = status
         response = jsonify(payload)
@@ -2397,7 +2377,7 @@ def _existing_upload_response(existing_task: dict[str, Any] | None, md5sum: str)
     # existing task rather than re-prepared and re-dispatched.  A `finished`
     # row keeps its 302 above; a `failed` row whose handle was cleared falls
     # through and may be re-prepared normally.
-    if status in task_store.TERMINAL_STATUSES or existing_task.get("slurm_job_id") or existing_task.get("container_id"):
+    if status in task_state.LOCKED or existing_task.get("slurm_job_id") or existing_task.get("container_id"):
         return _task_submission_response(md5sum, status, 409)
     return None
 
@@ -2730,7 +2710,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         candidate = task_store.get_task(submission.cloned_from)
         if (
             candidate is None
-            or _is_deleted_status(candidate.get("status"))
+            or task_state.artifacts_removed(candidate.get("status"))
             or not _task_access_allowed(candidate)
         ):
             return (
@@ -3773,32 +3753,19 @@ def run_gremlin(md5sum):
     if not _task_access_allowed(task):
         return _task_not_found(md5sum)
 
-    status = task["status"]
-    payload = _task_follow_up_payload(md5sum, str(status))
-    if status == "finished":
-        return jsonify(payload), 200
-    if status == "failed":
+    status = task_state.normalize(task["status"])
+    if status not in task_state.STATUSES:
+        return (
+            jsonify({"status": "unknown", "md5sum": md5sum, "error": "Invalid task status"}),
+            500,
+        )
+    payload = _task_follow_up_payload(md5sum, status)
+    if status == task_state.FAILED:
         error = _sanitize_task_error(task, task.get("error")) if _task_full_results_allowed(task) else "Task failed"
         return jsonify({**payload, "error": error}), 200
-    if status in ("running", "queued"):
-        return jsonify(payload), 202
-    if status == "pending":
-        return jsonify(payload), 202
-    if status == "cancelled":
-        return jsonify(payload), 200
-    if status in task_store.CLEANUP_CLAIM_STATUSES:
-        return jsonify(payload), 202
-    if status in task_store.CLEANUP_STATUSES:
-        return jsonify(payload), 200
-    if status == "deleted:finshed":
-        return jsonify(payload), 200
-    if status == "deleted:cancel":
-        return jsonify(payload), 200
-
-    return (
-        jsonify({"status": "unknown", "md5sum": md5sum, "error": "Invalid task status"}),
-        500,
-    )
+    # A poller keeps waiting while the Task is live or a retire is still
+    # running; every settled state answers 200.
+    return jsonify(payload), 200 if status in task_state.POLLING_COMPLETE else 202
 
 
 def _diagnostics_for_task(task: dict[str, Any]) -> dict[str, Any]:
@@ -3853,7 +3820,7 @@ def get_results(md5sum):
     if not _task_access_allowed(task):
         return _task_not_found(md5sum)
 
-    if task["status"] not in {"finished", "failed"}:
+    if task_state.normalize(task["status"]) not in task_state.PUBLISHED_RESULTS:
         return redirect(f"/compute/api/running/{md5sum}", code=302)
 
     # The manifest is the publication root of trust, so it is read through the
@@ -3908,9 +3875,9 @@ def get_results(md5sum):
             payload,
             task_id=md5sum,
             status=task["status"],
-            terminal=str(task["status"]).strip().lower() in task_store.STOP_POLLING_STATUSES,
+            terminal=task_state.normalize(task["status"]) in task_state.POLLING_COMPLETE,
             error=_sanitize_task_error(task, task.get("error"))
-            if task["status"] == "failed" and full_results
+            if task_state.normalize(task["status"]) == task_state.FAILED and full_results
             else None,
             archive={
                 "ready": archive_ready and full_results,
@@ -4264,8 +4231,7 @@ def create_result_download_link(md5sum: str):
     task = task_store.get_task(md5sum)
     if (
         task is None
-        or _is_deleted_status(task.get("status"))
-        or str(task.get("status")) in task_store.CLEANUP_CLAIM_STATUSES
+        or task_state.artifacts_unavailable(task.get("status"))
     ):
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
@@ -4342,7 +4308,7 @@ def revoke_result_download_link(md5sum: str, link_id: str):
     if md5sum is None or not _LINK_ID.fullmatch(link_id):
         return jsonify({"error": "Download link not found"}), 404
     task = task_store.get_task(md5sum)
-    if task is None or _is_deleted_status(task.get("status")) or not _task_access_allowed(task):
+    if task is None or task_state.artifacts_removed(task.get("status")) or not _task_access_allowed(task):
         return _task_not_found(md5sum)
     if not task_store.revoke_artifact_download_link(
         md5sum, token_id_hash(link_id), revoked_by_user_id=int(g.current_user["id"]), at=time.time()
@@ -4363,7 +4329,7 @@ def revoke_result_download_links(md5sum: str):
     if md5sum is None:
         return jsonify({"error": "Invalid task id"}), 400
     task = task_store.get_task(md5sum)
-    if task is None or _is_deleted_status(task.get("status")) or not _task_access_allowed(task):
+    if task is None or task_state.artifacts_removed(task.get("status")) or not _task_access_allowed(task):
         return _task_not_found(md5sum)
     revoked = task_store.revoke_task_artifact_download_links(
         md5sum, revoked_by_user_id=int(g.current_user["id"]), at=time.time()
@@ -4409,8 +4375,7 @@ def get_artifact_download(token: str):
     task = task_store.get_task(str(grant["task_id"]))
     if (
         task is None
-        or _is_deleted_status(task.get("status"))
-        or str(task.get("status")) in task_store.CLEANUP_CLAIM_STATUSES
+        or task_state.artifacts_unavailable(task.get("status"))
     ):
         return _download_link_unavailable()
 
@@ -4559,7 +4524,7 @@ def request_results_archive(md5sum: str):
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_full_results_allowed(task):
         return _task_not_found(md5sum)
-    if task["status"] not in {"finished", "failed"}:
+    if task_state.normalize(task["status"]) not in task_state.PUBLISHED_RESULTS:
         return jsonify({"error": "Results are not ready"}), 409
     # Building a ZIP is a publication from the same authority, so a result the
     # reader refuses cannot be packed: the caller gets the bounded state and the
@@ -4585,7 +4550,7 @@ def download_results(md5sum):
     if not _task_full_results_allowed(task):
         return _task_not_found(md5sum)
 
-    if task["status"] not in {"finished", "failed"}:
+    if task_state.normalize(task["status"]) not in task_state.PUBLISHED_RESULTS:
         return (
             jsonify(
                 {
@@ -4690,7 +4655,7 @@ def cancel_task(md5sum):
     if not _task_mutation_allowed(task):
         return _task_not_found(md5sum)
 
-    if task["status"] not in {"pending", "queued", "running"}:
+    if not task_state.is_active(task["status"]):
         return (
             jsonify({"error": "Task cannot be cancelled as it is not pending or running"}),
             400,
@@ -4825,18 +4790,18 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
         archive_ready = _published_archive(task) is not None and result_available
     except (OSError, ValueError):
         archive_ready = False
-    can_cancel = _task_mutation_allowed(task) and status in {"pending", "queued", "running"}
+    can_cancel = _task_mutation_allowed(task) and task_state.is_active(status)
     can_delete = (
         g.current_user.get("role") != "guest"
         and _task_mutation_allowed(task)
-        and status not in task_store.CLEANUP_CLAIM_STATUSES
+        and not task_state.artifacts_removed(status)
     )
     return {
         "task_id": task_id,
         "task_type": task.get("task_type") or default_task_type(),
         "display_name": _task_display_name(task, task_id),
         "status": status,
-        "terminal": status in task_store.STOP_POLLING_STATUSES,
+        "terminal": status in task_state.POLLING_COMPLETE,
         "submitted_at": _iso_timestamp(task.get("uploaded_at")),
         "finished_at": _iso_timestamp(task.get("finished_at")),
         "walltime_seconds": task.get("walltime"),
@@ -4856,7 +4821,9 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
             # download route serves: an unreadable result offers neither a link
             # that would 409 nor a request that would be refused.
             "archive_ready": archive_ready,
-            "archive_request_allowed": status in {"finished", "failed"} and result_available and not archive_ready,
+            "archive_request_allowed": (
+                status in task_state.PUBLISHED_RESULTS and result_available and not archive_ready
+            ),
             "archive_request_url": f"/compute/api/results/{task_id}/archive",
             "download_url": f"/compute/api/download/{task_id}" if archive_ready else None,
         },
@@ -5013,7 +4980,7 @@ def _cloneable_source(md5sum: str) -> dict[str, Any] | None:
     if not clone_plan.task_id_is_valid(task_id):
         return None
     source = task_store.get_task(task_id)
-    if source is None or _is_deleted_status(source.get("status")) or not _task_access_allowed(source):
+    if source is None or task_state.artifacts_removed(source.get("status")) or not _task_access_allowed(source):
         return None
     return source
 
@@ -5275,22 +5242,34 @@ def task_input_file(md5sum):
 
 
 def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> bool:
-    """Claim, delete, complete — a failed claim leaves the row untouched.
+    """Claim, delete, complete — or resume a claim a previous request left.
 
     The status write is the claim and it happens first, so a crash (or a
-    failed write) leaves a ``deleting:*`` row that maintenance resumes instead
-    of an intact artifact tree whose row still reads ``finished``.
+    failed write) leaves a ``deleting:*`` row instead of an intact artifact
+    tree whose row still reads ``finished``.  That claim is therefore durable
+    and retryable: a repeated request resumes it rather than refusing forever,
+    and a Task whose artifacts are already gone succeeds without a write.
     """
-    claim_status, cleaned_status = _DELETE_CLAIMS.get(str(task["status"]), ("deleting:cancel", "deleted:cancel"))
-    if not task_store.claim_task_cleanup(
-        md5sum,
-        expected_status=str(task["status"]),
-        expected_finished_at=task.get("finished_at"),
-        claim_status=claim_status,
-    ):
-        return False
-    if task["status"] in {"pending", "queued", "running"}:
-        _revoke_celery_task(task)
+    status = task_state.normalize(task["status"])
+    if status in task_state.DISPOSED:
+        return True
+    if status in task_state.DISPOSAL_CLAIMS:
+        claim_status = status
+        deleted_status = task_state.cleanup_termination(status)
+    else:
+        disposal = task_state.disposal(status)
+        if disposal is None:
+            return False
+        claim_status, deleted_status = disposal.claim, disposal.deleted
+        if not task_store.claim_task_cleanup(
+            md5sum,
+            expected_status=status,
+            expected_finished_at=task.get("finished_at"),
+            claim_status=claim_status,
+        ):
+            return False
+        if task_state.is_active(status):
+            _revoke_celery_task(task)
 
     # A Task that never started holds entitlement it will never consume, so its
     # admission hold is released with the deletion.  Idempotent: a Task whose
@@ -5325,12 +5304,12 @@ def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> bool:
     if walltime is None and started_at:
         walltime = now - started_at
     finished_at = task.get("finished_at")
-    if cleaned_status == "deleted:cancel" or not finished_at:
+    if deleted_status == task_state.DELETED_CANCELLED or not finished_at:
         finished_at = now
     if not task_store.complete_task_cleanup(
         md5sum,
         claim_status=claim_status,
-        cleaned_status=cleaned_status,
+        cleaned_status=deleted_status,
         finished_at=finished_at,
         walltime=walltime,
         error="Task deleted by user",
@@ -5357,8 +5336,6 @@ def delete_task(md5sum):
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_mutation_allowed(task):
         return _task_not_found(md5sum)
-    if task["status"] in task_store.CLEANUP_CLAIM_STATUSES:
-        return jsonify({"error": "Task cleanup is already in progress", "md5sum": md5sum}), 409
 
     if not _soft_delete_task(md5sum, task):
         return jsonify({"error": "Task cleanup is already in progress", "md5sum": md5sum}), 409
@@ -5408,9 +5385,6 @@ def delete_tasks_batch():  # skipcq: PY-R1000 -- per-task authorization and outc
             # list would confirm which task ids exist for another tenant.
             logging.warning("Batch delete denied for task %s by user %s", md5sum, g.current_user["id"])
             not_found.append(md5sum)
-            continue
-        if task["status"] in task_store.CLEANUP_CLAIM_STATUSES:
-            ignored.append(md5sum)
             continue
 
         if _soft_delete_task(md5sum, task):
@@ -6606,7 +6580,7 @@ def _project_user_metrics(tasks: list[dict[str, Any]], *, window: str, now: floa
         if 0 <= index < spans:
             buckets[index] = buckets.get(index, 0) + 1
         walltime = task.get("walltime")
-        if walltime is not None and status in {"finished", "failed", "cancelled"}:
+        if walltime is not None and status in task_state.OUTCOMES:
             runtimes.append(float(walltime))
         task_type_name = str(task.get("task_type") or default_task_type())
         try:

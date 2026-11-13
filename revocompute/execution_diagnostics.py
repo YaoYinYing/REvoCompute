@@ -9,8 +9,11 @@ import json
 import os
 import re
 import unicodedata
+
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
+
+from revocompute import task_state
 
 STATUS_PATH = "execution/slurm-status.execution.json"
 MAX_LOG_BYTES = 64 * 1024
@@ -204,7 +207,7 @@ def diagnostic_payload(
     }
     if not data_owned:
         return {**payload, "availability": "expired", "summary": "Task diagnostic data is no longer retained."}
-    if task.get("status") != "failed":
+    if task.get("status") != task_state.FAILED:
         return payload
     payload["summary"] = (
         safe_diagnostic_text(task.get("error"))[:2000] or "Task failed. Diagnostic evidence is unavailable."

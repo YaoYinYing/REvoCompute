@@ -62,9 +62,11 @@ def _finished_tool_call(module, username: str = "tester") -> str:
         global_limit=8,
     )
     now = time.time()
+    assert module.tool_calls.transition(call_id, expected=("queued",), status="preparing")
+    assert module.tool_calls.transition(call_id, expected=("preparing",), status="running")
     assert module.tool_calls.transition(
         call_id,
-        expected=("queued",),
+        expected=("running",),
         status="finished",
         finished_at=now,
         expires_at=now + 86400,

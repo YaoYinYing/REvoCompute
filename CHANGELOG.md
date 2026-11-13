@@ -222,6 +222,20 @@ invented release numbers or dates.
     equilibrium mode. Callers that relied on the legacy propagation or
     structure-prediction single-sample default set it explicitly.
 
+### Changed
+- Task lifecycle:
+  - Make `tasks.status` one explicit machine in `revocompute/task_state.py`: the
+    states, the groups consumers mean (settled, locked, polling-complete,
+    result-ready), the legal transitions, and the two disposal lanes. Every
+    guarded Task write is a compare-and-set against that table, so a late or
+    duplicated callback can no longer rewrite a settled outcome, and the
+    duplicate status vocabularies in the store, routes, Admin reports, MCP,
+    cleanup, diagnostics and publication reporting are removed.
+  - Resume an interrupted deletion from its durable `deleting:*` claim and make
+    deleting an already-retired Task a no-op, instead of leaving a Task no
+    surface can delete again.
+  - Give Tool calls the same closed transition check.
+
 ### Fixed
 - Tools:
   - Reclaim a submitting user's terminal workspaces when only the per-user

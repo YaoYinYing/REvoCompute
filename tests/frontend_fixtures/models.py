@@ -264,8 +264,8 @@ class LifecycleSpec:
 
     ``statuses`` is consumed one entry per status poll, in order; polling keeps
     returning the last entry once it is reached. Status is derived from
-    ``TaskDatabase.STOP_POLLING_STATUSES`` rather than a private list, so a
-    fixture cannot disagree with the server about which states are terminal.
+    ``task_state.POLLING_COMPLETE`` rather than a private list, so a fixture
+    cannot disagree with the server about which states are terminal.
     """
 
     statuses: tuple[str, ...] = ("finished",)
@@ -281,9 +281,9 @@ class LifecycleSpec:
 
     @staticmethod
     def is_terminal(status: str) -> bool:
-        from revocompute.db import TaskDatabase
+        from revocompute import task_state
 
-        return status in TaskDatabase.STOP_POLLING_STATUSES
+        return status in task_state.POLLING_COMPLETE
 
 
 @dataclass(frozen=True, slots=True)

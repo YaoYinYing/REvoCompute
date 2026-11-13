@@ -831,6 +831,7 @@ def test_demo_archive_is_refused_without_enqueuing(monkeypatch, tmp_path):
     task = module.task_store.get_task(task_id)
     task_root = Path(module.app.config["storage_resolver"].get_task_root(task))
     (task_root / "result.txt").write_text("score\n", encoding="utf-8")
+    assert module.task_store.claim_task_execution(task_id)
     module.task_store.update_task(task_id, status="finished")
     # Finalize the publication so the only thing standing between this row and
     # ``build_results_archive.apply_async`` is the demo guard: an unguarded

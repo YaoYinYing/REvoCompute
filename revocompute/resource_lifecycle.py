@@ -28,6 +28,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from revocompute import resource_ledger as rloan
+from revocompute import task_state
 from revocompute.db import TaskDatabase
 from revocompute.operational_events import emit_event
 
@@ -293,7 +294,7 @@ def detect_drift(
             )
             continue
         status = str(task.get("status") or "")
-        if status in {"finished", "failed", "cancelled"} | set(task_store.DELETED_STATUSES):
+        if task_state.normalize(status) in task_state.SETTLED:
             drift.append(
                 rloan.ReconciliationDrift(
                     kind="terminal_task_unsettled_allocation",

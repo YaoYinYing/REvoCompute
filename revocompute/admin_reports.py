@@ -62,6 +62,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from revocompute import resource_ledger as rloan
+from revocompute import task_state
 from revocompute import resource_lifecycle as rlife
 from revocompute.placement import PlacementDecision
 from revocompute.resource_policy import ResourceValidationError, ResolvedResources
@@ -84,14 +85,13 @@ MAX_TASK_SCAN = 5000
 #: activity" cannot be turned into an unbounded per-user scan.
 MAX_ACTIVITY_SUBJECTS = 500
 
-#: The canonical execution states, spelled exactly as ``TaskDatabase`` spells
-#: them.  The store owns the vocabulary (``VALID_STATUSES``) but not this
-#: grouping, so it is named once here for every projection that needs it.
-QUEUED_TASK_STATUSES = ("pending", "queued")
-RUNNING_TASK_STATUSES = ("running",)
+#: The execution-status groups an Admin report reads.  The vocabulary itself
+#: belongs to ``task_state``; these are only the tuples a count iterates.
+QUEUED_TASK_STATUSES = (task_state.PENDING, task_state.QUEUED)
+RUNNING_TASK_STATUSES = (task_state.RUNNING,)
 ACTIVE_TASK_STATUSES = QUEUED_TASK_STATUSES + RUNNING_TASK_STATUSES
-FAILED_TASK_STATUSES = ("failed",)
-FINISHED_TASK_STATUSES = ("finished",)
+FAILED_TASK_STATUSES = (task_state.FAILED,)
+FINISHED_TASK_STATUSES = (task_state.FINISHED,)
 
 #: Placement projection states.  ``unrecorded`` is a real answer for a Task
 #: submitted before placement decisions existed, and it is never a guessed class.
@@ -344,23 +344,10 @@ def placement_projections(task_row: Mapping[str, Any]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-#: The store's own status vocabulary, applied as groups here.  ``TaskDatabase``
-#: owns the individual spellings (``STOP_POLLING_STATUSES`` and friends); this
-#: module only needs the groupings a report reads.
-DELETED_STATUSES = frozenset({"deleted:finshed", "deleted:cancel"})
+#: An explicit user deletion is gone; the Admin report does not resurrect it.
+RETIRED_STATUSES = task_state.USER_DELETED
 
-_TERMINAL_STATUSES = frozenset(
-    {
-        "finished",
-        "failed",
-        "cancelled",
-        "deleting:finished",
-        "deleting:cancel",
-        "cleaned:finished",
-        "cleaned:cancel",
-        *DELETED_STATUSES,
-    }
-)
+_TERMINAL_STATUSES = task_state.SETTLED
 
 
 def _placement_view(placement: Mapping[str, Any]) -> dict[str, Any]:
@@ -476,7 +463,7 @@ def task_operations(
     failed_entries: list[dict[str, Any]] = []
     for task in scanned:
         status = str(task.get("status") or "").strip().lower()
-        if status in DELETED_STATUSES:
+        if status in RETIRED_STATUSES:
             # A deleted Task is gone; its artifacts and its placement are not
             # operational state any Admin surface should resurrect.
             continue

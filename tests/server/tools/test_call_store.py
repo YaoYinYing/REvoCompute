@@ -43,6 +43,13 @@ def _reserve(
     )
 
 
+def _finish(store: ToolCallDatabase, call_id: str, **fields):
+    """Settle a call through its real lifecycle: queued, preparing, running, finished."""
+    assert store.transition(call_id, expected=("queued",), status="preparing")
+    assert store.transition(call_id, expected=("preparing",), status="running")
+    return store.transition(call_id, expected=("running",), status="finished", **fields)
+
+
 def test_tool_ids_have_a_strict_separate_namespace():
     call_id = new_tool_call_id()
     assert normalize_tool_call_id(call_id) == call_id
@@ -136,10 +143,9 @@ def test_terminal_transition_releases_reserved_headroom(tmp_path):
     store = ToolCallDatabase(str(tmp_path / "revocompute.sqlite3"))
     call_id = _reserve(store, workspace_bytes=10, reserved_bytes=90, storage_max_bytes=100).call["tool_call_id"]
 
-    assert store.transition(
+    assert _finish(
+        store,
         call_id,
-        expected=("queued",),
-        status="finished",
         finished_at=101.0,
         expires_at=102.0,
         workspace_bytes=20,
@@ -174,10 +180,9 @@ def test_ttl_cleanup_removes_expired_row_and_workspace_but_preserves_running(mon
     (workspace.call_root(expired) / "output" / "old.txt").write_text("old", encoding="utf-8")
     (workspace.call_root(running) / "scratch" / "active.txt").write_text("active", encoding="utf-8")
     now = time.time()
-    assert store.transition(
+    assert _finish(
+        store,
         expired,
-        expected=("queued",),
-        status="finished",
         finished_at=now - 2,
         expires_at=now - 1,
     )
@@ -205,3 +210,15 @@ def test_workspace_delete_is_idempotent_when_a_concurrent_reclaimer_wins(monkeyp
     monkeypatch.setattr("revocompute.tool_workspace.shutil.rmtree", already_removed)
 
     workspace.delete(call_id)
+
+
+def test_only_the_listed_lifecycle_steps_are_accepted(tmp_path):
+    """The step table, not each caller's expected-set, decides what is legal."""
+    store = ToolCallDatabase(str(tmp_path / "revocompute.sqlite3"))
+    call = _reserve(store).call["tool_call_id"]
+
+    with pytest.raises(ValueError, match="Illegal Tool call transition"):
+        store.transition(call, expected=("queued",), status="finished", finished_at=101.0, expires_at=201.0)
+    assert store.transition(call, expected=("queued",), status="failed", finished_at=101.0, expires_at=201.0)
+    with pytest.raises(ValueError, match="Illegal Tool call transition"):
+        store.transition(call, expected=("failed",), status="running")

@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any
 
 from revocompute.contracts import validate_openapi_payload
+from revocompute import task_state
 from revocompute.media_types import media_type_for_path
 from revocompute.storage import manifest_byte_limit, open_published_regular_file, verify_regular_file
 
@@ -149,7 +150,7 @@ def project_manifest_for_serve(
     manifest: Mapping[str, Any],
     *,
     task_id: str | None = None,
-    status: str = "finished",
+    status: str = task_state.FINISHED,
     error: str | None = None,
     archive: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -176,7 +177,7 @@ def project_manifest_for_serve(
         task_id=resolved_task_id,
         status=status,
         terminal=True,
-        error=error if status == "failed" else None,
+        error=error if status == task_state.FAILED else None,
         archive=archive,
     )
 
@@ -482,7 +483,7 @@ def _publication_from_store(
     row = dict(row)
     if str(row.get("md5sum") or "").lower() != task_id:
         return None
-    if str(row.get("status") or "") != "finished":
+    if str(row.get("status") or "") != task_state.FINISHED:
         return None
     if str(row.get("task_type") or "") != str(manifest.get("task_type") or ""):
         return None

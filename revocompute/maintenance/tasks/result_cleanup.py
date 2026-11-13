@@ -17,19 +17,18 @@ from typing import Any
 
 from revocompute import resource_lifecycle
 from revocompute import resource_ledger as rloan
+from revocompute import task_state
 from revocompute.config import ComputeConfig, env_float
 from revocompute.db import TaskDatabase
 from revocompute.maintenance.model import PeriodicTask
 from revocompute.storage import StorageResolver
 
 _TASK_ID_PATTERN = re.compile(r"[a-fA-F0-9]{32}$")
-_TERMINAL_RESULT_STATUSES = {"finished", "failed", "cancelled"}
-_CLEANUP_CLAIMS = {
-    "finished": ("deleting:finished", "cleaned:finished"),
-    "failed": ("deleting:cancel", "cleaned:cancel"),
-    "cancelled": ("deleting:cancel", "cleaned:cancel"),
+
+#: The retention status a cleanup claim resumes into.
+_CLAIMED_CLEANUPS = {
+    claim: task_state.cleanup_completion(claim) for claim in task_state.DISPOSAL_CLAIMS
 }
-_CLAIMED_CLEANUPS = dict(_CLEANUP_CLAIMS.values())
 
 
 def _path_is_within(base_dir: str, candidate: str) -> bool:
@@ -168,17 +167,18 @@ def cleanup_expired_task_artifacts(
     remove_artifacts = _artifact_remover(results_folder, workspace_folder)
     cleaned = 0
     for task in task_store.list_tasks():
-        status = str(task.get("status") or "").strip().lower()
+        status = task_state.normalize(task.get("status"))
         if status in _CLAIMED_CLEANUPS:
             # A deletion that was already claimed and interrupted: resume it
             # from the durable claim rather than deciding eligibility again.
             claim_status = status
             cleaned_status = _CLAIMED_CLEANUPS[status]
-        elif status in _TERMINAL_RESULT_STATUSES:
+        elif status in task_state.OUTCOMES:
             finished_at = task.get("finished_at")
             if finished_at is None or finished_at > cutoff:
                 continue
-            claim_status, cleaned_status = _CLEANUP_CLAIMS[status]
+            claim_status = task_state.disposal(status).claim
+            cleaned_status = task_state.cleanup_completion(claim_status)
             if not task_store.claim_task_cleanup(
                 task["md5sum"],
                 expected_status=status,

@@ -82,6 +82,7 @@ from revocompute.operational_events import emit_event
 from revocompute import resource_ledger as rloan
 from revocompute.resource_ledger import AdmissionReason, EvidenceSource, LedgerReason, ReservationReason
 from revocompute import stage_state
+from revocompute import task_state
 from revocompute.resource_observations import work_items_projection
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
 from revocompute.result_projection import artifact_capability
@@ -337,7 +338,7 @@ def _live_work_items(task: dict[str, Any]) -> dict[str, Any] | None:
     task is read — a finalized task has the projection in its results manifest —
     and a missing or half-written file is simply "no detail yet".
     """
-    if task.get("status") != "running":
+    if task.get("status") != task_state.RUNNING:
         return None
     try:
         return work_items_projection(_task_result_dir(task))
@@ -351,7 +352,7 @@ def _live_work_items(task: dict[str, Any]) -> dict[str, Any] | None:
 
 def _build_running_trace(task: dict[str, Any]) -> str:
     """Build a human-readable running trace from task stage markers."""
-    if task.get("status") != "running":
+    if task.get("status") != task_state.RUNNING:
         return ""
     task_type_name = task.get("task_type") or default_task_type()
     try:
@@ -1078,7 +1079,7 @@ def _compute_allocation_callbacks(
                     attempt=attempt,
                     started_at=started_at,
                 ):
-                    task_store.update_task(task_id, status="running")
+                    task_store.update_task(task_id, status=task_state.RUNNING)
             except Exception:
                 # Bookkeeping must not withhold a grant for an allocation whose
                 # fact the accounting transition already wrote.
@@ -1193,7 +1194,7 @@ def _mark_allocation_unconfirmed(task_id: str, handle: str, message: str) -> Non
     would then fail through the generic path and its allocation would survive
     unowned.
     """
-    fields: dict[str, Any] = {"status": "running", "error": message}
+    fields: dict[str, Any] = {"status": task_state.RUNNING, "error": message}
     if handle:
         fields["slurm_job_id"] = handle
     try:
@@ -1505,7 +1506,7 @@ def _settle_unsubmitted_attempt(
     reason_code = "submission_failed"
     status = stage_state.FAILED
     current = str((task_store.get_task(task_id) or {}).get("status") or "").strip().lower()
-    if current == "cancelled" or current in task_store.CLEANUP_CLAIM_STATUSES | task_store.DELETED_STATUSES:
+    if current in task_state.RESULT_WRITES_REFUSED:
         status, reason_code = stage_state.CANCELLED, stage_state.Reason.TASK_CANCELLED
     _settle_stage_attempt(task_id, stage_name, attempt, status=status, reason_code=reason_code)
 
@@ -2264,7 +2265,7 @@ def resolve_reuse_source(
     owner_id = source.get("submitted_by_user_id")
     if owner_id is None or int(owner_id) != int(user_id):
         raise ReuseReferenceError("reuse_source_not_owned", "The source Task belongs to another caller")
-    if source.get("status") != "finished":
+    if task_state.normalize(source.get("status")) != task_state.FINISHED:
         raise ReuseReferenceError("reuse_source_not_completed", "The source Task has not completed")
     if expected_task_type is not None and source.get("task_type") != expected_task_type:
         raise ReuseReferenceError(
@@ -3686,16 +3687,12 @@ def _data_still_owned(task_id: str) -> bool:
 
 
 def _is_terminal_status(status: Any) -> bool:
-    normalized = str(status or "").strip().lower()
-    return normalized in {
-        "deleted:finshed",
-        "deleted:cancel",
-        "deleting:finished",
-        "deleting:cancel",
-        "cleaned:finished",
-        "cleaned:cancel",
-        "cancelled",
-    }
+    """Whether this Task's result tree is owned by a cancel, delete, or retire.
+
+    ``finished``/``failed`` are absent deliberately: a recovered run may still
+    republish over a settled result.  The vocabulary lives in ``task_state``.
+    """
+    return task_state.normalize(status) in task_state.RESULT_WRITES_REFUSED
 
 
 def _task_is_terminal(md5sum: str) -> bool:
@@ -3709,6 +3706,10 @@ def _record_failure(
 ) -> None:
     finish_time = time.time()
     if _task_is_terminal(md5sum):
+        return
+    # A finished result is never replaced by failure evidence.  A failed Task
+    # may still be republished and promoted to finished, so it is not refused.
+    if task_state.normalize((task_store.get_task(md5sum) or {}).get("status")) == task_state.FINISHED:
         return
     run_stage = (task_store.get_task(md5sum) or {}).get("run_stage") or run_stage
     stage_reason = reason_code or "execution_exception"
@@ -3769,7 +3770,7 @@ def _record_failure(
     _finalize_failed_results(task, error_message, finished_at=finish_time)
     task_store.update_task(
         md5sum,
-        status="failed",
+        status=task_state.FAILED,
         finished_at=finish_time,
         walltime=finish_time - start_time,
         error=error_message,
@@ -3944,12 +3945,12 @@ def _execute_compute_task(
     # refused; a restored finished, failed, or deleted row is left untouched,
     # because the refusal must not rewrite execution history a redelivery names.
     if CONFIG.demo_mode:
-        if str(task.get("status") or "").strip().lower() in {"pending", "queued", "running"}:
+        if task_state.normalize(task.get("status")) in task_state.ACTIVE:
             finished_at = time.time()
             started_at = task.get("started_at")
             task_store.update_task(
                 md5sum,
-                status="failed",
+                status=task_state.FAILED,
                 finished_at=finished_at,
                 walltime=(finished_at - float(started_at)) if started_at else None,
                 error="This demo deployment does not execute Tasks",
@@ -4090,7 +4091,7 @@ def _execute_compute_task(
     current_stage = str(task.get("run_stage") or (stages[0][0] if stages else "")).strip().lower()
 
     is_slurm = _get_job_executor() == "slurm"
-    initial_status = "queued" if is_slurm else "running"
+    initial_status = task_state.QUEUED if is_slurm else task_state.RUNNING
     if is_slurm and tt.workflow:
         # A resumed workflow has already run part of its work, so the Task is
         # running even while the next stage waits in the queue.  Re-entering it
@@ -4100,7 +4101,7 @@ def _execute_compute_task(
             if run["status"] == stage_state.COMPLETED
         ]
         if completed_runs:
-            initial_status = "running"
+            initial_status = task_state.RUNNING
     update_fields: dict[str, Any] = {
         "status": initial_status,
         "error": None,
@@ -4201,7 +4202,7 @@ def _execute_compute_task(
             )
             return
         if final_state == JobState.CANCELLED:
-            task_store.update_task(md5sum, status="cancelled", finished_at=time.time())
+            task_store.update_task(md5sum, status=task_state.CANCELLED, finished_at=time.time())
             _capture_debug_submission(task, entities, params)
             _cleanup_task_workspace(task)
             return
@@ -4239,7 +4240,7 @@ def _execute_compute_task(
             return
         task_store.update_task(
             md5sum,
-            status="finished",
+            status=task_state.FINISHED,
             finished_at=finish_time,
             walltime=finish_time - start_time,
             error=None,
@@ -4991,7 +4992,7 @@ def _recover_orphaned_tasks() -> int:
         return 0
     handled = 0
     for task in task_store.list_tasks():
-        if task.get("status") not in {"running", "queued"}:
+        if task_state.normalize(task.get("status")) not in task_state.EXECUTING:
             continue
         md5sum = task["md5sum"]
         slurm_job_id = str(task.get("slurm_job_id") or "").strip()
@@ -5030,7 +5031,7 @@ def _recover_orphaned_tasks() -> int:
                 # The allocation could not be stopped, so it may still be
                 # running.  Reporting the Task as queued would contradict a live
                 # attempt; keep it running and let the next pass retry.
-                task_store.update_task(md5sum, status="running", error=stop_error)
+                task_store.update_task(md5sum, status=task_state.RUNNING, error=stop_error)
                 logging.error("Recovery could not stop workflow %s: %s", md5sum, stop_error)
                 handled += 1
                 continue
@@ -5045,7 +5046,7 @@ def _recover_orphaned_tasks() -> int:
                     "A stage attempt claimed a dispatch but recorded no scheduler handle; "
                     "an allocation may exist, so recovery will not start a replacement; cancel the Task to settle it"
                 )
-                task_store.update_task(md5sum, status="running", error=message)
+                task_store.update_task(md5sum, status=task_state.RUNNING, error=message)
                 logging.error("Recovery refused workflow %s: %s", md5sum, message)
                 handled += 1
                 continue
@@ -5067,7 +5068,7 @@ def _recover_orphaned_tasks() -> int:
                         step["status"] = "interrupted"
             if not task_store.update_task(
                 md5sum,
-                status="pending",
+                status=task_state.PENDING,
                 slurm_job_id=None,
                 container_id=None,
                 workflow_state=json.dumps(state, sort_keys=True),
@@ -5078,7 +5079,9 @@ def _recover_orphaned_tasks() -> int:
             try:
                 resumed = run_compute_task.apply_async(args=[md5sum], kwargs={"task_type": task_type})
             except Exception as exc:  # pylint: disable=broad-except
-                task_store.update_task(md5sum, status="queued", error=f"Workflow recovery enqueue failed: {exc}")
+                task_store.update_task(
+                    md5sum, status=task_state.QUEUED, error=f"Workflow recovery enqueue failed: {exc}"
+                )
                 logging.exception("Recovery could not enqueue workflow %s", md5sum)
             else:
                 if not task_store.update_task(md5sum, celery_task_id=resumed.id):
@@ -5111,7 +5114,7 @@ def _recover_orphaned_tasks() -> int:
                 "SLURM task lost its worker; allocations "
                 f"{', '.join(unresolved)} could not be cancelled"
             )
-            task_store.update_task(md5sum, status="running", error=message)
+            task_store.update_task(md5sum, status=task_state.RUNNING, error=message)
             logging.error("Recovery left task %s running: %s", md5sum, message)
             handled += 1
             continue
@@ -5120,7 +5123,7 @@ def _recover_orphaned_tasks() -> int:
                 "A stage attempt claimed a dispatch but recorded no scheduler handle; "
                 "an allocation may exist, so recovery will not start a replacement; cancel the Task to settle it"
             )
-            task_store.update_task(md5sum, status="running", error=message)
+            task_store.update_task(md5sum, status=task_state.RUNNING, error=message)
             logging.error("Recovery refused task %s: %s", md5sum, message)
             handled += 1
             continue
@@ -5158,7 +5161,7 @@ def _recover_orphaned_tasks() -> int:
                 liveness = _slurm_job_state(slurm_job_id)
                 if liveness != "inactive":
                     message = f"SLURM task lost its worker{cancellation_error}"
-                    task_store.update_task(md5sum, status="running", error=message)
+                    task_store.update_task(md5sum, status=task_state.RUNNING, error=message)
                     logging.error("Recovery left task %s running: %s", md5sum, message)
                     handled += 1
                     continue
@@ -5181,7 +5184,7 @@ def _recover_orphaned_tasks() -> int:
             )
             handled += 1
             continue
-        if not container_id and task.get("status") == "running":
+        if not container_id and task_state.normalize(task.get("status")) == task_state.RUNNING:
             try:
                 task_store.finish_active_stage_runs(
                     md5sum, status=stage_state.INTERRUPTED, reason_code=stage_state.Reason.WORKER_LOST
@@ -5209,7 +5212,7 @@ def _finalize_after_poll(md5sum, task, tt, state):
     if state == JobState.FAILED:
         _record_failure(md5sum, task, task.get("started_at") or time.time(), "", "Recovered compute job failed")
     elif state == JobState.CANCELLED:
-        task_store.update_task(md5sum, status="cancelled", finished_at=time.time())
+        task_store.update_task(md5sum, status=task_state.CANCELLED, finished_at=time.time())
         _capture_debug_submission(task, _entities_from_input_form(task))
         _cleanup_task_workspace(task)
     else:
@@ -5238,7 +5241,7 @@ def _finalize_after_poll(md5sum, task, tt, state):
             return
         task_store.update_task(
             md5sum,
-            status="finished",
+            status=task_state.FINISHED,
             finished_at=finish_time,
             walltime=finish_time - (task.get("started_at") or finish_time),
             error=None,
@@ -5268,7 +5271,7 @@ def _reconcile_result_publications() -> dict[str, int]:
     summary: dict[str, int] = {}
     for task in task_store.list_tasks():
         status = str(task.get("status") or "").strip().lower()
-        if status not in {"finished", "failed"}:
+        if status not in task_state.PUBLISHED_RESULTS:
             continue
         state = storage.publication_state(task)
         summary[state] = summary.get(state, 0) + 1
@@ -5386,7 +5389,7 @@ def _reconcile_pending_storage_charges() -> dict[str, int]:
         if task is None:
             skipped += 1
             continue
-        if str(task.get("status") or "").strip().lower() not in {"finished", "failed"}:
+        if task_state.normalize(task.get("status")) not in task_state.PUBLISHED_RESULTS:
             skipped += 1
             continue
         user_id = int(task.get("submitted_by_user_id") or 0)
@@ -5629,20 +5632,20 @@ def run_compute_task(
         )
         raise
     refreshed = task_store.get_task(md5sum) or task
-    status = str(refreshed.get("status") or "")
+    status = task_state.normalize(refreshed.get("status"))
     finish_fields = {
         **event_fields,
         "stage_id": str(refreshed.get("run_stage") or "") or None,
         "slurm_job_id": str(refreshed.get("slurm_job_id") or "") or None,
         "duration_ms": max(0, round((time.monotonic() - started) * 1000)),
     }
-    if status == "failed":
+    if status == task_state.FAILED:
         emit_event("task.failed", level="ERROR", reason_code="task_execution_failed", **finish_fields)
         emit_event("worker.task.failed", level="ERROR", reason_code="task_execution_failed", **finish_fields)
     else:
-        if status == "finished":
+        if status == task_state.FINISHED:
             emit_event("task.finished", **finish_fields)
-        elif status == "cancelled":
+        elif status == task_state.CANCELLED:
             emit_event("task.cancelled", **finish_fields)
         emit_event("worker.task.finished", **finish_fields)
     return result
@@ -5685,7 +5688,7 @@ def build_results_archive(self, md5sum: str):
     """
     task_id = _normalize_task_id(md5sum)
     task = task_store.get_task(task_id) if task_id else None
-    if task is None or task.get("status") not in {"finished", "failed"}:
+    if task is None or task_state.normalize(task.get("status")) not in task_state.PUBLISHED_RESULTS:
         raise ValueError("Task results are not ready")
     if _storage().publication_state(task) != PUBLICATION_AVAILABLE:
         raise ValueError("Task results are not published")
