@@ -7,23 +7,20 @@ JAR digests live in the family's `upstream.json`. This page records the
 cross-cutting behavior and acceptance evidence that a maintainer cannot read
 from those declarations.
 
-## Start-point ownership
+## Start-point resolution
 
-CAVER explores tunnels from one point inside the structure. The Task declares
-`point`, `atom`, `residue`, `ligand`, and `group` modes and their conditional
-fields; the Runner resolves the authored identity against the submitted PDB
-instead of trusting the client.
+CAVER explores tunnels from one point inside the structure. The Task contract
+declares the modes, their conditional fields, and the point-source vocabulary;
+this section records how the Runner resolves them.
 
-- `point` carries explicit Angstrom XYZ. The selected source distinguishes a
-  typed point, a viewer crosshair, and an explicit centroid or centre-of-mass
-  conversion; the last two also require the selected residues, atom serials, and
-  reference digest.
+- The Runner resolves every authored identity against the submitted PDB instead
+  of trusting the client.
 - An explicit `centroid` is the arithmetic mean of the recorded atoms, and the
   Runner recomputes it within 0.01 Angstrom. An explicit `com` is the client's
   declared mass-weighted method with its hydrogen policy; the Runner records
   that method and does not recompute it.
-- Neither conversion renames CAVER's own residue or group centre. Native
-  `atom`, `residue`, `ligand`, and `group` selections keep CAVER's directives.
+- Neither conversion renames CAVER's own residue, ligand or group centre; a
+  native selection keeps CAVER's own directive.
 - An insertion code, an ambiguous alternate location, a chainless residue beside
   named chains, or a serial outside the retained atom set is refused rather than
   guessed.
