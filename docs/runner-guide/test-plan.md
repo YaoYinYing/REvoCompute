@@ -79,3 +79,7 @@ generic loader with synthetic plans, but only target-host execution produces a
 promotable receipt. The evidence levels and the release gate are owned by
 [Runner Family Protocol](runner-family-protocol.md); the live-test command is
 owned by [Live Testing and Receipts](../operator-guide/live-testing.md).
+
+When a delivered run must be investigated rather than re-executed through the
+plan, [Live Task Reproduction](../developer-guide/live-task-reproduction.md)
+owns the snapshot, pinned-runtime, and representation-reconciliation mechanics.
