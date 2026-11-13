@@ -82,6 +82,8 @@ interface Harness {
 interface HarnessOptions {
   rejection?: number[];
   box?: { lengths: [number, number, number] };
+  /** Per-frame declared cell; takes precedence over `box` when present. */
+  cell?: (frame: number) => { lengths: [number, number, number] } | null;
   run?: (input: FitJobInput) => Promise<FitJobResult>;
   coordinates?: (frame: number, indices: readonly number[]) => Float64Array;
 }
@@ -122,7 +124,7 @@ function harness(options: HarnessOptions = {}): Harness {
       return () => { sceneListener = null; };
     },
     readTrajectoryFrame: (frame: number, indices: readonly number[]) => (options.coordinates ?? coordinatesOf)(frame, indices),
-    trajectoryFrameCell: () => cell,
+    trajectoryFrameCell: (frame: number) => (options.cell ? options.cell(frame) : cell),
     applyPreviewTransform: apply,
     setSelectionMode: selectMode,
   } as never;
@@ -290,6 +292,10 @@ describe('trajectory fit panel', () => {
     expect(metadata.fit.mode).toBe('fit');
     expect(metadata.fit.atomCount).toBe(4);
     expect(metadata.transform).not.toBeNull();
+    expect(metadata.periodicBoundary.policy).toBe('none');
+    expect(metadata.periodicBoundary.box).toBeNull();
+    expect(metadata.periodicBoundary.referenceBox).toBeNull();
+    expect(metadata.periodicBoundary.cellConstant).toBeNull();
     expect(statusNode(h).textContent).toContain('not a server-published result');
   });
 
@@ -412,5 +418,33 @@ describe('trajectory fit panel', () => {
     const metadata = JSON.parse(h.download.mock.calls[1]![1]);
     expect(metadata.periodicBoundary.spanningFrames).toEqual([1]);
     expect(metadata.periodicBoundary.check).toContain('fit selection on every frame');
+    expect(metadata.periodicBoundary.box.lengths).toEqual([2, 2, 2]);
+    expect(metadata.periodicBoundary.referenceBox.lengths).toEqual([2, 2, 2]);
+    expect(metadata.periodicBoundary.cellConstant).toBe(true);
+  });
+
+  it('classifies each frame against its own declared cell, not the reference sample', async () => {
+    // Frame 1 spans 8 Å. The reference frame's 20 Å cell would put that below
+    // the half-box threshold; frame 1's own 10 Å cell puts it above it.
+    const compact = new Float64Array([0, 0, 0, 0.5, 0, 0, 0, 0.5, 0, 0, 0, 0.5]);
+    const spread = new Float64Array([0, 0, 0, 8, 0, 0, 0, 8, 0, 0, 0, 0]);
+    const h = harness({
+      cell: (frame) => ({ lengths: frame === 0 ? [20, 20, 20] : [10, 10, 10] }),
+      coordinates: (frame) => (frame === 0 ? compact : spread),
+    });
+    await h.panel.frameDisplayed(0, 2);
+    buttonByText(h, 'Fit and preview').fire('click');
+    await fitted(h);
+    expect(statusNode(h).textContent).toContain('Frames whose fit selection spans the box: 2');
+
+    // Exporting the non-reference frame must state that frame's own cell.
+    await h.panel.frameDisplayed(1, 2);
+    buttonByText(h, 'Export PDB + sidecar').fire('click');
+    const metadata = JSON.parse(h.download.mock.calls[1]![1]);
+    expect(metadata.frame.index).toBe(1);
+    expect(metadata.periodicBoundary.spanningFrames).toEqual([1]);
+    expect(metadata.periodicBoundary.box.lengths).toEqual([10, 10, 10]);
+    expect(metadata.periodicBoundary.referenceBox.lengths).toEqual([20, 20, 20]);
+    expect(metadata.periodicBoundary.cellConstant).toBe(false);
   });
 });

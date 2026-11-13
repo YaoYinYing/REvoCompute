@@ -58,10 +58,11 @@ coordinates and **Cancel fit** stops a running job. The reference and selection
 controls stay locked for the duration of a fit, and a completed preview is
 always labelled and exported with the reference it was actually fitted to. The
 reported RMSD is a preview metric on the fit selection, not simulation dynamics
-or a stability claim. A periodic box declared by the source is shown, with a
+or a stability claim. Each frame's own declared unit cell is used, with a
 warning when positions span it; the periodic check covers the whole topology at
-the reference frame and the fit selection on every frame. The browser never
-unwraps coordinates, reconstructs chains, or changes topology, and such a
+the reference frame and the fit selection on every frame against that frame's
+cell, and the exported sidecar states the exported frame's own cell. The browser
+never unwraps coordinates, reconstructs chains, or changes topology, and such a
 wrapped preview carries no scientific claim. **Export PDB + sidecar** writes the
 current aligned frame and the JSON provenance record together. The export is a
 new local derived artifact, not a server-published result and not authenticated

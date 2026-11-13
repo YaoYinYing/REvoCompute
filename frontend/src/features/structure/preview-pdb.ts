@@ -10,7 +10,7 @@
  * An exported file is a new local derived artifact. It is not a server-published
  * scientific output and no authenticated Tool validated it.
  */
-import { applyRigidTransform, type FitMode, type PeriodicBox, type PbcPolicy, type RigidTransform } from './trajectory-fit';
+import { applyRigidTransform, pbcPolicyOf, type FitMode, type PeriodicBox, type PbcPolicy, type RigidTransform } from './trajectory-fit';
 import type { SceneAtom } from './molecular-scene';
 
 export class PdbExportError extends Error {
@@ -42,11 +42,16 @@ export interface PreviewExportContext {
   rmsd: number | null;
   pbcPolicy: PbcPolicy;
   pbcSpanning: boolean;
-  /** Frames whose fit selection spans the declared box, zero-based. */
+  /** Frames whose fit selection spans the cell that frame declares, zero-based. */
   pbcSpanningFrames: readonly number[];
   /** What the periodic check covered; stated so the claim is not broader than it is. */
   pbcCheck: string;
+  /** The cell the exported frame itself declares. */
   box: PeriodicBox | null;
+  /** The cell the reference frame declares, or null when it declares none. */
+  referenceBox: PeriodicBox | null;
+  /** Verified constancy across the analyzed frames; false when any frame differed or declared no cell. */
+  cellConstant: boolean;
   source: PreviewExportSource;
 }
 
@@ -144,6 +149,16 @@ export function writePreviewPdb(atoms: readonly SceneAtom[], transform: RigidTra
   return `${lines.join('\n')}\n`;
 }
 
+/** Serialize a declared cell, keeping lattice-angle units explicit. A zero or absent cell is no box. */
+function boxMetadata(box: PeriodicBox | null): Record<string, unknown> | null {
+  if (!box || pbcPolicyOf(box) !== 'periodic') return null;
+  return {
+    lengths: [...box.lengths],
+    anglesInRadians: box.angles ? [...box.angles] : null,
+    anglesUnit: 'radians',
+  };
+}
+
 /** The sidecar that makes the exported preview auditable without the viewer. */
 export function writePreviewMetadata(context: PreviewExportContext, transform: RigidTransform | null): string {
   return `${JSON.stringify({
@@ -170,13 +185,9 @@ export function writePreviewMetadata(context: PreviewExportContext, transform: R
       positionsSpanBoundary: context.pbcSpanning,
       spanningFrames: [...context.pbcSpanningFrames],
       check: context.pbcCheck,
-      box: context.box
-        ? {
-          lengths: [...context.box.lengths],
-          anglesInRadians: context.box.angles ? [...context.box.angles] : null,
-          anglesUnit: 'radians',
-        }
-        : null,
+      box: boxMetadata(context.box),
+      referenceBox: boxMetadata(context.referenceBox),
+      cellConstant: context.pbcPolicy === 'periodic' ? context.cellConstant : null,
       note: 'No unwrapping or chain reconstruction was performed. Wrapped coordinates may invalidate a rigid fit; unwrap with a validated server Tool for analysis.',
     },
     source: {

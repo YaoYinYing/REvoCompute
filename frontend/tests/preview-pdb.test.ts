@@ -126,6 +126,8 @@ describe('preview PDB writer', () => {
       pbcSpanningFrames: [2, 5],
       pbcCheck: 'Whole topology at the reference frame and the fit selection on every frame.',
       box: { lengths: [10, 11, 12], angles: [1.5707963267948966, 1.5707963267948966, 1.5707963267948966] },
+      referenceBox: { lengths: [10, 11, 12], angles: [1.5707963267948966, 1.5707963267948966, 1.5707963267948966] },
+      cellConstant: true,
       source: {
         taskId: 'a'.repeat(32),
         topologyPath: 'topology.pdb',
@@ -148,10 +150,43 @@ describe('preview PDB writer', () => {
     expect(metadata.periodicBoundary.check).toContain('fit selection on every frame');
     expect(metadata.periodicBoundary.box.anglesUnit).toBe('radians');
     expect(metadata.periodicBoundary.box.anglesInRadians).toHaveLength(3);
+    expect(metadata.periodicBoundary.referenceBox.lengths).toEqual([10, 11, 12]);
+    expect(metadata.periodicBoundary.cellConstant).toBe(true);
     expect(metadata.periodicBoundary.note).toContain('No unwrapping');
     expect(metadata.source.coordinates.sha256).toBe('c'.repeat(64));
     expect(metadata.source.taskId).toBe('a'.repeat(32));
     expect(metadata.derived).toContain('Not a server-published scientific output');
     expect(metadata.transform).toBeNull();
+  });
+
+  it('reports a zero-length declared cell as no box', () => {
+    const metadata = JSON.parse(writePreviewMetadata({
+      frame: 0,
+      frameCount: 1,
+      referenceFrame: 0,
+      mode: 'fit',
+      fitAtomCount: 3,
+      selectionSignature: 'sig',
+      rmsd: 0,
+      pbcPolicy: 'none',
+      pbcSpanning: false,
+      pbcSpanningFrames: [],
+      pbcCheck: 'Not applicable; the source declares no periodic box.',
+      box: { lengths: [0, 0, 0], angles: [0, 0, 0] },
+      referenceBox: { lengths: [0, 0, 0], angles: [0, 0, 0] },
+      cellConstant: false,
+      source: {
+        taskId: 'a'.repeat(32),
+        topologyPath: 'topology.pdb',
+        topologySha256: 'b'.repeat(64),
+        topologyFormat: 'pdb',
+        coordinatesPath: 'samples.xtc',
+        coordinatesSha256: 'c'.repeat(64),
+        coordinateFormat: 'xtc',
+      },
+    }, null));
+    expect(metadata.periodicBoundary.box).toBeNull();
+    expect(metadata.periodicBoundary.referenceBox).toBeNull();
+    expect(metadata.periodicBoundary.cellConstant).toBeNull();
   });
 });

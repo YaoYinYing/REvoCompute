@@ -62,9 +62,23 @@ export interface TrajectoryFitPanel {
 interface PbcState {
   policy: PbcPolicy;
   spanning: boolean;
-  /** Zero-based frames whose fit selection spans the declared box. */
+  /** Zero-based frames whose fit selection spans the cell declared by that frame. */
   spanningFrames: number[];
-  box: PeriodicBox | null;
+  /** The cell the reference frame declares, used for its whole-topology check. */
+  referenceBox: PeriodicBox | null;
+  /** True only when every analyzed frame declared the same periodic cell as the reference. */
+  constant: boolean;
+}
+
+const EMPTY_PBC: PbcState = { policy: 'none', spanning: false, spanningFrames: [], referenceBox: null, constant: false };
+
+/** Compare two declared cells, including lattice angles when both provide them. */
+function sameCell(left: PeriodicBox | null, right: PeriodicBox | null): boolean {
+  if (!left || !right) return left === right;
+  const close = (first: number, second: number): boolean => Math.abs(first - second) <= 1e-6;
+  if (!left.lengths.every((length, axis) => close(length, right.lengths[axis]!))) return false;
+  if (!left.angles || !right.angles) return left.angles === right.angles;
+  return left.angles.every((angle, axis) => close(angle, right.angles![axis]!));
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -119,7 +133,7 @@ export function createTrajectoryFitPanel(options: TrajectoryFitPanelOptions): Tr
   let fitAtomCount = 0;
   let fitSignature = '';
   let fitSource: { revision: number; digest: string } | null = null;
-  let pbc: PbcState = { policy: 'none', spanning: false, spanningFrames: [], box: null };
+  let pbc: PbcState = { ...EMPTY_PBC };
   let activeJob: AbortController | null = null;
   let jobActive = false;
   let jobGeneration = 0;
@@ -233,7 +247,7 @@ export function createTrajectoryFitPanel(options: TrajectoryFitPanelOptions): Tr
     fitAtomCount = 0;
     fitSignature = '';
     fitSource = null;
-    pbc = { policy: 'none', spanning: false, spanningFrames: [], box: null };
+    pbc = { ...EMPTY_PBC };
     // A different source must never inherit the previous source's display
     // transform; the decorator is cleared as well as the cached matrices.
     void controller.applyPreviewTransform(null).catch(() => undefined);
@@ -287,16 +301,22 @@ export function createTrajectoryFitPanel(options: TrajectoryFitPanelOptions): Tr
       publish(messageOf(error));
     });
     const value = rmsd?.[frame];
+    // The displayed frame declares its own cell; never label it with the
+    // reference frame's sample.
+    const frameBox = controller.trajectoryFrameCell(frame);
+    const framePolicy = pbcPolicyOf(frameBox);
     publish(Number.isFinite(value)
       ? t('results.trajectory.fitApplied', {
         rmsd: Number(value).toFixed(3),
         atoms: fitAtomCount,
         reference: appliedReference + 1,
-        pbc: pbc.policy === 'periodic'
+        pbc: framePolicy === 'periodic'
           ? (pbc.spanning
-            ? t('results.trajectory.fitPbcSpanning', { box: boxLabel(pbc.box), check: periodicCheck() })
-            : t('results.trajectory.fitPbcDeclared', { box: boxLabel(pbc.box), check: periodicCheck() }))
-          : t('results.trajectory.fitPbcNone'),
+            ? t('results.trajectory.fitPbcSpanning', { box: boxLabel(frameBox), check: periodicCheck() })
+            : t('results.trajectory.fitPbcDeclared', { box: boxLabel(frameBox), check: periodicCheck() }))
+          : pbc.policy === 'periodic'
+            ? t('results.trajectory.fitPbcFrameNone', { check: periodicCheck() })
+            : t('results.trajectory.fitPbcNone'),
       })
       : t('results.trajectory.fitAppliedNoRmsd', { atoms: fitAtomCount, reference: appliedReference + 1 }));
   };
@@ -341,14 +361,20 @@ export function createTrajectoryFitPanel(options: TrajectoryFitPanelOptions): Tr
       validateFitSelection(reference);
       // Whole-topology spanning check at the reference frame, bounded; a very
       // large topology falls back to the fit subset. Every fitted frame's fit
-      // selection is checked below as its coordinates are read.
+      // selection is checked below against the cell that frame declares, so an
+      // NPT trajectory whose cell changes is judged per frame rather than with
+      // the reference frame's sample.
       const allIndices = uniqueIndices(controller.allAtoms());
       const pbcIndices = allIndices.length <= 20000 ? allIndices : indices;
       const allCoordinates = controller.readTrajectoryFrame(fitReference, pbcIndices);
-      const box = controller.trajectoryFrameCell(fitReference);
-      const policy = pbcPolicyOf(box);
+      const referenceBox = controller.trajectoryFrameCell(fitReference);
+      const referencePolicy = pbcPolicyOf(referenceBox);
       const spanningFrames = new Set<number>();
-      if (box && positionsSpanPeriodicBoundary(allCoordinates, box)) spanningFrames.add(fitReference);
+      if (referencePolicy === 'periodic' && referenceBox
+        && positionsSpanPeriodicBoundary(allCoordinates, referenceBox)) spanningFrames.add(fitReference);
+      let analyzedFrames = 0;
+      let periodicFrames = 0;
+      let constantCells = referencePolicy === 'periodic';
       publish(t('results.trajectory.fitWorking'));
       const result = await client.run({
         mode: selectedMode,
@@ -357,7 +383,15 @@ export function createTrajectoryFitPanel(options: TrajectoryFitPanelOptions): Tr
         frameCount,
         readFrame: (frame) => {
           const coordinates = controller.readTrajectoryFrame(frame, indices);
-          if (box && positionsSpanPeriodicBoundary(coordinates, box)) spanningFrames.add(frame);
+          const frameBox = controller.trajectoryFrameCell(frame);
+          analyzedFrames += 1;
+          if (pbcPolicyOf(frameBox) === 'periodic' && frameBox) {
+            periodicFrames += 1;
+            if (!sameCell(frameBox, referenceBox)) constantCells = false;
+            if (positionsSpanPeriodicBoundary(coordinates, frameBox)) spanningFrames.add(frame);
+          } else {
+            constantCells = false;
+          }
           return coordinates;
         },
         signal: job.signal,
@@ -372,11 +406,13 @@ export function createTrajectoryFitPanel(options: TrajectoryFitPanelOptions): Tr
       fitAtomCount = indices.length;
       fitSignature = selectionSignature([], atoms) || indices.join(',');
       fitSource = snapshot ? { revision: snapshot.topologyRevision, digest: snapshot.topologyDigest } : null;
+      const policy: PbcPolicy = periodicFrames > 0 ? 'periodic' : 'none';
       pbc = {
         policy,
         spanning: spanningFrames.size > 0,
         spanningFrames: [...spanningFrames].sort((left, right) => left - right),
-        box,
+        referenceBox,
+        constant: policy === 'periodic' && analyzedFrames === frameCount && constantCells,
       };
       appliedReference = fitReference;
       appliedMode = selectedMode;
@@ -453,7 +489,11 @@ export function createTrajectoryFitPanel(options: TrajectoryFitPanelOptions): Tr
         pbcSpanning: pbc.spanning,
         pbcSpanningFrames: pbc.spanningFrames,
         pbcCheck: pbc.policy === 'periodic' ? periodicCheck() : 'Not applicable; the source declares no periodic box.',
-        box: pbc.box,
+        // The exported frame's own cell, not the reference frame's sample; the
+        // reference cell and verified constancy stay available alongside it.
+        box: controller.trajectoryFrameCell(currentFrame),
+        referenceBox: pbc.referenceBox,
+        cellConstant: pbc.constant,
         source: {
           taskId: options.taskId,
           topologyPath: source.topology.path,

@@ -175,12 +175,15 @@ a preview metric; it is not simulation dynamics, stability, or a published
 result. Reference frame 0 is the default, and a reader-selected frame is
 explicit.
 
-Periodic boundaries are shown as the source declares them. A declared box is
-reported together with the fit selection of every fitted frame and the whole
-topology at the reference frame; a spanning warning carries no scientific
-claim. The browser never unwraps coordinates, reconstructs chains, reorders
-frames, changes box vectors, or alters atom identity; unwrapping for analysis
-belongs to a validated server Tool.
+Periodic boundaries are read from each frame's own declared unit cell, so a
+changing-cell NPT trajectory is judged against the cell in force at the frames
+being compared. Spanning is checked for the fit selection of every fitted frame
+against that frame's cell, and for the whole topology at the reference frame
+against the reference cell; a source that declares no cell is reported as
+non-periodic and no spanning check applies. A spanning warning carries no
+scientific claim. The browser never unwraps coordinates, reconstructs chains,
+reorders frames, changes box vectors, or alters atom identity; unwrapping for
+analysis belongs to a validated server Tool.
 
 The fit runs in a dedicated Web Worker with transfer-safe coordinate chunks,
 progress, `AbortSignal` cancellation, a generation token that drops stale
@@ -202,7 +205,8 @@ Export writes only formats backed by an implemented writer and topology
 mapping. The trajectory release writes a single-model PDB of the displayed
 aligned frame plus a JSON sidecar with the source task, artifact paths and
 digests, frame/reference, fit parameters and transform, periodic-boundary
-policy, and lattice-angle units. Atom names, chain IDs, insertion codes,
+policy with the exported frame's own cell, the reference cell, verified cell
+constancy, and lattice-angle units. Atom names, chain IDs, insertion codes,
 alternate locations, elements, and Angstrom units are written from the source
 identity; a topology the fixed PDB columns cannot represent is refused rather
 than truncated. The export is a new local derived artifact: it is not a
