@@ -530,6 +530,9 @@ export class CaverPicker {
     if (snapshot.topologyRevision !== this.topologyRevision) {
       this.topologyRevision = snapshot.topologyRevision;
       this.generation += 1;
+      // The viewer dropped its selection with the old topology, so re-derive it
+      // from the canonical parameters even when their signature did not change.
+      this.appliedSignature = '';
     }
     this.syncResidueNames(viewer);
     this.sanitizeMode();
@@ -537,11 +540,15 @@ export class CaverPicker {
     const selected = caverParameterSelection(this.context.parameters());
     const signature = JSON.stringify(selected);
     if (signature !== this.appliedSignature) {
-      this.appliedSignature = signature;
-      if (selected.residues.length) {
-        viewer.select(selected.residues.length === 1 ? selected.residues[0]! : { residues: selected.residues });
-        viewer.focus(selected.residues.length === 1 ? selected.residues[0]! : { residues: selected.residues });
+      const target = selected.residues.length === 1 ? selected.residues[0]! : { residues: selected.residues };
+      // The structure may still be loading; a select the viewer rejected must
+      // not be recorded as applied, or the next refresh would skip it.
+      if (selected.residues.length && !viewer.select(target)) {
+        this.render();
+        return;
       }
+      this.appliedSignature = signature;
+      if (selected.residues.length) viewer.focus(target);
       viewer.setCrosshair(selected.point);
       viewer.annotate(selected.point ? { point: selected.point, label: t('ct.caver.crosshair') } : null);
     }
@@ -646,8 +653,16 @@ export class CaverPicker {
       return;
     }
     if (mode === 'atom') {
-      // Atom mode needs an explicit choice from the atoms of one residue.
+      // Atom mode needs an explicit choice from the atoms of one residue. Any
+      // other selection invalidates the atom committed for the old residue: the
+      // same atom name can exist in both, so keeping it would silently move the
+      // target.
       this.error = null;
+      if (this.context.parameters().start_atom_name
+        && (this.selection.length !== 1 || !this.atomCommittedIn(this.selection[0]!))) {
+        this.write('start_atom_name', '');
+        this.write('start_altloc', '');
+      }
       this.render();
       return;
     }
@@ -830,12 +845,28 @@ export class CaverPicker {
     return label;
   }
 
+  /**
+   * Whether the canonical atom names an atom in this residue.
+   *
+   * Atom mode records only the authored residue address, atom name and altloc.
+   * A same-named atom in another residue is a different atom, so the option is
+   * selected only when the residue address agrees too.
+   */
+  private atomCommittedIn(residue: SelectedResidue): boolean {
+    const parameters = this.context.parameters();
+    return Boolean(parameters.start_atom_name)
+      && !residue.insertion_code
+      && parameters.start_chain === residue.auth_chain
+      && parameters.start_residue_number === String(residue.auth_seq_id);
+  }
+
   private renderAtomPicker(): void {
     if (this.selection.length !== 1) {
       this.actions.append(element('p', 'ct-caver-hint', t('ct.caver.oneResidue')));
       return;
     }
-    const candidates = residueAtoms(this.options.viewer()?.allAtoms() || [], this.selection[0]!);
+    const residue = this.selection[0]!;
+    const candidates = residueAtoms(this.options.viewer()?.allAtoms() || [], residue);
     if (!candidates.length) {
       this.actions.append(element('p', 'ct-caver-hint', t('ct.caver.noAtoms')));
       return;
@@ -845,6 +876,7 @@ export class CaverPicker {
     select.setAttribute('aria-label', t('ct.caver.atom'));
     const parameters = this.context.parameters();
     const chosenAlt = parameters.start_altloc || '';
+    const committedHere = this.atomCommittedIn(residue);
     // The browser displays the first option until one is marked selected, so an
     // unselected canonically-empty state needs its own option; otherwise the
     // displayed atom is silently not the committed one and a one-atom residue
@@ -855,7 +887,8 @@ export class CaverPicker {
     let chosen = false;
     candidates.forEach((atom, index) => {
       const name = atom.identity.atomName + (atom.identity.altloc ? ` (${atom.identity.altloc})` : '');
-      const matches = atom.identity.atomName === parameters.start_atom_name
+      const matches = committedHere
+        && atom.identity.atomName === parameters.start_atom_name
         && (atom.identity.altloc || '') === chosenAlt;
       chosen ||= matches;
       select.append(new Option(`${name} · ${atom.identity.atomSerial}`, String(index), false, matches));
