@@ -315,3 +315,37 @@ def test_artifact_reference_bytes_are_charged_to_the_same_budget(monkeypatch, tm
 
     assert response.status_code == 400, response.get_json()
     assert response.get_json()["code"] == "input_file_size_limit"
+
+
+def test_artifact_reference_shares_the_request_budget_with_an_upload(monkeypatch, tmp_path):
+    tools = _md_tools(tmp_path, {"request_bytes": 1000, "input_bytes": {"topology": 800, "trajectory": 800}})
+    module = _app(
+        monkeypatch,
+        tmp_path,
+        {"TOOL_REQUEST_MAX_BYTES": "1000", "TOOL_STORAGE_MAX_BYTES": "4096", "TOOL_OUTPUT_MAX_BYTES": "1024"},
+        tools_dir=tools,
+    )
+    monkeypatch.setattr(module.celery, "send_task", lambda *args, **kwargs: SimpleNamespace(id="never"))
+    client = module.app.test_client()
+    headers = _test_client_auth(module, "owner")
+
+    # A 400-byte topology artifact and a 700-byte trajectory upload each fit
+    # their own 800-byte role cap, but together cross the 1000-byte request
+    # budget. Server-owned artifact bytes must be charged to that same budget
+    # before the second input is materialized.
+    source_id = _artifact_task(module, "frame.gro", b"x" * 400)
+    trajectory = (FIXTURES / "tiny.xtc").read_bytes().ljust(700, b"\0")
+    response = client.post(
+        "/compute/api/tools/md_trajectory_convert/call",
+        headers=headers,
+        data={
+            "parameters": "{}",
+            "file_roles": ["trajectory"],
+            "files": [(io.BytesIO(trajectory), "tiny.xtc")],
+            "artifact_references": f"@{source_id}/frame.gro",
+            "artifact_roles": "topology",
+        },
+    )
+
+    assert response.status_code == 400, response.get_json()
+    assert response.get_json()["code"] == "input_total_size_limit"
