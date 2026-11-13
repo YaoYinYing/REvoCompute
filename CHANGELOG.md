@@ -27,6 +27,17 @@ invented release numbers or dates.
     - Add the Version destination to the signed-in Account navigation, showing
       the display version, short and full revision, build time, release state and
       the changelog, and diagnosing mixed or stale frontend/server assets.
+    - Add one typed molecular scene contract shared by the Create Task
+      inspector and the Result workspace: stable authored atom/residue
+      identity, immutable topology revision and source digest, Angstrom
+      coordinates, stale-selection rejection, crosshair and axis-aligned box
+      overlays, geometric centroid and mass-weighted centre of mass with an
+      explicit hydrogen policy, and origin-tagged selection events that
+      suppress form/viewer echoes.
+    - Add Normal, Expand, and Maximize display modes to the one mounted
+      molecular stage, with a focus trap, Escape and focus return, native
+      fullscreen where available, a labelled fallback otherwise, and the
+      camera, selection, trajectory frame, and overlays preserved across modes.
   - Workflow:
     - Make `pyproject.toml` the one editable version source, with deterministic
       `check`/`sync` for the frontend manifest and lockfile, `uv.lock` and the

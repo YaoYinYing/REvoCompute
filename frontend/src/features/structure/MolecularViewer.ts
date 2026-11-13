@@ -1,11 +1,13 @@
 import { MeshBuilder } from 'molstar/lib/mol-geo/geometry/mesh/mesh-builder.js';
 import { Mesh } from 'molstar/lib/mol-geo/geometry/mesh/mesh.js';
+import { addBoundingBox } from 'molstar/lib/mol-geo/geometry/mesh/builder/box.js';
+import { addSimpleCylinder } from 'molstar/lib/mol-geo/geometry/mesh/builder/cylinder.js';
 import { addSphere } from 'molstar/lib/mol-geo/geometry/mesh/builder/sphere.js';
 import { Shape } from 'molstar/lib/mol-model/shape.js';
 import { ShapeRepresentation } from 'molstar/lib/mol-repr/shape/representation.js';
 import { parseRecordedSpheres } from './sphere-geometry';
 import { OrderedSet } from 'molstar/lib/mol-data/int.js';
-import { Sphere3D } from 'molstar/lib/mol-math/geometry.js';
+import { Box3D, Sphere3D } from 'molstar/lib/mol-math/geometry.js';
 import { Vec3 } from 'molstar/lib/mol-math/linear-algebra/3d/vec3.js';
 import {
   StructureElement,
@@ -24,6 +26,46 @@ import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition.js'
 import 'molstar/build/viewer/molstar.css';
 import { t } from '../../app/i18n';
 import { normalizePdbFrameDelimiters } from './pdb-frames';
+import {
+  ANGSTROM,
+  atomKey,
+  authoredResidue,
+  SceneState,
+  selectionSignature,
+  structuralDigest,
+  type AxisAlignedBox,
+  type CenterOfMassOptions,
+  type CoordinateUnits,
+  type MolecularScene,
+  type MolecularSceneEvent,
+  type MolecularSelection,
+  type SceneAtom,
+  type SceneInitialization,
+  type SceneMutationMeta,
+  type SceneSelection,
+  type SceneSnapshot,
+  type SelectedResidue,
+  type StructureSource,
+  type XYZ,
+} from './molecular-scene';
+import { allAtoms as allSceneAtoms, selectionAtoms, selectionResidues } from './molstar-scene';
+
+export { authoredResidue };
+export type {
+  AxisAlignedBox,
+  CenterOfMassOptions,
+  CoordinateUnits,
+  MolecularScene,
+  MolecularSceneEvent,
+  MolecularSelection,
+  SceneAtom,
+  SceneInitialization,
+  SceneMutationMeta,
+  SceneSnapshot,
+  SelectedResidue,
+  StructureSource,
+  XYZ,
+};
 
 const REPRESENTATIONS: Record<string, string> = {
   cartoon: 'cartoon',
@@ -43,45 +85,6 @@ const COLORS: Record<string, string> = {
 
 const BACKGROUNDS = { light: 0xfcfdfb, dark: 0x111318 } as const;
 
-export interface StructureSource {
-  data: string;
-  format: 'pdb' | 'mmcif' | 'pqr';
-  label?: string;
-}
-
-export interface MolecularSelection {
-  chain?: string;
-  entity?: string;
-  residue?: number;
-  numbering?: 'auth_seq_id' | 'label_seq_id';
-  /** PDB insertion code: it distinguishes e.g. residue 42A from residue 42.
-   *
-   *  Omit it to match the residue regardless of insertion code; pass an empty
-   *  string to require the bare residue (no insertion code); pass a non-empty
-   *  string to require that exact code. */
-  insertionCode?: string;
-  /** A bounded set of residues selected together as one operation. */
-  residues?: MolecularSelection[];
-  /** A spatial focus target: a Cartesian point (Angstrom) and optional radius (Angstrom). */
-  focusPoint?: { x: number; y: number; z: number; radius?: number };
-}
-
-export interface SelectedResidue {
-  /** Mol* label identity: label_asym_id plus label_seq_id. Viewer-local. */
-  chain: string;
-  residue: number;
-  /** Authored PDB identity: the one the source structure and Runner use. */
-  auth_chain: string;
-  auth_seq_id: number;
-  label_seq_id: number;
-  /** PDB insertion code ('' when absent), part of the residue identity. */
-  insertion_code?: string;
-  /** Authored residue name, such as ALA or HEM. */
-  residue_name: string;
-  /** Non-polymer/water entity (a PDB HETATM-like residue), not a polymer residue. */
-  hetero: boolean;
-}
-
 export interface MolecularViewerOptions {
   /** This mode offers Mol*'s native panels. When false the viewer also hides
    *  Mol*'s own viewport affordance, so a reader never meets a control that
@@ -93,46 +96,12 @@ export interface MolecularViewerOptions {
   controlsCollapsed?: boolean;
   selectionEnabled?: boolean;
   theme?: 'light' | 'dark';
+  /** Explicit overlay initialization. Omit it to start with no crosshair/box;
+   *  the origin and the whole-structure centre of mass are never implicit. */
+  sceneInitialization?: SceneInitialization;
 }
 
 type SelectionListener = (residues: SelectedResidue[]) => void;
-
-/** The Mol* properties one selected residue contributes to its authored identity. */
-export interface ResidueIdentity {
-  authChain: string;
-  labelChain: string;
-  authSeqId: number;
-  labelSeqId: number;
-  insCode: string;
-  residueName: string;
-  /** The source record class: ATOM is a polymer residue, HETATM a hetero one. */
-  groupPDB: string;
-}
-
-/**
- * Project Mol* residue properties onto the workspace's authored identity.
- *
- * Auth chain/residue are the source structure's addresses; label identity is
- * viewer-local and kept beside them. An absent insertion code is omitted, so a
- * bare residue number and an empty code mean the same thing.
- */
-export function authoredResidue(properties: ResidueIdentity): SelectedResidue {
-  const insCode = String(properties.insCode || '').trim();
-  // Non-polymer residues (ligands, waters) may carry no label_seq_id. The
-  // authored number is the address that matters; fall back to it rather than
-  // publishing NaN as a label. Auth identity stays the Runner-facing value.
-  const label = Number.isFinite(properties.labelSeqId) ? properties.labelSeqId : properties.authSeqId;
-  return {
-    chain: properties.labelChain,
-    residue: label,
-    auth_chain: properties.authChain,
-    auth_seq_id: properties.authSeqId,
-    label_seq_id: label,
-    ...(insCode ? { insertion_code: insCode } : {}),
-    residue_name: String(properties.residueName || '').trim(),
-    hetero: String(properties.groupPDB || '').trim().toUpperCase() === 'HETATM',
-  };
-}
 
 // Mol*'s native panels are a single all-or-nothing disclosure. `showControls`
 // gates every region, and the viewport-overlay button that owns that disclosure
@@ -192,7 +161,13 @@ function viewerSpec(options: MolecularViewerOptions) {
   return spec;
 }
 
-export class MolecularViewer {
+export class MolecularViewer implements MolecularScene {
+  readonly units: CoordinateUnits = ANGSTROM;
+
+  /** The mounted viewer is the scene adapter; there is no second instance. */
+  get scene(): MolecularScene {
+    return this;
+  }
   private plugin: any = null;
   private reactRoot: Root | null = null;
   private host: HTMLElement | null = null;
@@ -204,9 +179,15 @@ export class MolecularViewer {
   private operation = Promise.resolve();
   private selectionSubscription: { unsubscribe(): void } | null = null;
   private selectionListeners = new Set<SelectionListener>();
+  private lastLegacySelectionSignature = '';
+  private readonly sceneState = new SceneState();
+  private sceneSubscription: (() => void) | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private disposed = false;
   private sphereRepresentation: any = null;
+  private overlayRepresentation: any = null;
+  private overlayGeneration = 0;
+  private liveRegion: HTMLElement | null = null;
   private annotationSubscription: { unsubscribe(): void } | null = null;
   private annotation: HTMLElement | null = null;
 
@@ -234,9 +215,14 @@ export class MolecularViewer {
       try { await plugin.canvas3dInitialized; } catch { /* Mol* reports canvas failures through its UI. */ }
       plugin.selectionMode = Boolean(options.selectionEnabled && !options.controlsCollapsed);
       this.setTheme(options.theme || 'light');
+      this.mountLiveRegion(host);
+      this.sceneSubscription = this.sceneState.subscribe((event) => {
+        if (event.type === 'crosshair' || event.type === 'box') this.renderOverlays();
+        if (event.type !== 'frame') this.publishSceneStatus();
+      });
+      if (options.sceneInitialization) this.sceneState.initialize(options.sceneInitialization);
       this.selectionSubscription = plugin.managers.structure.selection.events.changed.subscribe(() => {
-        const residues = this.selectedResidues();
-        this.selectionListeners.forEach(listener => listener(residues));
+        this.handleViewerSelection();
       });
       if (typeof ResizeObserver !== 'undefined') {
         this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -252,13 +238,20 @@ export class MolecularViewer {
   loadStructure(source: StructureSource) {
     return this.enqueue(async () => {
       this.assertMounted();
+      const digest = source.digest || await structuralDigest(source.data);
       this.removeSphereGeometry();
       await this.plugin.clear();
+      // The old selection and overlays belong to the previous topology; they are
+      // cleared here, never remapped onto the new chain/residue addresses.
+      this.sceneState.topologyChanged({ digest, label: source.label || 'structure' });
       const raw = await this.plugin.builders.data.rawData({ data: source.data, label: source.label || 'structure' });
       const trajectory = await this.plugin.builders.structure.parseTrajectory(raw, source.format);
       await this.plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default');
       this.appliedRepresentation = null;
       await this.applyPresentation();
+      this.sceneState.refreshSelection(this.readSelection());
+      this.lastLegacySelectionSignature = '';
+      this.handleViewerSelection();
     });
   }
 
@@ -271,8 +264,12 @@ export class MolecularViewer {
   }) {
     return this.enqueue(async () => {
       this.assertMounted();
+      // The topology is the identity: coordinate frames change the active frame,
+      // not the digest or the revision.
+      const digest = await structuralDigest(source.topology);
       this.removeSphereGeometry();
       await this.plugin.clear();
+      this.sceneState.topologyChanged({ digest, label: source.label || 'trajectory' });
       if (source.coordinateFormat === 'pdb') {
         // Some runners delimit frames with ENDMDL alone (RFdiffusion's pX0 and
         // Xt-1 trajectories do). Mol* 5.12.0's PDB reader starts a model only at
@@ -311,6 +308,12 @@ export class MolecularViewer {
       await this.applyPresentation();
       const info = this.trajectoryInfo();
       if (!info) throw new Error('Mol* did not create a trajectory');
+      // Coordinates are read in the frame that is about to be published, so a
+      // frame listener observes the matching atom positions.
+      this.sceneState.refreshSelection(this.readSelection());
+      this.sceneState.setFrame(info.frame);
+      this.lastLegacySelectionSignature = '';
+      this.handleViewerSelection();
       return { frame: info.frame, frameCount: info.frameCount };
     });
   }
@@ -324,6 +327,8 @@ export class MolecularViewer {
       const update = this.plugin.state.data.build();
       update.to(info.model).update({ modelIndex: frame });
       await this.plugin.state.data.updateTree(update).run();
+      this.sceneState.refreshSelection(this.readSelection());
+      this.sceneState.setFrame(frame);
       return { frame, frameCount: info.frameCount };
     });
   }
@@ -333,6 +338,9 @@ export class MolecularViewer {
       this.assertMounted();
       this.removeSphereGeometry();
       await this.plugin.clear();
+      this.sceneState.topologyChanged({ digest: '', label: '' });
+      this.lastLegacySelectionSignature = '';
+      this.handleViewerSelection();
       this.appliedRepresentation = null;
     });
   }
@@ -353,17 +361,54 @@ export class MolecularViewer {
     return this.enqueue(() => this.applyColor());
   }
 
-  select(selection: MolecularSelection) {
-    if (Array.isArray(selection.residues) && !selection.residues.length) { this.plugin.managers.structure.selection.clear(); return true; }
+  select(selection: MolecularSelection, meta: SceneMutationMeta = {}) {
+    this.sceneState.verifyTopology(meta.expectedTopology);
+    this.sceneState.beginExternalMutation();
+    try {
+      let applied = true;
+      if (Array.isArray(selection.residues) && !selection.residues.length) {
+        this.plugin.managers.structure.selection.clear();
+      } else {
+        const loci = this.lociFor(selection);
+        if (!loci) applied = false;
+        // One combined loci, one 'set': a multi-residue selection replaces the
+        // previous selection in a single operation rather than accumulating calls.
+        else this.plugin.managers.structure.selection.fromLoci('set', loci, false);
+      }
+      if (applied) {
+        this.sceneState.selectFromForm(this.readSelection(), meta);
+        // The form's own mutation is suppressed as an extra scene event, but its
+        // residue listeners still see the normalized selection exactly once.
+        this.handleViewerSelection();
+      }
+      return applied;
+    } finally {
+      this.sceneState.endExternalMutation();
+    }
+  }
+
+  clearSelection(meta: SceneMutationMeta = {}): void {
+    this.select({ residues: [] }, meta);
+  }
+
+  setHighlight(selection: MolecularSelection, meta: SceneMutationMeta = {}): boolean {
+    this.sceneState.verifyTopology(meta.expectedTopology);
+    if (Array.isArray(selection.residues) && !selection.residues.length) {
+      this.clearHighlight();
+      return true;
+    }
     const loci = this.lociFor(selection);
     if (!loci) return false;
-    // One combined loci, one 'set': a multi-residue selection replaces the
-    // previous selection in a single operation rather than accumulating calls.
-    this.plugin.managers.structure.selection.fromLoci('set', loci, false);
+    this.plugin.managers.interactivity.lociHighlights.highlight({ loci }, false);
     return true;
   }
 
-  focus(selection: MolecularSelection) {
+  clearHighlight(): void {
+    this.plugin?.managers.interactivity.lociHighlights.clearHighlights();
+  }
+
+  focus(selection: MolecularSelection, meta: SceneMutationMeta = {}) {
+    this.sceneState.verifyTopology(meta.expectedTopology);
     if (selection && selection.focusPoint) return this.focusPoint(selection.focusPoint);
     const loci = this.lociFor(selection);
     if (!loci) return false;
@@ -371,7 +416,7 @@ export class MolecularViewer {
     return true;
   }
 
-  focusPoint(point: { x: number; y: number; z: number; radius?: number }) {
+  focusPoint(point: XYZ & { radius?: number }) {
     if (!this.plugin) return false;
     const { x, y, z, radius } = point;
     if (![x, y, z].every((value) => Number.isFinite(value))) return false;
@@ -379,6 +424,63 @@ export class MolecularViewer {
       Sphere3D.create(Vec3.create(x, y, z), radius && radius > 0 ? radius : 5),
     );
     return true;
+  }
+
+  // -- MolecularScene: read/subscribe, overlays and derived geometry ---------
+
+  snapshot(): SceneSnapshot {
+    return this.sceneState.snapshot();
+  }
+
+  subscribe(listener: (event: MolecularSceneEvent) => void): () => void {
+    return this.sceneState.subscribe(listener);
+  }
+
+  lastEvent(): MolecularSceneEvent | null {
+    return this.sceneState.lastEvent();
+  }
+
+  getCrosshair(): XYZ | null {
+    return this.sceneState.getCrosshair();
+  }
+
+  setCrosshair(point: XYZ | null, meta: SceneMutationMeta = {}): XYZ | null {
+    const next = this.sceneState.setCrosshair(point, meta);
+    this.renderOverlays();
+    this.publishSceneStatus();
+    return next;
+  }
+
+  getBox(): AxisAlignedBox | null {
+    return this.sceneState.getBox();
+  }
+
+  setBox(box: AxisAlignedBox | null, meta: SceneMutationMeta = {}): AxisAlignedBox | null {
+    const next = this.sceneState.setBox(box, meta);
+    this.renderOverlays();
+    this.publishSceneStatus();
+    return next;
+  }
+
+  centroid(atoms?: readonly SceneAtom[]): XYZ {
+    return this.sceneState.centroid(atoms);
+  }
+
+  centerOfMass(options: CenterOfMassOptions, atoms?: readonly SceneAtom[]): XYZ {
+    return this.sceneState.centerOfMass(options, atoms);
+  }
+
+  boundingBox(atoms?: readonly SceneAtom[]): AxisAlignedBox {
+    return this.sceneState.boundingBox(atoms);
+  }
+
+  allAtoms(): SceneAtom[] {
+    const structure = this.plugin?.managers?.structure?.hierarchy?.current?.structures?.[0]?.cell?.obj?.data;
+    return structure ? allSceneAtoms(structure) : [];
+  }
+
+  pickAtoms(): Promise<SceneAtom[]> {
+    return this.sceneState.pickAtoms();
   }
 
   resetCamera() {
@@ -450,12 +552,17 @@ export class MolecularViewer {
 
   private releaseResources() {
     this.removeSphereGeometry();
+    this.removeOverlayRepresentation();
     this.annotationSubscription?.unsubscribe(); this.annotationSubscription = null; this.annotation?.remove(); this.annotation = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.selectionSubscription?.unsubscribe();
     this.selectionSubscription = null;
+    this.sceneSubscription?.();
+    this.sceneSubscription = null;
     this.selectionListeners.clear();
+    this.liveRegion?.remove();
+    this.liveRegion = null;
     this.reactRoot?.unmount();
     this.reactRoot = null;
     this.plugin?.dispose();
@@ -567,44 +674,134 @@ export class MolecularViewer {
     return elements.length ? StructureElement.Loci(structure, elements) : null;
   }
 
-  /**
-   * The authored identity of one Mol* location.
-   *
-   * Auth chain and auth residue number are what the source structure and the
-   * owning Runner address; label identity is retained beside them because it is
-   * the viewer's own key. Hetero means "not a polymer residue" (non-polymer or
-   * water), which is the scientific distinction a Runner selector needs.
-   */
-  static authoredResidue(location: any): SelectedResidue {
-    return authoredResidue({
-      authChain: String(StructureProperties.chain.auth_asym_id(location) || ''),
-      labelChain: String(StructureProperties.chain.label_asym_id(location) || ''),
-      authSeqId: Number(StructureProperties.residue.auth_seq_id(location)),
-      labelSeqId: Number(StructureProperties.residue.label_seq_id(location)),
-      insCode: String(StructureProperties.residue.pdbx_PDB_ins_code(location) || ''),
-      residueName: String(StructureProperties.residue.auth_comp_id(location) || ''),
-      groupPDB: String(StructureProperties.residue.group_PDB(location) || ''),
-    });
-  }
-
-  private selectedResidues(): SelectedResidue[] {
-    if (!this.plugin) return [];
+  /** The current Mol* selection, read once into the scene's stable vocabulary. */
+  private readSelection(): SceneSelection {
+    const atoms = new Map<string, SceneAtom>();
     const residues = new Map<string, SelectedResidue>();
-    for (const structureRef of this.hierarchy().current.structures) {
+    // The scene reads whatever hierarchy Mol* has published; a minimal embed
+    // (or a test double) without one reports an empty selection.
+    const structures = this.plugin?.managers?.structure?.hierarchy?.current?.structures;
+    if (!Array.isArray(structures)) return { atoms: [], residues: [] };
+    for (const structureRef of structures) {
       const structure = structureRef?.cell?.obj?.data;
       if (!structure) continue;
       const loci = this.plugin.managers.structure.selection.getLoci(structure);
       if (!loci?.elements) continue;
-      StructureElement.Loci.forEachLocation(loci, (location: any) => {
-        if (location.unit?.kind !== 0) return;
-        const authored = MolecularViewer.authoredResidue(location);
+      for (const atom of selectionAtoms(loci)) atoms.set(atomKey(atom.identity), atom);
+      for (const residue of selectionResidues(loci)) {
         residues.set(
-          `${authored.chain}:${authored.residue}:${authored.auth_chain}:${authored.auth_seq_id}:${authored.insertion_code || ''}`,
-          authored,
+          `${residue.chain}:${residue.residue}:${residue.auth_chain}:${residue.auth_seq_id}:${residue.insertion_code || ''}`,
+          residue,
         );
-      });
+      }
     }
-    return Array.from(residues.values());
+    return { atoms: Array.from(atoms.values()), residues: Array.from(residues.values()) };
+  }
+
+  /**
+   * Mol* reports a selection change. The echo of the form's own mutation is
+   * consumed by `SceneState`; only a genuine viewer-origin change reaches the
+   * legacy residue listeners.
+   */
+  private handleViewerSelection(): void {
+    if (!this.plugin) return;
+    const selection = this.readSelection();
+    this.sceneState.adoptViewerSelection(selection);
+    // Legacy residue listeners feed the Create Task form. They receive each
+    // distinct selection once, including a normalized form-originated one, so a
+    // parameter edit and a viewer click converge on the same workspace state.
+    const signature = selectionSignature(selection.residues, selection.atoms);
+    if (signature !== this.lastLegacySelectionSignature) {
+      this.lastLegacySelectionSignature = signature;
+      this.selectionListeners.forEach(listener => listener(selection.residues));
+    }
+    this.publishSceneStatus();
+  }
+
+  private mountLiveRegion(host: HTMLElement): void {
+    const region = document.createElement('p');
+    region.className = 'structure-scene-status sr-only';
+    region.setAttribute('role', 'status');
+    region.setAttribute('aria-live', 'polite');
+    host.append(region);
+    this.liveRegion = region;
+  }
+
+  /**
+   * Screen-reader summary of the scene. Selections are named by the authored
+   * residue count; a crosshair is announced in Angstrom, never as a bare tuple.
+   */
+  private publishSceneStatus(): void {
+    if (!this.liveRegion) return;
+    const residues = this.sceneState.snapshot().selectedResidues.length;
+    const crosshair = this.sceneState.getCrosshair();
+    const parts: string[] = [];
+    if (residues) parts.push(t('results.structure.selectionStatus', { count: residues }));
+    if (crosshair) {
+      parts.push(t('results.structure.crosshairStatus', {
+        x: crosshair.x.toFixed(2), y: crosshair.y.toFixed(2), z: crosshair.z.toFixed(2),
+      }));
+    }
+    this.liveRegion.textContent = parts.join(' ');
+  }
+
+  private removeOverlayRepresentation(): void {
+    this.overlayGeneration += 1;
+    if (!this.overlayRepresentation) return;
+    this.plugin?.canvas3d?.remove(this.overlayRepresentation);
+    this.overlayRepresentation.destroy();
+    this.overlayRepresentation = null;
+  }
+
+  /**
+   * Draw the crosshair and axis-aligned box as a shape overlay.
+   *
+   * The overlay is built from copies of the scene's numeric state and added to
+   * the canvas beside the structure; no structure or trajectory array is read
+   * into a mutable buffer or written back.
+   */
+  private renderOverlays(): void {
+    this.removeOverlayRepresentation();
+    if (!this.plugin?.canvas3d) return;
+    const crosshair = this.sceneState.getCrosshair();
+    const box = this.sceneState.getBox();
+    if (!crosshair && !box) { this.plugin.canvas3d.commit(true); return; }
+    const generation = this.overlayGeneration;
+    const mesh = MeshBuilder.createState(512, 512);
+    const data: unknown[] = [];
+    let group = 0;
+    if (box) {
+      mesh.currentGroup = group;
+      data.push({ kind: 'box', box });
+      group += 1;
+      const half = { x: box.lengths.x / 2, y: box.lengths.y / 2, z: box.lengths.z / 2 };
+      addBoundingBox(
+        mesh,
+        Box3D.create(
+          Vec3.create(box.center.x - half.x, box.center.y - half.y, box.center.z - half.z),
+          Vec3.create(box.center.x + half.x, box.center.y + half.y, box.center.z + half.z),
+        ),
+        0.06, 1, 8,
+      );
+    }
+    if (crosshair) {
+      mesh.currentGroup = group;
+      data.push({ kind: 'crosshair', crosshair });
+      const size = 0.85;
+      const props = { radiusTop: 0.035, radiusBottom: 0.035, radialSegments: 8 };
+      addSimpleCylinder(mesh, Vec3.create(crosshair.x - size, crosshair.y, crosshair.z), Vec3.create(crosshair.x + size, crosshair.y, crosshair.z), props);
+      addSimpleCylinder(mesh, Vec3.create(crosshair.x, crosshair.y - size, crosshair.z), Vec3.create(crosshair.x, crosshair.y + size, crosshair.z), props);
+      addSimpleCylinder(mesh, Vec3.create(crosshair.x, crosshair.y, crosshair.z - size), Vec3.create(crosshair.x, crosshair.y, crosshair.z + size), props);
+      addSphere(mesh, Vec3.create(crosshair.x, crosshair.y, crosshair.z), 0.08, 1);
+    }
+    const shape = Shape.create('Molecular overlays', data, MeshBuilder.getMesh(mesh), () => 0x2f6f8f as any, () => 1, () => 'Molecular overlay');
+    const representation = ShapeRepresentation(() => shape, Mesh.Utils);
+    representation.createOrUpdate({ alpha: 1, doubleSided: true }, data).run().then(() => {
+      if (generation !== this.overlayGeneration || !this.plugin?.canvas3d) { representation.destroy(); return; }
+      this.plugin.canvas3d.add(representation);
+      this.overlayRepresentation = representation;
+      this.plugin.canvas3d.commit(true);
+    }, () => representation.destroy());
   }
 
   private trajectoryInfo() {

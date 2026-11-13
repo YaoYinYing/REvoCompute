@@ -1,5 +1,6 @@
 import { isLogicalFile, resultFileName, type ResultArtifact, type ResultFile, type PreviewCapability, type ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
+import type { MolecularSelection } from '../structure/molecular-scene';
 import { readLocalTablePage } from './table-page';
 
 /**
@@ -33,7 +34,7 @@ export interface RendererContext {
   closeStructure?(host: HTMLElement): void;
   // Apply the molecular selection a rendered row declares, in the workspace's own
   // structure vocabulary; absent for an embedder without a molecular stage.
-  selectStructure?(selection: { chain: string; residue: number; numbering?: string }): void;
+  selectStructure?(selection: MolecularSelection): void;
   // Whether the embedding page already mounts this exact artifact in its own
   // structure stage on the first screen (a Task Storyboard does, through
   // `openFile`). The stage is one viewer showing one structure: a view that is

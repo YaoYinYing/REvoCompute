@@ -8,6 +8,7 @@ import type { ResultFile, ResultView } from '../../api/result-types';
 import { resultFileName } from '../../api/result-types';
 import { t } from '../../app/i18n';
 import { StructureController } from './molecular/structure-controller';
+import { createDisplayModeControls } from '../structure/display-mode';
 import type { MolecularViewerFactory, TrajectoryInfo, TrajectoryTopologyFormat } from './molecular/viewer-contract';
 import type { ResolvedViewSources, ViewRenderer } from './renderer-registry';
 
@@ -141,7 +142,6 @@ export function createTrajectoryViewRenderer(
 
       let destroyed = false;
       let loaded: TrajectoryInfo | null = null;
-      context.signal.addEventListener('abort', () => { destroyed = true; stop(); controller.dispose(); }, { once: true });
 
       const show = (value: TrajectoryInfo): void => {
         loaded = value;
@@ -192,6 +192,24 @@ export function createTrajectoryViewRenderer(
       const controls = element('div', 'structure-toolbar-actions');
       controls.append(previous, play, scrubber, next);
       toolbar.append(controls);
+      const display = createDisplayModeControls({
+        stage,
+        container: controls,
+        resize: () => controller.resize(),
+        labels: {
+          group: t('results.structure.displayMode'),
+          normal: t('results.structure.modeNormal'),
+          expand: t('results.structure.modeExpand'),
+          maximize: t('results.structure.modeMaximize'),
+          fullscreenFallback: t('results.structure.fullscreenFallback'),
+          enterFullscreen: t('results.structure.enterFullscreen'),
+          exitFullscreen: t('results.structure.exitFullscreen'),
+          expanded: t('results.structure.expanded'),
+          maximized: t('results.structure.maximized'),
+          collapsed: t('results.structure.collapsed'),
+        },
+      });
+      context.signal.addEventListener('abort', () => { destroyed = true; stop(); display.destroy(); controller.dispose(); }, { once: true });
 
       // Each selection mounts that design's topology and its own frames; the
       // controller supersedes the previous load, so the same stage is reused.
@@ -249,7 +267,7 @@ export function createTrajectoryViewRenderer(
       }
       return {
         get frameCount(): number { return loaded?.frameCount || 0; },
-        destroy: () => { destroyed = true; stop(); controller.dispose(); },
+        destroy: () => { destroyed = true; stop(); display.destroy(); controller.dispose(); },
       };
     },
   };

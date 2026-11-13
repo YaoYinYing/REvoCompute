@@ -1,5 +1,16 @@
 import { resultFileName, type ResultFile } from '../../../api/result-types';
 import { t } from '../../../app/i18n';
+import type {
+  AxisAlignedBox,
+  CenterOfMassOptions,
+  MolecularScene,
+  MolecularSceneEvent,
+  MolecularSelection,
+  SceneAtom,
+  SceneSnapshot,
+  SelectedResidue,
+  XYZ,
+} from '../../structure/molecular-scene';
 import type { MolecularViewer, MolecularViewerFactory, TrajectoryInfo, TrajectoryTopologyFormat } from './viewer-contract';
 
 const MAX_STRUCTURE_BYTES = 64 * 1024 * 1024;
@@ -192,15 +203,15 @@ export class StructureController {
   private viewerMount: Promise<MolecularViewer> | null = null;
   private selectionUnsubscribe: (() => void) | null = null;
   private loading = false;
-  private pendingFocus: unknown = null;
-  private pendingSelection: unknown = null;
+  private pendingFocus: MolecularSelection | null = null;
+  private pendingSelection: MolecularSelection | null = null;
 
   constructor(private readonly createViewer: MolecularViewerFactory, private readonly options: {
     selectionEnabled?: boolean;
     //: The Result workspace names itself the scientific stage owner, so the
     //: viewer's native panels start closed behind their own disclosure button.
     controlsCollapsed?: boolean;
-    onSelectionChanged?: (residues: Array<{ chain: string; residue: number; auth_seq_id: number; label_seq_id: number }>) => void;
+    onSelectionChanged?: (residues: SelectedResidue[]) => void;
   } = {}) {}
 
   async mount(host: HTMLElement, artifact: ResultFile, theme: 'light' | 'dark'): Promise<void> {
@@ -385,8 +396,42 @@ export class StructureController {
 
   annotate(annotation: { point: { x: number; y: number; z: number }; label: string } | null): void { this.viewer?.annotate?.(annotation); }
   resetCamera(): void { this.viewer?.resetCamera?.(); }
-  select(selection: unknown): boolean { if (this.loading) { this.pendingSelection = selection; return true; } return this.viewer?.select?.(selection) || false; }
-  focus(selection: unknown): boolean { if (this.loading) { this.pendingFocus = selection; return true; } return this.viewer?.focus?.(selection) || false; }
+  select(selection: MolecularSelection): boolean { if (this.loading) { this.pendingSelection = selection; return true; } return this.viewer?.select?.(selection) || false; }
+  focus(selection: MolecularSelection): boolean { if (this.loading) { this.pendingFocus = selection; return true; } return this.viewer?.focus?.(selection) || false; }
+  setHighlight(selection: MolecularSelection): boolean { return this.viewer?.setHighlight?.(selection) || false; }
+  clearHighlight(): void { this.viewer?.clearHighlight?.(); }
+
+  /** The typed scene adapter of the mounted viewer, when this backend exposes one. */
+  scene(): MolecularScene | null { return this.viewer?.scene || null; }
+  snapshot(): SceneSnapshot | null { return this.viewer?.scene?.snapshot() || null; }
+  subscribeScene(listener: (event: MolecularSceneEvent) => void): () => void {
+    return this.viewer?.scene?.subscribe(listener) || (() => undefined);
+  }
+  getCrosshair(): XYZ | null { return this.viewer?.getCrosshair?.() || null; }
+  setCrosshair(point: XYZ | null): XYZ | null { return this.viewer?.setCrosshair?.(point) || null; }
+  getBox(): AxisAlignedBox | null { return this.viewer?.getBox?.() || null; }
+  setBox(box: AxisAlignedBox | null): AxisAlignedBox | null { return this.viewer?.setBox?.(box) || null; }
+  centroid(atoms?: readonly SceneAtom[]): XYZ {
+    const viewer = this.viewer;
+    if (!viewer || !viewer.centroid) throw new Error(t('results.structure.selectionUnavailable'));
+    return viewer.centroid(atoms);
+  }
+  centerOfMass(options: CenterOfMassOptions, atoms?: readonly SceneAtom[]): XYZ {
+    const viewer = this.viewer;
+    if (!viewer || !viewer.centerOfMass) throw new Error(t('results.structure.selectionUnavailable'));
+    return viewer.centerOfMass(options, atoms);
+  }
+  boundingBox(atoms?: readonly SceneAtom[]): AxisAlignedBox {
+    const viewer = this.viewer;
+    if (!viewer || !viewer.boundingBox) throw new Error(t('results.structure.selectionUnavailable'));
+    return viewer.boundingBox(atoms);
+  }
+  pickAtoms(): Promise<SceneAtom[]> {
+    const viewer = this.viewer;
+    if (!viewer?.pickAtoms) return Promise.reject(new Error(t('results.structure.selectionUnavailable')));
+    return viewer.pickAtoms();
+  }
+  allAtoms(): SceneAtom[] { return this.viewer?.scene?.allAtoms() || []; }
   captureImage(): Promise<string> {
     if (!this.viewer) return Promise.reject(new Error(t('results.structure.notReady')));
     return this.viewer.captureImage();

@@ -54,6 +54,72 @@ not a WebGL restart. Structure text is cached by task, artifact path, and
 same bound. A viewer or Storyboard failure does not remove Files & diagnostics,
 direct downloads, ZIP delivery, or run provenance.
 
+### Molecular scene contract
+
+`MolecularViewer` is also the typed `MolecularScene` adapter
+(`frontend/src/features/structure/molecular-scene.ts`). There is no second
+viewer or parallel selection state. Consumers read one immutable snapshot:
+`topology_revision`, `topology_digest`, the active trajectory `coordinate_frame`
+(distinct from the reference topology), `units: "angstrom"`,
+`selected_atoms`, and `selected_residues`.
+
+Atom identity is the source structure's authored address: chain ID, residue
+author number, insertion code, residue name, atom name, atom serial, alternate
+location, and model. Label chain/numbering and the viewer-local element index
+are carried beside it but never substituted for the authored values, and a
+serial is never treated as an index. Selecting a topology revision or source
+digest that is no longer loaded raises a `StaleTopologyError`; a stale chain ID
+is never silently remapped. A new topology or a cleared stage bumps the
+revision, empties the selection, and removes overlays.
+
+The scene exposes read/subscribe selection, set/clear highlight, focus,
+get/set crosshair, geometric centroid, true mass-weighted centre of mass,
+and an axis-aligned box as `{center, lengths}` in Angstrom. The centre of mass
+requires an explicit hydrogen policy and a verified standard atomic weight for
+every participating element; an empty subset, a mass gap, a non-finite
+coordinate, a negative box length, or two alternate conformers of one atom is
+rejected rather than approximated. Starting crosshair/box values are explicit
+initialisation choices; the origin and the whole-structure centre of mass are
+never implicit defaults. Crosshair and box are drawn as a shape overlay and
+never mutate the loaded structure or trajectory arrays.
+
+Selection events carry their origin (`form` or `viewer`), a transaction ID,
+the topology revision/digest, and the active frame. A form consumes the echo of
+its own mutation instead of re-applying it, and asynchronous atom picks are
+gated so a superseded read is cancelled rather than raced.
+
+### Display modes
+
+The result page has one mounted stage with three modes: `normal`, `expand`
+(a modal overlay with a focus trap, Escape close, and focus return), and
+`maximize` (the native Fullscreen API where the browser enables it, otherwise
+the expand overlay with an explicit "fullscreen unavailable" label). Mode
+changes only re-lay out the existing stage and call `resize()`; they never
+reparent, destroy, or reload the WebGL canvas, so camera, selection, trajectory
+frame, overlays, and the rendered structure survive. The mode buttons are
+ordinary keyboard-reachable buttons with `aria-pressed`; the stage is laid out
+for 390, 834, and 1440 px widths in both themes, and transition motion is
+omitted under `prefers-reduced-motion`.
+
+Where the browser supports native fullscreen, the Maximize control keeps the
+pre-existing accessible name `Enter fullscreen` and flips it to
+`Exit fullscreen` while fullscreen is active (both `aria-label` and `title`;
+the visible label stays the mode name). It always requests fullscreen on the
+`.structure-viewport` stage itself, so the toolbar and the mounted viewer stay
+together. The fullscreen capability is read when the stage mounts; a browser
+whose capability changes afterwards keeps the labelled fallback rather than
+claiming native fullscreen it no longer has.
+
+### Scene ownership and non-goals
+
+The browser presentation plane owns the Mol* lifecycle, overlays, layout,
+selection, and asynchronous cancellation. The Server transmits only the stable
+topology identity and authorized structure bytes; this contract adds no
+scene-processing service and no process-global browser state. CAVER-specific
+controls, trajectory Kabsch fitting, new file-format writers, and a heavyweight
+molecular conversion service remain out of scope and follow in their own
+changes (#153 and #157).
+
 Structure artifacts carry a server-declared `confidence_encoding` when their
 B-factor column holds per-residue pLDDT. The `Confidence` colouring is offered
 only from that declaration, never from the file extension. See

@@ -1,8 +1,16 @@
-export interface StructureSource {
-  data: string;
-  format: 'pdb' | 'mmcif' | 'pqr';
-  label?: string;
-}
+import type {
+  AxisAlignedBox,
+  CenterOfMassOptions,
+  MolecularScene,
+  MolecularSelection,
+  SceneAtom,
+  SceneMutationMeta,
+  SelectedResidue,
+  StructureSource,
+  XYZ,
+} from '../../structure/molecular-scene';
+
+export type { StructureSource };
 
 /** Topology formats a trajectory view may declare. */
 export type TrajectoryTopologyFormat = 'pdb' | 'mmcif';
@@ -23,6 +31,12 @@ export interface TrajectoryInfo {
   frameCount: number;
 }
 
+/**
+ * The narrow result adapter over the one mounted viewer.
+ *
+ * `scene` is the typed molecular interaction contract; the remaining members
+ * are the presentation lifecycle the Result workspace already owns.
+ */
 export interface MolecularViewer {
   loadStructure(source: StructureSource): Promise<void>;
   loadTrajectory?(source: TrajectorySource): Promise<TrajectoryInfo>;
@@ -36,9 +50,21 @@ export interface MolecularViewer {
   setSphereGeometry?(source: string | null): Promise<void>;
   annotate?(annotation: { point: { x: number; y: number; z: number }; label: string } | null): void;
   clear?(): Promise<void>;
-  select?(selection: unknown): boolean;
-  focus?(selection: unknown): boolean;
-  onSelectionChanged?(listener: (residues: Array<{ chain: string; residue: number; auth_seq_id: number; label_seq_id: number }>) => void): () => void;
+  select?(selection: MolecularSelection, meta?: SceneMutationMeta): boolean;
+  focus?(selection: MolecularSelection, meta?: SceneMutationMeta): boolean;
+  setHighlight?(selection: MolecularSelection, meta?: SceneMutationMeta): boolean;
+  clearHighlight?(): void;
+  onSelectionChanged?(listener: (residues: SelectedResidue[]) => void): () => void;
+  /** The typed scene operations of the same mounted viewer. */
+  readonly scene?: MolecularScene;
+  getCrosshair?(): XYZ | null;
+  setCrosshair?(point: XYZ | null, meta?: SceneMutationMeta): XYZ | null;
+  getBox?(): AxisAlignedBox | null;
+  setBox?(box: AxisAlignedBox | null, meta?: SceneMutationMeta): AxisAlignedBox | null;
+  centroid?(atoms?: readonly SceneAtom[]): XYZ;
+  centerOfMass?(options: CenterOfMassOptions, atoms?: readonly SceneAtom[]): XYZ;
+  boundingBox?(atoms?: readonly SceneAtom[]): AxisAlignedBox;
+  pickAtoms?(): Promise<SceneAtom[]>;
   dispose(): void;
 }
 
