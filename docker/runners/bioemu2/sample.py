@@ -51,6 +51,10 @@ MODE_COMMANDS = {
     "propagate": "propagate",
 }
 
+#: Every sampler the Task's schema can resolve. The adapter consumes the value
+#: the Server resolved; it never substitutes one of these as a default.
+SAMPLERS = frozenset({"edm", "edm_gd", "edm_fk", "edm_fkc"})
+
 #: Samplers that build steering potentials and therefore consult the Boltz-1
 #: CCD dictionary for a CCD-specified ligand. ``edm`` is unsteered.
 STEERING_SAMPLERS = frozenset({"edm_gd", "edm_fk", "edm_fkc"})
@@ -317,6 +321,30 @@ def physicality_summary(path: Path) -> str:
     return summary
 
 
+def resolved_mode(manifest: dict) -> str:
+    """The mode the Server resolved into the immutable Task manifest."""
+    params = manifest.get("params")
+    mode = params.get("mode") if isinstance(params, dict) else None
+    if mode not in MODE_COMMANDS:
+        raise ValueError(
+            f"BioEmu2 Task manifest must resolve 'mode' to one of {sorted(MODE_COMMANDS)}; "
+            f"received {mode!r}"
+        )
+    return str(mode)
+
+
+def resolved_sampler(manifest: dict) -> str:
+    """The sampler the Server resolved into the immutable Task manifest."""
+    params = manifest.get("params")
+    sampler = params.get("sampler") if isinstance(params, dict) else None
+    if sampler not in SAMPLERS:
+        raise ValueError(
+            f"BioEmu2 Task manifest must resolve 'sampler' to one of {sorted(SAMPLERS)}; "
+            f"received {sampler!r}"
+        )
+    return str(sampler)
+
+
 def command_for_mode(mode: str, manifest: dict, system_path: Path, checkpoint: Path,
                      output_dir: Path, starting_structure: Path | None) -> list[str]:
     """Build the pinned upstream CLI command for one validated mode."""
@@ -333,7 +361,7 @@ def command_for_mode(mode: str, manifest: dict, system_path: Path, checkpoint: P
         "--num-samples",
         str(int(params["num_samples"])),
         "--sampler",
-        str(params.get("sampler") or "edm"),
+        resolved_sampler(manifest),
     ]
     if params.get("physicality_mode") is not None:
         command += ["--physicality-filter", str(params["physicality_mode"])]
@@ -369,7 +397,7 @@ def run_mode(mode: str, manifest: dict, output_dir: Path, checkpoint: Path, scra
         print("BioEmu2 propagation: upstream compares the starting CIF atoms and order before model load")
 
     prefetch_ccd(system_ccd_codes(system))
-    steering_codes = steered_ligand_ccd_codes(system, str(manifest["params"].get("sampler") or "edm"))
+    steering_codes = steered_ligand_ccd_codes(system, resolved_sampler(manifest))
     if steering_codes:
         asset = os.environ.get("BIOEMU2_STEERING_CCD")
         manifest_path = os.environ.get("BIOEMU2_STEERING_CCD_MANIFEST")
@@ -398,9 +426,10 @@ def main() -> int:
     checkpoint = args.checkpoint_dir / "checkpoint.ckpt"
     if not checkpoint.is_file():
         raise SystemExit(f"BioEmu2 checkpoint not found: {checkpoint}")
-    mode = str(manifest.get("params", {}).get("mode") or "equilibrium")
-    if mode not in MODE_COMMANDS:
-        raise SystemExit(f"Unknown BioEmu2 mode: {mode}")
+    try:
+        mode = resolved_mode(manifest)
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
 
     # Keep the raw ColabFold response in task-local scratch: a cache in the
     # weight namespace would be mutable shared state. Every mode queries the

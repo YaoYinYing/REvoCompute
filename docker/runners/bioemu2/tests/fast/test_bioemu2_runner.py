@@ -19,6 +19,7 @@ import importlib.util
 import json
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -260,7 +261,7 @@ def test_equilibrium_mode_runs_the_upstream_equilibrium_command(tmp_path):
 
 def test_structure_prediction_mode_runs_the_upstream_predict_command(tmp_path):
     asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
-    params = {"mode": "structure_prediction", "num_samples": 1, "num_steps": 4, "seed": 0}
+    params = {"mode": "structure_prediction", "num_samples": 1, "num_steps": 4, "seed": 0, "sampler": "edm"}
 
     completed, output_dir, capture = _run(tmp_path, modules, system, params)
 
@@ -274,7 +275,7 @@ def test_structure_prediction_mode_runs_the_upstream_predict_command(tmp_path):
 
 def test_propagate_mode_forwards_the_system_and_starting_structure(tmp_path):
     asset_root, manifest, modules, system, starting, _cli = _workspace(tmp_path)
-    params = {"mode": "propagate", "num_samples": 2, "lag_time_ns": 1.5, "num_steps": 4, "seed": 3}
+    params = {"mode": "propagate", "num_samples": 2, "lag_time_ns": 1.5, "num_steps": 4, "seed": 3, "sampler": "edm"}
 
     completed, output_dir, capture = _run(
         tmp_path, modules, system, params, role="system",
@@ -298,7 +299,7 @@ def test_optional_flags_are_not_invented(tmp_path):
     asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
 
     completed, _output_dir, capture = _run(
-        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1}
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"}
     )
 
     assert completed.returncode == 0, completed.stderr
@@ -307,13 +308,74 @@ def test_optional_flags_are_not_invented(tmp_path):
         assert flag not in forwards
 
 
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"num_samples": 1, "sampler": "edm"}, "declares no valid mode"),
+        ({"mode": "bogus", "num_samples": 1, "sampler": "edm"}, "declares no valid mode"),
+    ],
+)
+def test_run_sh_refuses_a_missing_or_unknown_mode(tmp_path, params, message):
+    """The shell entrypoint consumes the resolved mode and never guesses one."""
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+
+    completed, _output_dir, capture = _run(tmp_path, modules, system, params)
+
+    assert completed.returncode != 0
+    assert message in completed.stderr
+    assert not capture.exists(), "a mode the Server did not resolve must not reach upstream"
+
+
+@pytest.mark.parametrize("params", [
+    {"num_samples": 1, "sampler": "edm"},
+    {"mode": "bogus", "num_samples": 1, "sampler": "edm"},
+])
+def test_sample_entrypoint_refuses_a_missing_or_unknown_mode(tmp_path, params):
+    """The Python entrypoint fails closed before parsing a system."""
+    asset_root, _manifest, _modules, _system, _starting, _cli = _workspace(tmp_path)
+    task_manifest = tmp_path / "direct-task.json"
+    task_manifest.write_text(json.dumps({"params": params, "inputs": {}}), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(FAMILY / "sample.py"),
+            "--task-manifest", str(task_manifest),
+            "--output-dir", str(tmp_path / "out"),
+            "--checkpoint-dir", str(asset_root / "checkpoints" / "bioemu2-preview"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "must resolve 'mode'" in completed.stderr
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("params", [
+    {"mode": "equilibrium", "num_samples": 1},
+    {"mode": "equilibrium", "num_samples": 1, "sampler": "bogus"},
+])
+def test_adapter_refuses_a_missing_or_unknown_sampler_before_the_cli(tmp_path, params):
+    """The adapter consumes the resolved sampler and never substitutes ``edm``."""
+    asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
+
+    completed, output_dir, capture = _run(tmp_path, modules, system, params)
+
+    assert completed.returncode != 0
+    assert "must resolve 'sampler'" in completed.stderr
+    assert not capture.exists(), "an unresolved sampler must not reach upstream"
+    assert not (output_dir / "task_finished").exists()
+
+
 def test_a_malformed_system_fails_before_the_cli(tmp_path):
     asset_root, manifest, modules, _system, _starting, _cli = _workspace(tmp_path)
     malformed = tmp_path / "malformed.yaml"
     malformed.write_text("sequence: not-a-system\n", encoding="utf-8")
 
     completed, output_dir, capture = _run(
-        tmp_path, modules, malformed, {"mode": "equilibrium", "num_samples": 1}
+        tmp_path, modules, malformed, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"}
     )
 
     assert completed.returncode != 0
@@ -326,7 +388,7 @@ def test_propagate_requires_the_starting_structure_role(tmp_path):
     asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
 
     completed, output_dir, capture = _run(
-        tmp_path, modules, system, {"mode": "propagate", "num_samples": 1, "lag_time_ns": 1}
+        tmp_path, modules, system, {"mode": "propagate", "num_samples": 1, "lag_time_ns": 1, "sampler": "edm"}
     )
 
     assert completed.returncode != 0
@@ -339,7 +401,7 @@ def test_non_propagate_modes_refuse_a_starting_structure(tmp_path):
     asset_root, manifest, modules, system, starting, _cli = _workspace(tmp_path)
 
     completed, output_dir, capture = _run(
-        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1},
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"},
         extra_inputs={"starting_structure": starting},
     )
 
@@ -355,7 +417,7 @@ def test_propagation_prewarms_ccd_components_before_the_cli(tmp_path):
     ccd_capture = tmp_path / "ccd.json"
 
     completed, output_dir, _capture = _run(
-        tmp_path, modules, system, {"mode": "propagate", "num_samples": 1, "lag_time_ns": 1},
+        tmp_path, modules, system, {"mode": "propagate", "num_samples": 1, "lag_time_ns": 1, "sampler": "edm"},
         extra_inputs={"starting_structure": starting},
         extra_env={"BIOEMU2_CCD_CAPTURE": str(ccd_capture), "BIOEMU2_STEERING_CCD": "", "BIOEMU2_STEERING_CCD_MANIFEST": ""},
     )
@@ -371,7 +433,7 @@ def test_equilibrium_prewarms_ccd_components_too(tmp_path):
     ccd_capture = tmp_path / "ccd.json"
 
     completed, output_dir, _capture = _run(
-        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1},
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"},
         extra_env={"BIOEMU2_CCD_CAPTURE": str(ccd_capture), "BIOEMU2_STEERING_CCD": "", "BIOEMU2_STEERING_CCD_MANIFEST": ""},
     )
 
@@ -386,7 +448,7 @@ def test_propagation_retries_a_transient_ccd_failure(tmp_path):
     ccd_capture = tmp_path / "ccd.json"
 
     completed, output_dir, _capture = _run(
-        tmp_path, modules, system, {"mode": "propagate", "num_samples": 1, "lag_time_ns": 1},
+        tmp_path, modules, system, {"mode": "propagate", "num_samples": 1, "lag_time_ns": 1, "sampler": "edm"},
         extra_inputs={"starting_structure": starting},
         extra_env={
             "BIOEMU2_CCD_CAPTURE": str(ccd_capture),
@@ -488,7 +550,7 @@ def test_a_propagation_atom_mismatch_fails_the_task(tmp_path):
 
     completed, output_dir, _capture = _run(
         tmp_path, modules, system,
-        {"mode": "propagate", "num_samples": 1, "lag_time_ns": 1},
+        {"mode": "propagate", "num_samples": 1, "lag_time_ns": 1, "sampler": "edm"},
         extra_inputs={"starting_structure": starting},
         extra_env={
             "BIOEMU2_CLI_FAIL": (
@@ -509,7 +571,7 @@ def test_missing_published_output_fails_the_task(tmp_path):
     asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
 
     completed, output_dir, _capture = _run(
-        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1},
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"},
         extra_env={"BIOEMU2_OMIT_OUTPUT": "physicality.json"},
     )
 
@@ -522,7 +584,7 @@ def test_the_optional_command_record_is_not_required(tmp_path):
     asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
 
     completed, output_dir, _capture = _run(
-        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1},
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 1, "sampler": "edm"},
         extra_env={"BIOEMU2_OMIT_OUTPUT": "command.txt"},
     )
 
@@ -534,7 +596,7 @@ def test_rejected_frames_are_reported_not_failed(tmp_path):
     asset_root, manifest, modules, system, _starting, _cli = _workspace(tmp_path)
 
     completed, output_dir, _capture = _run(
-        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 2},
+        tmp_path, modules, system, {"mode": "equilibrium", "num_samples": 2, "sampler": "edm"},
         extra_env={"BIOEMU2_REJECT_FIRST": "1"},
     )
 

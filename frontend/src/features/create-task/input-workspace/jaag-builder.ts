@@ -36,13 +36,19 @@ interface EntityRow {
   chainIds: HTMLInputElement;
   sequence: HTMLTextAreaElement;
   ligand: HTMLInputElement;
+  ligandSource: HTMLSelectElement;
   modifications: HTMLInputElement;
   sequenceField: HTMLElement;
+  ligandSourceField: HTMLElement;
   ligandField: HTMLElement;
   modificationsField: HTMLElement;
 }
 
 const ENTITY_TYPES = ['protein', 'dna', 'rna', 'ligand'] as const;
+
+//: CCD identifiers and SMILES overlap syntactically (`CCO`, `c1ccccc1`), so the
+//: representation is an explicit choice rather than an inference from the text.
+const LIGAND_SOURCES = ['ccd', 'smiles'] as const;
 
 function core(): JaagCore {
   const loaded = (globalThis as unknown as Record<string, unknown>).JAAGCore as JaagCore | undefined;
@@ -164,10 +170,19 @@ const jaagBuilder: WorkspacePlugin = {
       return generated !== null && files.length === 1 && files[0] === generated;
     };
 
+    //: ``builder`` is the generated YAML; ``external`` is any file another
+    //: capability bound; ``idle`` is an empty role. The attribute lets the form
+    //: and its tests read the ownership state without parsing status copy.
+    const setOwnership = (state: 'idle' | 'builder' | 'external'): void => {
+      details.dataset.jaagOwnership = state;
+    };
+    setOwnership(context.roleFiles(role).length ? 'external' : 'idle');
+
     const clearOwnOutput = (notify = true): void => {
       if (!ownsRole()) return;
       context.setRoleFiles(role, []);
       generated = null;
+      setOwnership('idle');
       if (notify) context.filesChanged();
     };
 
@@ -179,9 +194,9 @@ const jaagBuilder: WorkspacePlugin = {
         const resolvedChains = chainIds.length ? chainIds : [type === 'ligand' ? 'L' : 'A'];
         if (type === 'ligand') {
           const ligandText = row.ligand.value.trim();
-          const ligand = /^[A-Za-z0-9,]+$/.test(ligandText)
-            ? { source: 'ccd', ccdCodes: ligandText.split(',').map(code => code.trim()).filter(Boolean) }
-            : { source: 'smiles', smiles: ligandText };
+          const ligand = row.ligandSource.value === 'smiles'
+            ? { source: 'smiles', smiles: ligandText }
+            : { source: 'ccd', ccdCodes: ligandText.split(',').map(code => code.trim()).filter(Boolean) };
           return { type, chainIds: resolvedChains, ligand };
         }
         const entity: Record<string, unknown> = {
@@ -201,9 +216,27 @@ const jaagBuilder: WorkspacePlugin = {
       return { model, parseErrors };
     };
 
-    const refresh = (): void => {
-      // ``filesChanged`` asks the host to refresh every mounted capability. The
-      // generated file must not make that refresh rewrite the role again.
+    const regenerate = (): void => {
+      const { model, parseErrors } = collect();
+      const result = core().build(model, dialect);
+      errors = [...parseErrors, ...result.errors];
+      if (!errors.length && result.data != null) {
+        generated = fileFor(dialect, result.data);
+        context.setRoleFiles(role, [generated]);
+        setOwnership('builder');
+        status.textContent = `System YAML ready: ${rows.length} entities.`;
+        context.filesChanged();
+      } else {
+        clearOwnOutput();
+        status.textContent = 'System YAML is not ready.';
+      }
+    };
+
+    const refresh = (edited = false): void => {
+      // A host refresh (``filesChanged``) runs for every capability and must not
+      // write the role: only a builder edit or explicit generation may. If
+      // another capability replaced the generated file, the builder relinquishes
+      // ownership and never regenerates over that upload.
       if (refreshing || destroyed) return;
       refreshing = true;
       try {
@@ -211,21 +244,20 @@ const jaagBuilder: WorkspacePlugin = {
         error.hidden = true;
         if (!roleExists) {
           errors = [`The builder cannot bind to unknown input role "${role}".`];
-        } else if (engaged) {
-          const { model, parseErrors } = collect();
-          const result = core().build(model, dialect);
-          errors = [...parseErrors, ...result.errors];
-          if (!errors.length && result.data != null) {
-            generated = fileFor(dialect, result.data);
-            context.setRoleFiles(role, [generated]);
-            status.textContent = `System YAML ready: ${rows.length} entities.`;
-            context.filesChanged();
-          } else {
-            clearOwnOutput();
-            status.textContent = 'System YAML is not ready.';
-          }
-        } else {
-          status.textContent = 'Fill the entities, then generate the System YAML.';
+        } else if (edited) {
+          engaged = true;
+          regenerate();
+        } else if (!ownsRole()) {
+          // A host refresh that is not a builder edit never writes the role. If
+          // the generated file is gone, another capability replaced or removed
+          // it: relinquish ownership instead of regenerating over that input.
+          engaged = false;
+          generated = null;
+          const bound = context.roleFiles(role).length > 0;
+          setOwnership(bound ? 'external' : 'idle');
+          status.textContent = bound
+            ? 'The system role now holds a YAML from another source; edit the builder to generate a replacement.'
+            : 'Fill the entities, then generate the System YAML.';
         }
         if (errors.length) {
           error.textContent = errors.join('; ');
@@ -248,8 +280,9 @@ const jaagBuilder: WorkspacePlugin = {
       sequence.value = '';
       const ligand = element('input', 'text-input');
       ligand.type = 'text';
-      ligand.placeholder = 'CCD codes or SMILES (for example NAG)';
+      ligand.placeholder = 'NAG or A1L3H for CCD; CCO for SMILES';
       ligand.value = '';
+      const ligandSource = select(LIGAND_SOURCES, 'ccd');
       const modifications = element('input', 'text-input');
       modifications.type = 'text';
       modifications.placeholder = 'modifications: position:CCD';
@@ -257,26 +290,29 @@ const jaagBuilder: WorkspacePlugin = {
       const remove = element('button', 'btn btn-soft', 'Remove');
       remove.type = 'button';
       const sequenceField = labelled(sequence, 'Sequence');
-      const ligandField = labelled(ligand, 'Ligand (CCD codes or SMILES)');
+      const ligandSourceField = labelled(ligandSource, 'Ligand representation');
+      const ligandField = labelled(ligand, 'Ligand value');
       const modificationsField = labelled(modifications, 'Modifications');
       root.append(
         labelled(type, 'Entity type'), labelled(chainIds, 'Chain IDs'),
-        sequenceField, ligandField, modificationsField, remove,
+        sequenceField, ligandSourceField, ligandField, modificationsField, remove,
       );
       entityList.append(root);
       const row: EntityRow = {
-        root, type, chainIds, sequence, ligand, modifications, sequenceField, ligandField, modificationsField,
+        root, type, chainIds, sequence, ligand, ligandSource, modifications,
+        sequenceField, ligandSourceField, ligandField, modificationsField,
       };
       rows.push(row);
 
       const sync = (): void => {
         const isLigand = type.value === 'ligand';
         sequenceField.hidden = isLigand;
+        ligandSourceField.hidden = !isLigand;
         ligandField.hidden = !isLigand;
         modificationsField.hidden = isLigand;
       };
-      const edited = (): void => { engaged = true; refresh(); };
-      [type, chainIds, sequence, ligand, modifications].forEach(control => {
+      const edited = (): void => { engaged = true; refresh(true); };
+      [type, chainIds, sequence, ligand, ligandSource, modifications].forEach(control => {
         control.addEventListener('input', edited);
         control.addEventListener('change', edited);
       });
@@ -285,16 +321,16 @@ const jaagBuilder: WorkspacePlugin = {
         rows.splice(rows.indexOf(row), 1);
         root.remove();
         engaged = true;
-        refresh();
+        refresh(true);
       });
       sync();
     };
 
     target.append(details);
     details.append(entityList, add, element('h4', '', 'Covalent bonds'), labelled(bonds, 'Bonded atom pairs'), generate, clear, status, error);
-    bonds.addEventListener('input', () => { engaged = true; refresh(); });
-    bonds.addEventListener('change', () => { engaged = true; refresh(); });
-    generate.addEventListener('click', () => { engaged = true; refresh(); });
+    bonds.addEventListener('input', () => { engaged = true; refresh(true); });
+    bonds.addEventListener('change', () => { engaged = true; refresh(true); });
+    generate.addEventListener('click', () => { engaged = true; refresh(true); });
     add.addEventListener('click', () => addEntity({ type: 'protein', chainIds: 'A' }));
     clear.addEventListener('click', () => {
       engaged = false;

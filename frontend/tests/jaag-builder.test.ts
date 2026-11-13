@@ -35,7 +35,8 @@ function mount(initial: File[] = [], reentrant = false) {
     primaryIndex: () => 0,
     setPrimaryIndex: () => undefined,
     primaryFile: (role: string) => roleFiles.get(role)?.[0] ?? null,
-    inputFiles: () => [], structureFile: () => null,
+    inputFiles: () => [...roleFiles].flatMap(([role, files]) => files.map(file => ({ role, file }))),
+    structureFile: () => null,
     setSequenceRole: () => undefined, sequenceRole: () => null,
     sequence: () => '', sequenceName: () => '',
     parameters: () => ({}), setParameter: () => undefined,
@@ -49,7 +50,7 @@ function mount(initial: File[] = [], reentrant = false) {
     if (!match) throw new Error(`missing ${tag} with placeholder ${placeholder}`);
     return match;
   };
-  return { target, roleFiles, changed, instance, byPlaceholder };
+  return { target, roleFiles, changed, context, instance, byPlaceholder };
 }
 
 describe('JAAG builder input workspace capability', () => {
@@ -98,7 +99,7 @@ describe('JAAG builder input workspace capability', () => {
     const type = target.querySelectorAll('select')[0]!;
     (type as unknown as { value: string }).value = 'ligand';
     type.dispatch('change', {});
-    const ligand = byPlaceholder('input', 'CCD codes or SMILES (for example NAG)');
+    const ligand = byPlaceholder('input', 'NAG or A1L3H for CCD; CCO for SMILES');
     (ligand as unknown as { value: string }).value = 'NAG';
     ligand.dispatch('input', {});
 
@@ -106,6 +107,56 @@ describe('JAAG builder input workspace capability', () => {
     const yaml = await file.text();
     expect(yaml).toContain('entity_type: ligand');
     expect(yaml).toContain('ccd_code: NAG');
+  });
+
+  it('relinquishes the role when another capability replaces the generated YAML', async () => {
+    const { roleFiles, context, target, byPlaceholder, instance } = mount([], true);
+    const sequence = byPlaceholder('textarea', 'sequence');
+    (sequence as unknown as { value: string }).value = 'ACDEFGHIK';
+    sequence.dispatch('input', {});
+
+    const generated = (roleFiles.get('system') ?? [])[0]!;
+    expect(await generated.text()).toContain('sequence: ACDEFGHIK');
+
+    // The files capability binds an upload and then refreshes every plugin.
+    const external = new File(['entities: []\n'], 'external-system.yaml');
+    context.setRoleFiles('system', [external]);
+    context.filesChanged();
+
+    expect(roleFiles.get('system')).toEqual([external]);
+    // Later host refreshes keep the upload and what submission would carry.
+    context.filesChanged();
+    instance.refresh?.();
+    expect(roleFiles.get('system')).toEqual([external]);
+    expect(context.inputFiles()).toEqual([{ role: 'system', file: external }]);
+    const builder = target.querySelector('.ct-jaag-builder') as unknown as { dataset: Record<string, string> };
+    expect(builder.dataset.jaagOwnership).toBe('external');
+  });
+
+  it('serializes an ambiguous ligand string by the explicit representation', async () => {
+    for (const value of ['CCO', 'c1ccccc1']) {
+      for (const [source, key, other] of [
+        ['ccd', 'ccd_code', 'smiles'],
+        ['smiles', 'smiles', 'ccd_code'],
+      ] as const) {
+        const { roleFiles, target, byPlaceholder } = mount();
+        const type = target.querySelectorAll('select')[0]!;
+        (type as unknown as { value: string }).value = 'ligand';
+        type.dispatch('change', {});
+        const representation = target.querySelectorAll('select')[1]!;
+        (representation as unknown as { value: string }).value = source;
+        representation.dispatch('change', {});
+        const ligand = byPlaceholder('input', 'NAG or A1L3H for CCD; CCO for SMILES');
+        (ligand as unknown as { value: string }).value = value;
+        ligand.dispatch('input', {});
+
+        // A CCD code is case-insensitive and JAAG normalizes it; SMILES is not.
+        const serialized = source === 'ccd' ? value.toUpperCase() : value;
+        const yaml = await (roleFiles.get('system') ?? [])[0]!.text();
+        expect(yaml).toContain(`${key}: ${serialized}`);
+        expect(yaml).not.toContain(`${other}: ${serialized}`);
+      }
+    }
   });
 
   it('terminates when the host refresh follows its own change notification', () => {

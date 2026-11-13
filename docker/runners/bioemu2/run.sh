@@ -49,7 +49,11 @@ if [[ "$task_type" != "bioemu2" ]]; then
 fi
 mode=$("${BIOEMU2_PYTHON:-python}" -c '
 import json, sys
-print(json.load(open(sys.argv[1])).get("params", {}).get("mode") or "equilibrium")
+params = json.load(open(sys.argv[1])).get("params", {})
+mode = params.get("mode")
+if mode not in ("equilibrium", "structure_prediction", "propagate"):
+    raise SystemExit(f"BioEmu2 Task manifest declares no valid mode: {mode!r}")
+print(mode)
 ' "$task_file") || { echo "BioEmu2 could not read the Task mode" >&2; exit 1; }
 case "$mode" in
   equilibrium|structure_prediction|propagate) ;;

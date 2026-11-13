@@ -72,8 +72,9 @@ input_workspace:
       id: jaag_system_builder
       title: Build a System YAML
       description: Author and validate a System YAML with the pinned JAAG builder.
-        The generated YAML is bound to the system role and replaces an upload when
-        you generate it.
+        Generating binds the YAML to the system role and replaces the current
+        upload; a later upload through the files capability replaces the
+        generated file.
       options:
         target: bioemu2
         role: system
