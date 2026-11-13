@@ -37,6 +37,11 @@ POINT_BOUND_MARGIN_ANGSTROM = 10.0
 #: range cannot turn into a whole-structure centroid.
 MAX_GROUP_RESIDUES = 1000
 
+#: How far an explicit centroid point may sit from the value recomputed from
+#: the recorded atom serials. The client writes full-precision doubles and both
+#: sides read the same PDB coordinates, so this only absorbs serialization.
+CENTROID_MATCH_TOLERANCE_ANGSTROM = 0.01
+
 _GROUP_TERM = re.compile(r"^(?P<chain>[A-Za-z0-9_]):(?P<start>[0-9]+)(?:-(?P<end>[0-9]+))?$")
 _RESIDUE_TOKEN = re.compile(r"^(?:(?P<chain>[A-Za-z0-9]):)?(?P<number>[0-9]+)(?P<icode>[A-Za-z])?$")
 _ATOM_TOKEN = re.compile(r"^(?P<first>[0-9]+)(?:-(?P<last>[0-9]+))?$")
@@ -382,12 +387,20 @@ _COORDINATE_FIELDS = ("start_x", "start_y", "start_z")
 #: mode's set would be recorded in provenance while changing nothing, so it is
 #: refused instead.
 _MODE_FIELDS = {
-    "point": frozenset(_COORDINATE_FIELDS),
+    "point": frozenset(
+        set(_COORDINATE_FIELDS) | {"start_selected_residues", "start_selected_serials"}
+    ),
     "atom": frozenset({"start_chain", "start_residue_number", "start_atom_name", "start_altloc"}),
     "residue": frozenset({"start_chain", "start_residue_number"}),
     "group": frozenset({"start_group"}),
     "ligand": frozenset({"start_residue_name", "start_chain", "start_residue_number"}),
 }
+
+#: Point-mode coordinate provenance. ``centroid`` and ``com`` are explicit
+#: coordinates the client computed from a selection; the Runner can recompute
+#: an arithmetic centroid but records a mass-weighted centre of mass as the
+#: client's declared method.
+POINT_SOURCES = ("manual", "viewer-crosshair", "centroid", "com")
 
 
 def _nonempty(params: dict[str, object], fields: tuple[str, ...]) -> dict[str, object]:
@@ -402,8 +415,97 @@ def _selection_fields(params: dict[str, object]) -> dict[str, object]:
         "start_altloc",
         "start_residue_name",
         "start_group",
+        "start_selected_residues",
+        "start_selected_serials",
     )
     return _nonempty(params, fields)
+
+
+def _parse_atom_serials(spec: str, limit: int) -> list[int]:
+    """Expand ``NUMBER`` and ``NUMBER-NUMBER`` tokens into atom serials.
+
+    No selection can name more distinct serials than the structure has atoms,
+    so a longer range or list is malformed. The length is checked before the
+    range is expanded; otherwise a schema-valid range such as ``1-1000000000``
+    would allocate the whole list and exhaust the worker.
+    """
+    serials: list[int] = []
+    for token in _tokens(spec):
+        match = _ATOM_TOKEN.fullmatch(token)
+        if match is None:
+            raise SelectionError(f"selected atom serial {token!r} is not an integer or a NUMBER-NUMBER range")
+        first = int(match.group("first"))
+        last = int(match.group("last") or first)
+        if last < first:
+            raise SelectionError(f"selected atom serial range {token!r} is descending")
+        count = last - first + 1
+        if len(serials) + count > limit:
+            raise SelectionError(
+                f"selected atom serials at {token!r} name more than the {limit} atoms in the structure"
+            )
+        serials.extend(range(first, last + 1))
+    return serials
+
+
+def _point_selection(
+    params: dict[str, object],
+    atoms: list[Atom],
+    difficult: bool,
+) -> tuple[list[Atom], list[str], str]:
+    """Resolve the atom set behind an explicit point and its canonical labels.
+
+    The selected residues are the scientific record of what produced the point;
+    the selected serials prove which atoms participated after CAVER's
+    alternate-location removal. Both lists must agree, so a client cannot
+    publish a point with a different atom set than the one it actually used.
+    """
+    residue_spec = str(params.get("start_selected_residues") or "").strip()
+    serial_spec = str(params.get("start_selected_serials") or "").strip()
+    if not residue_spec or not serial_spec:
+        raise SelectionError(
+            "centroid and com point sources require start_selected_residues and start_selected_serials"
+        )
+    by_key = _residues(atoms)
+    selected_keys: list[tuple[str, int, str]] = []
+    for chain, start, end, blank in _parse_group(residue_spec):
+        for number in range(start, end + 1):
+            if blank:
+                if any(candidate[0] for candidate in by_key):
+                    raise SelectionError(
+                        f"start_selected_residues names the blank chain at {number}, but the structure has named chains"
+                    )
+                key = ("", number, "")
+                if key not in by_key:
+                    raise SelectionError(f"residue _:{number} is absent from the structure")
+            else:
+                key, _residue_atoms, _resolution = _resolve_residue(by_key, chain, number)
+            if key not in selected_keys:
+                selected_keys.append(key)
+    retained = {
+        atom.serial: atom
+        for key in selected_keys
+        for atom in retained_atoms(by_key[key], difficult)
+    }
+    if not retained:
+        raise SelectionError("the recorded selection resolves to no atoms CAVER retains")
+    serials = _parse_atom_serials(serial_spec, len(atoms))
+    if len(serials) != len(set(serials)):
+        raise SelectionError("start_selected_serials names the same atom serial more than once")
+    missing = sorted(set(serials) - set(retained))
+    if missing:
+        raise SelectionError(
+            f"start_selected_serials names atom serials {missing[:10]} outside the recorded residues"
+        )
+    extra = sorted(set(retained) - set(serials))
+    if extra:
+        raise SelectionError(
+            f"start_selected_serials omits atom serials {extra[:10]} of the recorded residues; "
+            "the recorded atom set must be complete"
+        )
+    # The blank chain is kept explicit (`_:5`) so the provenance value parses
+    # with the same grammar the Task accepts as input.
+    canonical = [f"{chain or '_'}:{number}" for chain, number, _icode in selected_keys]
+    return [retained[serial] for serial in serials], canonical, serial_spec
 
 
 def _manual_point(params: dict[str, object], atoms: list[Atom], difficult: bool) -> StartPoint:
@@ -420,16 +522,72 @@ def _manual_point(params: dict[str, object], atoms: list[Atom], difficult: bool)
             f"start point ({x:.3f}, {y:.3f}, {z:.3f}) lies outside the structure bounds "
             f"({x0:.3f}..{x1:.3f}, {y0:.3f}..{y1:.3f}, {z0:.3f}..{z1:.3f})"
         )
+    source = str(params.get("start_point_source") or "manual")
+    if source not in POINT_SOURCES:
+        raise SelectionError(f"start_point_source {source!r} is not one of: {', '.join(POINT_SOURCES)}")
+    provenance: dict[str, object] = {
+        "mode": "point",
+        "source": source,
+        "point_angstrom": [x, y, z],
+        "units": "angstrom",
+        "bounds_angstrom": [x0, y0, z0, x1, y1, z1],
+    }
+    selected = _nonempty(params, ("start_selected_residues", "start_selected_serials"))
+    if source == "manual":
+        if selected:
+            raise SelectionError(
+                "a manual point carries no selected residues or atom serials; "
+                "use the centroid or com source for a point derived from a selection"
+            )
+        provenance["coordinate_method"] = "typed Angstrom coordinates"
+    elif source == "viewer-crosshair":
+        provenance["coordinate_method"] = "viewer crosshair position"
+        if selected:
+            selected_atoms, canonical, serial_spec = _point_selection(params, atoms, difficult)
+            provenance.update(
+                {
+                    "selected_residues": canonical,
+                    "selected_atom_serials": [atom.serial for atom in selected_atoms],
+                    "atom_count": len(selected_atoms),
+                    "serial_ranges": serial_spec,
+                }
+            )
+    else:
+        selected_atoms, canonical, serial_spec = _point_selection(params, atoms, difficult)
+        provenance.update(
+            {
+                "selected_residues": canonical,
+                "selected_atom_serials": [atom.serial for atom in selected_atoms],
+                "atom_count": len(selected_atoms),
+                "units": "angstrom",
+            }
+        )
+        if source == "centroid":
+            cx, cy, cz = _centroid(selected_atoms)
+            provenance["coordinate_method"] = "arithmetic mean of the selected retained atoms"
+            if math.dist((x, y, z), (cx, cy, cz)) > CENTROID_MATCH_TOLERANCE_ANGSTROM:
+                raise SelectionError(
+                    f"the centroid source records ({x:.3f}, {y:.3f}, {z:.3f}) but the selected atoms "
+                    f"produce ({cx:.3f}, {cy:.3f}, {cz:.3f})"
+                )
+            provenance["coordinate_verified"] = True
+        else:
+            policy = str(params.get("start_com_hydrogen_policy") or "include")
+            if policy not in ("include", "exclude"):
+                raise SelectionError("start_com_hydrogen_policy must be include or exclude")
+            # Masses are not part of the PDB contract and the Runner carries no
+            # second atomic-weight table, so the mass-weighted value is
+            # recorded as the client's declared method instead of being
+            # recomputed here.
+            provenance["coordinate_method"] = "mass-weighted center of mass declared by the client"
+            provenance["hydrogen_policy"] = policy
+            provenance["coordinate_verified"] = False
+        provenance["serial_ranges"] = serial_spec
     return StartPoint(
         x,
         y,
         z,
-        {
-            "mode": "point",
-            "point_angstrom": [x, y, z],
-            "units": "angstrom",
-            "bounds_angstrom": [x0, y0, z0, x1, y1, z1],
-        },
+        provenance,
         (("starting_point_coordinates", f"{x:.3f} {y:.3f} {z:.3f}"),),
     )
 
@@ -476,6 +634,7 @@ def _single_atom(params: dict[str, object], atoms: list[Atom], difficult: bool) 
         atom.z,
         {
             "mode": "atom",
+            "source": "atom",
             "point_angstrom": [atom.x, atom.y, atom.z],
             "units": "angstrom",
             "chain": atom.chain,
@@ -507,6 +666,7 @@ def _residue_centroid(params: dict[str, object], atoms: list[Atom], difficult: b
         z,
         {
             "mode": "residue",
+            "source": "residue",
             "point_angstrom": [x, y, z],
             "units": "angstrom",
             "chain": key[0],
@@ -562,6 +722,7 @@ def _ligand_centroid(params: dict[str, object], atoms: list[Atom], difficult: bo
         z,
         {
             "mode": "ligand",
+            "source": "ligand",
             "point_angstrom": [x, y, z],
             "units": "angstrom",
             "chain": residue_chain,
@@ -668,6 +829,7 @@ def _group_centroid(params: dict[str, object], atoms: list[Atom], difficult: boo
         z,
         {
             "mode": "group",
+            "source": "group",
             "point_angstrom": [x, y, z],
             "units": "angstrom",
             "group": spec,
@@ -728,6 +890,35 @@ def validate_exclusions(params: dict[str, object], atoms: list[Atom]) -> None:
             raise SelectionError(f"exclude_atom_numbers names {token!r}, which matches no atom serial")
 
 
+def validate_inclusions(params: dict[str, object], atoms: list[Atom]) -> None:
+    """Reject include tokens the structure cannot satisfy.
+
+    CAVER selects all atoms named by any include directive and then removes the
+    excluded ones, so an include token that matches nothing silently narrows the
+    calculation to an unrelated set. Every include identifier must resolve
+    against the reference structure before the run starts.
+    """
+    by_key = _residues(atoms)
+    for token in _tokens(params.get("include_residue_ids")):
+        chain, number = parse_residue_token(token)
+        _resolve_residue(by_key, chain, number)
+    names = {atom.resname for atom in atoms}
+    for token in _tokens(params.get("include_residue_names")):
+        if token not in names:
+            raise SelectionError(f"include_residue_names names {token!r}, which is absent from the structure")
+    serials = {atom.serial for atom in atoms}
+    for token in _tokens(params.get("include_atom_numbers")):
+        match = _ATOM_TOKEN.fullmatch(token)
+        if match is None:
+            raise SelectionError(f"atom number {token!r} is not an integer or a NUMBER-NUMBER range")
+        first = int(match.group("first"))
+        last = int(match.group("last") or first)
+        if last < first:
+            raise SelectionError(f"atom number range {token!r} is descending")
+        if not any(first <= serial <= last for serial in serials):
+            raise SelectionError(f"include_atom_numbers names {token!r}, which matches no atom serial")
+
+
 _RESOLVERS = {
     "point": _manual_point,
     "atom": _single_atom,
@@ -737,8 +928,18 @@ _RESOLVERS = {
 }
 
 
-def resolve_start_point(atoms: list[Atom], params: dict[str, object]) -> StartPoint:
-    """Resolve the typed start-point controls against parsed structure atoms."""
+def resolve_start_point(
+    atoms: list[Atom],
+    params: dict[str, object],
+    *,
+    reference_sha256: str | None = None,
+) -> StartPoint:
+    """Resolve the typed start-point controls against parsed structure atoms.
+
+    When ``reference_sha256`` is the digest of the file the atoms were parsed
+    from, a client-declared ``start_reference_sha256`` must match it and the
+    verified value is recorded in provenance.
+    """
     mode = str(params.get("start_point_mode"))
     resolver = _RESOLVERS.get(mode)
     if resolver is None:
@@ -751,6 +952,17 @@ def resolve_start_point(atoms: list[Atom], params: dict[str, object]) -> StartPo
             f"{fields} {'do' if len(irrelevant) > 1 else 'does'} not apply to {mode} mode; "
             "leave the field empty or choose a mode that uses it"
         )
+    source = str(params.get("start_point_source") or "manual")
+    if mode != "point" and source != "manual":
+        raise SelectionError(f"start_point_source {source!r} only applies to point mode")
+    digest = str(params.get("start_reference_sha256") or "")
+    if digest and not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise SelectionError("start_reference_sha256 must be a lowercase SHA-256 hex digest")
+    if digest and reference_sha256 is not None and digest != reference_sha256:
+        raise SelectionError(
+            "start_reference_sha256 does not match the submitted reference structure; "
+            "the start point was derived from a different topology"
+        )
     difficult = difficult_conformations(atoms)
     if not difficult:
         # CAVER removes alternate conformations for every residue in the file,
@@ -762,4 +974,6 @@ def resolve_start_point(atoms: list[Atom], params: dict[str, object]) -> StartPo
                 raise _blank_occupancy_error(residue_atoms)
     point = resolver(params, atoms, difficult)
     point.provenance["parameters"] = _selection_fields(params)
+    if reference_sha256 is not None:
+        point.provenance["reference_sha256"] = reference_sha256
     return point

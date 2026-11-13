@@ -33,6 +33,7 @@ from pdb_selection import (
     parse_pdb,
     resolve_start_point,
     validate_exclusions,
+    validate_inclusions,
 )
 
 #: CAVER writes the initial start point it actually used to data/origins.pdb.
@@ -199,8 +200,10 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     reference_atoms = parse_pdb(structures[0])
+    reference_sha256 = sha256_file(structures[0])
+    validate_inclusions(params, reference_atoms)
     validate_exclusions(params, reference_atoms)
-    start_point = resolve_start_point(reference_atoms, params)
+    start_point = resolve_start_point(reference_atoms, params, reference_sha256=reference_sha256)
     frames = stage_frames(structures[0], snapshots, pdb_dir)
     if params.get("start_point_mode") == "atom":
         serial = start_point.provenance["atom_serial"]
@@ -285,9 +288,11 @@ def main() -> None:
     first_frame = int(params["first_frame"])
     # CAVER writes one origin per analyzed frame, starting with the first one it
     # analyzed, and resolves atom/residue selections per frame.
+    # An explicit point is fixed in space; atom and residue selections follow
+    # their identity into the analyzed frame instead.
     analyzed_start = (
         start_point
-        if first_frame == 1
+        if first_frame == 1 or params.get("start_point_mode") == "point"
         else resolve_start_point(parse_pdb(pdb_dir / f"frame_{first_frame}.pdb"), params)
     )
     delta = math.dist(origin, (analyzed_start.x, analyzed_start.y, analyzed_start.z))

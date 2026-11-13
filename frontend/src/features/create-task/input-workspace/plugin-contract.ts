@@ -20,18 +20,26 @@ export interface WorkspaceContext {
   setStructureSelections(value: SelectedResidue[]): void;
   summaries(): WorkspaceSummary[];
   changed(): void;
-  filesChanged(): void;
+  filesChanged(options?: WorkspaceRefreshOptions): void;
 }
 
 export interface WorkspacePluginServices {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
 }
 
+export interface WorkspaceRefreshOptions {
+  /**
+   * The caller replaced the complete form state with a preset, so the files and
+   * parameters it observes were written together and already agree.
+   */
+  preset?: boolean;
+}
+
 export interface WorkspacePluginInstance {
   readValue?(): unknown;
   summarize?(): WorkspaceSummary | WorkspaceSummary[] | null;
   validate?(): string | string[] | null;
-  refresh?(): void | Promise<void>;
+  refresh?(options?: WorkspaceRefreshOptions): void | Promise<void>;
   destroy?(): void;
 }
 

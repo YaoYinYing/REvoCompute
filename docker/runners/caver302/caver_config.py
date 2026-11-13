@@ -54,7 +54,14 @@ ENUM_PARAMETERS = {
 BOOLEAN_PARAMETERS = {"automatic_shell_radius"}
 NUMBER_OF_APPROXIMATING_BALLS = (4, 6, 8, 12, 20)
 SEED_RANGE = (-2_147_483_648, 2_147_483_647)
-TEXT_PARAMETERS = {"exclude_residue_ids", "exclude_residue_names", "exclude_atom_numbers"}
+TEXT_PARAMETERS = {
+    "include_residue_ids",
+    "include_residue_names",
+    "include_atom_numbers",
+    "exclude_residue_ids",
+    "exclude_residue_names",
+    "exclude_atom_numbers",
+}
 
 START_POINT_PARAMETERS = {
     "start_point_mode",
@@ -67,6 +74,11 @@ START_POINT_PARAMETERS = {
     "start_altloc",
     "start_residue_name",
     "start_group",
+    "start_point_source",
+    "start_reference_sha256",
+    "start_selected_residues",
+    "start_selected_serials",
+    "start_com_hydrogen_policy",
 }
 
 #: Every parameter the Runner accepts. Anything else is a contract error.
@@ -220,7 +232,12 @@ def render_config(params: dict[str, object], start_point: StartPoint) -> str:
         # fill the scratch filesystem; provenance records the deviation.
         "swap no",
     ]
+    # CAVER selects the include set first and then removes the exclude set, so
+    # both families are valid in one config and the excludes refine the includes.
     for name, pattern in (
+        ("include_residue_ids", _RESIDUE_ID),
+        ("include_residue_names", _RESIDUE_NAME),
+        ("include_atom_numbers", _ATOM_NUMBER),
         ("exclude_residue_ids", _RESIDUE_ID),
         ("exclude_residue_names", _RESIDUE_NAME),
         ("exclude_atom_numbers", _ATOM_NUMBER),

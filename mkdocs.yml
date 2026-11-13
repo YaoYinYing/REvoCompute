@@ -85,6 +85,7 @@ nav:
       - Access Policy: runner-guide/access-policy.md
       - Adding a Runner: runner-guide/adding-a-runner.md
       - Docking Runners: runner-guide/docking-runners.md
+      - CAVER Tunnels: runner-guide/caver.md
       - Adaptation Wait List: runner-guide/wait-list.md
   - Developer Guide:
       - Overview: developer-guide/index.md

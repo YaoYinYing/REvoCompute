@@ -32,6 +32,7 @@ from pdb_selection import (  # noqa: E402
     resolve_start_point,
     retained_atoms,
     validate_exclusions,
+    validate_inclusions,
 )
 
 
@@ -556,3 +557,207 @@ def test_128_atom_conformers_are_a_difficult_case(tmp_path: Path) -> None:
     assert resolved.provenance["removed_altlocs"] == []
     # Mean of all 256 atoms: x = 20 + 63.5 * 3, y = (3 + 8) / 2.
     assert resolved.provenance["point_angstrom"] == [210.5, 5.5, 3.0]
+
+
+def test_explicit_centroid_must_match_the_recorded_atom_set() -> None:
+    atoms = _atoms()
+    point = resolve_start_point(
+        atoms,
+        {
+            "start_point_mode": "point",
+            "start_point_source": "centroid",
+            "start_x": 2.0,
+            "start_y": 1.0,
+            "start_z": 1.0,
+            "start_selected_residues": "A:1",
+            "start_selected_serials": "1-3",
+            "start_reference_sha256": "0" * 64,
+        },
+    )
+    assert point.provenance["source"] == "centroid"
+    assert point.provenance["selected_residues"] == ["A:1"]
+    assert point.provenance["selected_atom_serials"] == [1, 2, 3]
+    assert point.provenance["coordinate_verified"] is True
+    assert point.directives == (("starting_point_coordinates", "2.000 1.000 1.000"),)
+
+    with pytest.raises(SelectionError, match="but the selected atoms produce"):
+        resolve_start_point(
+            atoms,
+            {
+                "start_point_mode": "point",
+                "start_point_source": "centroid",
+                "start_x": 9.0,
+                "start_y": 1.0,
+                "start_z": 1.0,
+                "start_selected_residues": "A:1",
+                "start_selected_serials": "1-3",
+            },
+        )
+
+
+def test_explicit_centroid_requires_a_complete_selected_atom_set() -> None:
+    atoms = _atoms()
+    base = {
+        "start_point_mode": "point",
+        "start_point_source": "centroid",
+        "start_x": 2.0,
+        "start_y": 1.0,
+        "start_z": 1.0,
+        "start_selected_residues": "A:1",
+    }
+    with pytest.raises(SelectionError, match="omits atom serials"):
+        resolve_start_point(atoms, {**base, "start_selected_serials": "1-2"})
+    with pytest.raises(SelectionError, match="outside the recorded residues"):
+        resolve_start_point(atoms, {**base, "start_selected_serials": "1-3,9"})
+    with pytest.raises(SelectionError, match="require start_selected_residues"):
+        resolve_start_point(
+            atoms,
+            {**base, "start_selected_residues": "", "start_selected_serials": "1-3"},
+        )
+
+
+def test_an_atom_serial_range_beyond_the_structure_is_refused() -> None:
+    atoms = _atoms()
+    base = {
+        "start_point_mode": "point",
+        "start_point_source": "centroid",
+        "start_x": 2.0,
+        "start_y": 1.0,
+        "start_z": 1.0,
+        "start_selected_residues": "A:1",
+    }
+    # A schema-valid range must be refused before it is expanded; this would
+    # otherwise allocate a billion integers.
+    with pytest.raises(SelectionError, match="name more than the 14 atoms in the structure"):
+        resolve_start_point(atoms, {**base, "start_selected_serials": "1-1000000000"})
+    with pytest.raises(SelectionError, match="name more than the 14 atoms in the structure"):
+        resolve_start_point(atoms, {**base, "start_selected_serials": "1-10,11-20"})
+
+
+def test_com_is_recorded_as_the_clients_declared_method_not_recomputed() -> None:
+    atoms = _atoms()
+    # Fe at 4.0 and N at 4.5 give a mass-weighted x near 4.10, distinct from
+    # the geometric centroid 4.25. The Runner records the declared method and
+    # atom set; it carries no second atomic-weight table.
+    point = resolve_start_point(
+        atoms,
+        {
+            "start_point_mode": "point",
+            "start_point_source": "com",
+            "start_x": 4.1,
+            "start_y": 4.0,
+            "start_z": 4.0,
+            "start_selected_residues": "A:500",
+            "start_selected_serials": "11-12",
+            "start_reference_sha256": "0" * 64,
+        },
+    )
+    assert point.provenance["coordinate_method"].startswith("mass-weighted")
+    assert point.provenance["coordinate_verified"] is False
+    assert point.provenance["selected_atom_serials"] == [11, 12]
+
+    with pytest.raises(SelectionError, match="but the selected atoms produce"):
+        resolve_start_point(
+            atoms,
+            {
+                "start_point_mode": "point",
+                "start_point_source": "centroid",
+                "start_x": 4.1,
+                "start_y": 4.0,
+                "start_z": 4.0,
+                "start_selected_residues": "A:500",
+                "start_selected_serials": "11-12",
+            },
+        )
+
+
+def test_point_source_is_validated_and_limited_to_point_mode() -> None:
+    atoms = _atoms()
+    with pytest.raises(SelectionError, match="not one of"):
+        resolve_start_point(
+            atoms,
+            {"start_point_mode": "point", "start_point_source": "guessed", "start_x": 4, "start_y": 4, "start_z": 4},
+        )
+    with pytest.raises(SelectionError, match="only applies to point mode"):
+        resolve_start_point(
+            atoms,
+            {"start_point_mode": "residue", "start_residue_number": 1, "start_point_source": "centroid"},
+        )
+    with pytest.raises(SelectionError, match="manual point carries no selected"):
+        resolve_start_point(
+            atoms,
+            {
+                "start_point_mode": "point",
+                "start_point_source": "manual",
+                "start_x": 4,
+                "start_y": 4,
+                "start_z": 4,
+                "start_selected_residues": "A:1",
+                "start_selected_serials": "1",
+            },
+        )
+    with pytest.raises(SelectionError, match="lowercase SHA-256"):
+        resolve_start_point(
+            atoms,
+            {
+                "start_point_mode": "point",
+                "start_x": 4,
+                "start_y": 4,
+                "start_z": 4,
+                "start_reference_sha256": "ABC",
+            },
+        )
+
+
+def test_native_modes_record_their_own_source() -> None:
+    atoms = _atoms()
+    for params, expected in (
+        ({"start_point_mode": "atom", "start_residue_number": 1, "start_atom_name": "N"}, "atom"),
+        ({"start_point_mode": "residue", "start_residue_number": 1}, "residue"),
+        ({"start_point_mode": "group", "start_group": "A:1-2"}, "group"),
+        (
+            {
+                "start_point_mode": "ligand",
+                "start_residue_name": "CPZ",
+                "start_chain": "B",
+                "start_residue_number": 600,
+            },
+            "ligand",
+        ),
+    ):
+        assert resolve_start_point(atoms, params).provenance["source"] == expected
+
+
+def test_inclusions_are_validated_against_the_structure() -> None:
+    atoms = _atoms()
+    validate_inclusions(
+        {"include_residue_ids": "A:1 B:1", "include_residue_names": "CPZ", "include_atom_numbers": "1-3 14"},
+        atoms,
+    )
+    with pytest.raises(SelectionError, match="absent from the structure"):
+        validate_inclusions({"include_residue_ids": "A:99"}, atoms)
+    with pytest.raises(SelectionError, match="absent from the structure"):
+        validate_inclusions({"include_residue_names": "ZZZ"}, atoms)
+    with pytest.raises(SelectionError, match="matches no atom serial"):
+        validate_inclusions({"include_atom_numbers": "900-999"}, atoms)
+    with pytest.raises(SelectionError, match="insertion code"):
+        validate_inclusions({"include_residue_ids": "A:10A"}, atoms)
+
+
+def test_reference_digest_is_verified_and_recorded() -> None:
+    atoms = _atoms()
+    digest = "c" * 64
+    params = {
+        "start_point_mode": "point",
+        "start_point_source": "centroid",
+        "start_x": 2.0,
+        "start_y": 1.0,
+        "start_z": 1.0,
+        "start_selected_residues": "A:1",
+        "start_selected_serials": "1-3",
+        "start_reference_sha256": digest,
+    }
+    point = resolve_start_point(atoms, params, reference_sha256=digest)
+    assert point.provenance["reference_sha256"] == digest
+    with pytest.raises(SelectionError, match="does not match the submitted reference structure"):
+        resolve_start_point(atoms, {**params, "start_reference_sha256": "d" * 64}, reference_sha256=digest)
