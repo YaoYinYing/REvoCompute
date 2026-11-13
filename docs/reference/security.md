@@ -283,10 +283,15 @@ never a login credential: it authorizes no Task list, API, or other artifact.
   marker before resolving anything, and folds duplicate and `.` separators
   without ever resolving `..`; a leading `//` is treated as a path, not a URL.
   The gateway matches the marker in the raw request line and normalized URI
-  (including `%25` and `%00`) and rejects a request URI containing a parent-dot
-  segment with `400` before proxying, because a resolved `..` can remove the
-  marker from `$uri` while the raw request line still names the token. Gateway
-  error messages for the bearer route are suppressed; the application still
-  records its own redacted error. Tradeoff: a request URI with a parent-dot
-  segment is rejected, and a URI containing `%25` or a decoded bare `%` is
-  access-log-redacted even when it is not a bearer request.
+  (including `%25` and `%00`) and rejects the parent-dot spellings whose
+  normalization would remove the marker from `$uri` (`..` followed by `/`,
+  `%2f`, `%00`, `%5c`, or end-of-URI) with `400` before proxying, because a
+  resolved `..` can remove the marker while the raw request line still names the
+  token. A trailing `..` before `?`, `;` or `%3F` is not rejected: it returns
+  `502` with a closed upstream, but nginx leaves the marker in `$uri`, so the
+  gateway error log stays suppressed, the access line is redacted, and the token
+  is not forwarded. Gateway error messages for the bearer route are suppressed;
+  the application still records its own redacted error. Tradeoff: the
+  parent-dot spellings whose normalization would remove the marker are rejected,
+  and a URI containing `%25` or a decoded bare `%` is access-log-redacted even
+  when it is not a bearer request.
