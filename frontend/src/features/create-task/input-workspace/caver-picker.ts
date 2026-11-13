@@ -465,17 +465,39 @@ export class CaverPicker {
     this.render();
   }
 
-  /** A new reference structure invalidates every topology-derived value. */
-  topologyChanged(): void {
+  /**
+   * A new reference structure resets every topology-derived value.
+   *
+   * A file-only edit also invalidates the start-point parameters, because they
+   * name identities in the old topology. A preset writes its files and
+   * parameters together, so `preset` keeps those parameters and only re-derives
+   * the viewer state once the new structure has loaded.
+   */
+  topologyChanged(preset = false): void {
     this.generation += 1;
     this.selection = [];
     this.atoms = [];
-    this.derived = null;
     this.appliedSignature = '';
     this.error = null;
     this.topologyRevision = -1;
     this.names.replaceChildren();
-    this.writeParams(clearStartFields({ start_point_mode: this.mode() ?? 'point' }));
+    if (preset) {
+      // Restored coordinates are the canonical value, not a user edit, so
+      // `derived` must match them or the next refresh would demote them to a
+      // manual point and drop their provenance.
+      const parameters = this.context.parameters();
+      const point = {
+        x: Number(parameters.start_x),
+        y: Number(parameters.start_y),
+        z: Number(parameters.start_z),
+      };
+      this.derived = caverMode(parameters) === 'point' && [point.x, point.y, point.z].every(Number.isFinite)
+        ? point
+        : null;
+    } else {
+      this.derived = null;
+      this.writeParams(clearStartFields({ start_point_mode: this.mode() ?? 'point' }));
+    }
     this.context.changed();
   }
 
@@ -823,13 +845,24 @@ export class CaverPicker {
     select.setAttribute('aria-label', t('ct.caver.atom'));
     const parameters = this.context.parameters();
     const chosenAlt = parameters.start_altloc || '';
+    // The browser displays the first option until one is marked selected, so an
+    // unselected canonically-empty state needs its own option; otherwise the
+    // displayed atom is silently not the committed one and a one-atom residue
+    // cannot be chosen at all.
+    const placeholder = new Option(t('ct.caver.chooseAtom'), '');
+    placeholder.disabled = true;
+    select.append(placeholder);
+    let chosen = false;
     candidates.forEach((atom, index) => {
       const name = atom.identity.atomName + (atom.identity.altloc ? ` (${atom.identity.altloc})` : '');
-      const chosen = atom.identity.atomName === parameters.start_atom_name
+      const matches = atom.identity.atomName === parameters.start_atom_name
         && (atom.identity.altloc || '') === chosenAlt;
-      select.append(new Option(`${name} · ${atom.identity.atomSerial}`, String(index), false, chosen));
+      chosen ||= matches;
+      select.append(new Option(`${name} · ${atom.identity.atomSerial}`, String(index), false, matches));
     });
+    if (!chosen) placeholder.selected = true;
     select.addEventListener('change', () => {
+      if (select.value === '') return;
       const atom = candidates[Number(select.value)];
       if (atom) this.applyAtom(atom);
     });

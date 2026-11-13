@@ -268,10 +268,12 @@ vocabulary and never introduces a second parameter schema:
   policy).
 
 Every derived value is bound to the loaded topology revision and digest.
-Loading another reference clears the selection, crosshair and topology-derived
-parameters before the new structure can contribute a name or coordinate. The
-Runner independently recomputes a geometric-centroid point from the recorded
-serials and verifies CAVER's `data/origins.pdb` against the point it renders.
+Loading another reference without a preset clears the selection, crosshair and
+topology-derived parameters before the new structure can contribute a name or
+coordinate; a preset that binds a reference together with its start-point
+parameters is restored as one state. The Runner independently recomputes a
+geometric-centroid point from the recorded serials and verifies CAVER's
+`data/origins.pdb` against the point it renders.
 
 ## Result-workspace reference composition
 

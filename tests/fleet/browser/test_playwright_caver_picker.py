@@ -16,6 +16,7 @@ picker must speak that vocabulary and never invent its own.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from playwright.sync_api import Page, expect
@@ -23,6 +24,8 @@ import pytest
 
 import browser_frontend_assets
 from frontend_fixtures import (
+    DemoFileSpec,
+    DemoSpec,
     InputRole,
     ParameterSpec,
     RunnerDefinition,
@@ -64,6 +67,8 @@ CAVER_PICKER = RunnerDefinition(
         ParameterSpec.integer("start_residue_number"),
         ParameterSpec("start_residue_name"),
         ParameterSpec("start_chain"),
+        ParameterSpec("start_atom_name"),
+        ParameterSpec("start_altloc"),
         ParameterSpec("start_group"),
         ParameterSpec.enumeration(
             "start_point_source", ("manual", "viewer-crosshair", "centroid", "com"),
@@ -210,3 +215,92 @@ def test_an_insertion_coded_pick_is_refused_and_writes_nothing(
     assert _control(page, "start_residue_number").input_value() == ""
     assert _control(page, "start_chain").input_value() == ""
     assert run.is_disabled()
+
+
+def _start_point_preset() -> DemoSpec:
+    """One complete preset: a reference file plus the start point it defines."""
+    return DemoSpec(
+        id="configured_start_point",
+        title="Configured centroid start point",
+        purpose="Bind the reference structure together with an explicit centroid.",
+        files=(
+            DemoFileSpec(role="structure", path="reference.pdb", body=PDB, media_type="chemical/x-pdb"),
+        ),
+        parameters={
+            "start_point_mode": "point",
+            "start_point_source": "centroid",
+            "start_x": "12.5",
+            "start_y": "8.25",
+            "start_z": "4.75",
+            "start_selected_residues": "A:7",
+            "start_selected_serials": "1-4",
+            "start_reference_sha256": hashlib.sha256(PDB.encode("utf-8")).hexdigest(),
+        },
+    )
+
+
+def test_a_preset_reinstates_its_start_point_and_undo_restores_the_previous_one(
+    page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file and its parameters are one state, not a file edit plus a reset."""
+    monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", PRODUCTION_DIST)
+    mount_scenario(page, runner_scenario(CAVER_PICKER).with_demos([_start_point_preset()]))
+    page.goto(f"{ORIGIN}/compute/create_task?task_type={CAVER_PICKER.name}")
+    expect(page.locator(".ct-workbench")).to_be_visible()
+
+    # The state the preset replaces: a different reference and a residue point.
+    page.locator(".ct-file-role input[type=file]").first.set_input_files(
+        {"name": "manual.pdb", "mimeType": "chemical/x-pdb", "buffer": PDB.encode("utf-8")}
+    )
+    page.get_by_text("select residues").wait_for(timeout=180_000)
+    _control(page, "start_point_mode").select_option("residue")
+    _control(page, "start_chain").fill("A")
+    _control(page, "start_residue_number").fill("7")
+
+    page.locator("[data-ct-demo-open]").click()
+    expect(page.locator("dialog.ct-demo-dialog")).to_be_visible()
+    page.locator("[data-ct-demo-choose]").click()
+    page.get_by_role("button", name="Replace current inputs").click()
+    expect(page.locator(".ct-demo-applied")).to_be_visible()
+
+    # Loading the file must not erase the parameters that arrived with it.
+    expect(page.locator(".ct-file-well")).to_contain_text("reference.pdb")
+    expect(_control(page, "start_point_mode")).to_have_value("point")
+    expect(_control(page, "start_point_source")).to_have_value("centroid")
+    expect(_control(page, "start_x")).to_have_value("12.5")
+    expect(_control(page, "start_y")).to_have_value("8.25")
+    expect(_control(page, "start_z")).to_have_value("4.75")
+    expect(_control(page, "start_selected_serials")).to_have_value("1-4")
+    expect(_control(page, "start_reference_sha256")).to_have_value(
+        hashlib.sha256(PDB.encode("utf-8")).hexdigest()
+    )
+
+    # Undo is another whole preset: the swapped reference and its residue point.
+    page.get_by_role("button", name="Put my inputs back").click()
+    expect(page.locator(".ct-file-well")).to_contain_text("manual.pdb")
+    expect(_control(page, "start_point_mode")).to_have_value("residue")
+    expect(_control(page, "start_chain")).to_have_value("A")
+    expect(_control(page, "start_residue_number")).to_have_value("7")
+    expect(_control(page, "start_x")).to_have_value("")
+
+
+def test_the_displayed_atom_can_be_committed_explicitly(
+    page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unset atom mode shows a placeholder, so the first candidate is choosable."""
+    monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", PRODUCTION_DIST)
+    _open_picker(page, PDB)
+    _control(page, "start_point_mode").select_option("residue")
+    _click_canvas_until(page, lambda: bool(_control(page, "start_residue_number").input_value()))
+
+    _control(page, "start_point_mode").select_option("atom")
+    atoms = page.locator(".ct-caver-actions select")
+    expect(atoms).to_be_visible()
+    # The canonical atom is empty, so the control must display that, not its
+    # first candidate: choosing an already-displayed option fires no change.
+    expect(atoms).to_have_value("")
+    assert _control(page, "start_atom_name").input_value() == ""
+
+    atoms.select_option(index=1)
+    expect(_control(page, "start_atom_name")).not_to_have_value("")
+    expect(_control(page, "start_chain")).to_have_value("A")

@@ -201,7 +201,7 @@ export class InputWorkspace {
       structureSelections: () => [...selections], setStructureSelections: value => { selections = [...value]; },
       summaries: () => host.summaries(),
       changed: () => { this.refreshSnapshot(); this.options.onChange(); },
-      filesChanged: () => { host.refresh(); this.options.onChange(); },
+      filesChanged: options => { host.refresh(options); this.options.onChange(); },
     };
     this.context = context;
     // The context serves one mount only; the form it was built for travels with
@@ -280,7 +280,7 @@ export class InputWorkspace {
     });
     // One edit, one change notification: the plugins and the form's own change
     // hook see the preset exactly as they would see the same values typed in.
-    context.filesChanged();
+    context.filesChanged({ preset: true });
     return { files: roles, parameters, changes };
   }
 

@@ -3,7 +3,7 @@ import { alignmentPreview, residueTone } from './alignment-preview';
 import { parameterValue, seedConstant, validateParameter } from '../parameter-controls';
 import type { ParameterDefinition, TaskFormDefinition } from '../types';
 import { t } from '../../../app/i18n';
-import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance } from './plugin-contract';
+import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance, WorkspaceRefreshOptions } from './plugin-contract';
 import { element, filePath, formatBytes, matchesExtension, parseSequence } from './utils';
 import { CaverPicker, isCaverForm } from './caver-picker';
 import { structuralDigest, type SelectedResidue } from '../../structure/molecular-scene';
@@ -282,10 +282,12 @@ const structurePlugin: WorkspacePlugin = {
       ? new CaverPicker(context, { viewer: () => viewer })
       : null;
     caver?.mount(target);
-    const render = async (current: number, file: File | null) => {
+    const render = async (current: number, file: File | null, preset: boolean) => {
       if (generation !== current) return;
       context.setStructureSelections([]);
-      caver?.topologyChanged();
+      // A preset carries parameters that already belong to the file it bound,
+      // so only a file-only edit invalidates the start-point selection.
+      caver?.topologyChanged(preset);
       if (!file || !matchesExtension(file, ['.pdb', '.ent', '.cif', '.mmcif'])) { host.hidden = true; status.textContent = prompt; await viewer?.clear(); caver?.refresh(); return; }
       status.textContent = t('ct.structure.reading', { name: filePath(file) });
       try {
@@ -313,14 +315,14 @@ const structurePlugin: WorkspacePlugin = {
         caver?.refresh();
       } catch { if (generation === current) { host.hidden = true; status.textContent = t('ct.structure.failed'); } }
     };
-    const refresh = (): Promise<void> => {
+    const refresh = (options?: WorkspaceRefreshOptions): Promise<void> => {
       const role = typeof definition.options.role === 'string' ? definition.options.role : undefined; const file = context.structureFile(role);
       if (file === selectedFile) {
         caver?.refresh();
         return queue;
       }
       selectedFile = file; const current = ++generation;
-      queue = queue.catch(() => undefined).then(() => render(current, file));
+      queue = queue.catch(() => undefined).then(() => render(current, file, options?.preset === true));
       return queue;
     };
     // The submitted value carries the authored identity only: label numbering

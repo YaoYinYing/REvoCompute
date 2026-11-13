@@ -1,6 +1,13 @@
 import type { WorkspaceCapability, WorkspaceDescriptor, WorkspaceSummary, WorkspaceValues } from '../types';
 import { t } from '../../../app/i18n';
-import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance, WorkspacePluginModule, WorkspacePluginServices } from './plugin-contract';
+import type {
+  WorkspaceContext,
+  WorkspacePlugin,
+  WorkspacePluginInstance,
+  WorkspacePluginModule,
+  WorkspacePluginServices,
+  WorkspaceRefreshOptions,
+} from './plugin-contract';
 import { isWorkspacePlugin } from './plugin-contract';
 
 interface MountedPlugin {
@@ -125,10 +132,10 @@ export class PluginHost {
     return [...new Set(errors)];
   }
 
-  refresh(): void {
+  refresh(options?: WorkspaceRefreshOptions): void {
     this.mounted.forEach(item => {
       try {
-        void Promise.resolve(item.instance.refresh?.()).catch(error => {
+        void Promise.resolve(item.instance.refresh?.(options)).catch(error => {
           this.faults.push(`${item.plugin.id}: ${error instanceof Error ? error.message : String(error)}`);
         });
       } catch (error) {
