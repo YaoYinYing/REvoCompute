@@ -9,10 +9,12 @@ It is not synthetic: the bytes are exactly the payload upstream's
 
 It is used as the starting structure for the propagation smoke case with
 `propagation_start.yaml`, which declares the same 79-residue single chain as a
-BioEmu2 System. Both YAML fixtures here (`propagation_start.yaml` and
-`equilibrium_system.yaml`) were serialized by the pinned JAAG `jaag-core`
-builder (`bioemu2` target, JAAG commit
+BioEmu2 System. All three YAML fixtures here (`propagation_start.yaml`,
+`equilibrium_system.yaml`, and `ligand_system.yaml`) were serialized by the
+pinned JAAG `jaag-core` builder (`bioemu2` target, JAAG commit
 `6bc0ff50d6dbe98093b08d3f4287afa2e799d415`); the propagation sequence was read
-from the captured CIF. The fixture is a minimal contract demonstration rather
-than a scientific trajectory. Pinned-upstream `validate_x0` compares its atoms
+from the captured CIF. `ligand_system.yaml` declares the same protein chain plus
+one `NAG` CCD ligand on chain `B`, so it exercises the pinned upstream parser's
+ligand entity path. The fixtures are minimal contract demonstrations rather
+than scientific trajectories. Pinned-upstream `validate_x0` compares its atoms
 and their order against the declared system before loading the model.
