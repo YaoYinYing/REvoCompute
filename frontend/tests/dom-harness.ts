@@ -146,6 +146,14 @@ export class HarnessNode {
     if (index >= 0) siblings.splice(index, 1);
     this.parent = null;
   }
+  after(...nodes: Array<HarnessNode | string>): void {
+    const siblings = this.parent?.nodes;
+    const index = siblings?.indexOf(this) ?? -1;
+    if (!siblings || index < 0) return;
+    const inserted = nodes.map(node => typeof node === 'string' ? textNode(node) : node);
+    inserted.forEach(node => node.remove());
+    inserted.forEach((node, offset) => { node.parent = this.parent; siblings.splice(index + 1 + offset, 0, node); });
+  }
   removeChild(node: HarnessNode): void { node.remove(); }
   contains(node: HarnessNode): boolean { return node === this || this.nodes.some(child => child.contains(node)); }
   getBoundingClientRect(): { width: number; height: number } { return { width: 0, height: 0 }; }

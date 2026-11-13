@@ -92,7 +92,8 @@ Create Task draft seeded from one authorized earlier Task:
   empty, `0`, or `false` value. Nothing is coerced and no other scientific mode
   is chosen silently: the field keeps the current schema default for display,
   but **Run** stays blocked until every entry in **Resolve blocked settings** is
-  edited or explicitly kept with **Keep current value**.
+  edited or explicitly resolved: use **Keep current value** when the parameter
+  still exists, or **Acknowledge blocked setting** when it has no current field.
 - Input files belong to the source Task's immutable snapshot, and a Task
   submission never references another Task's files. Every listed input is
   re-uploaded and validated normally; a file the source snapshot can no longer
@@ -102,8 +103,9 @@ Create Task draft seeded from one authorized earlier Task:
   schema defaults, discarding the cloned values and any later edits;
   **Revert the clone** restores the form state from before the clone was
   applied. Both happen only when you choose them. A field you edit is marked
-  **Edited in this draft**, not as coming from the source, and **Clear** ends
-  the clone relationship along with the prefilled values.
+  **Edited in this draft**, not as coming from the source, and **Clear** or
+  loading a task example ends the clone relationship along with the prefilled
+  values.
 - Opening a clone never submits. Preflight and **Run** are still the only
   submission boundary, and the resulting Task carries non-sensitive
   `cloned_from` provenance for the source Task. A cloned submission therefore

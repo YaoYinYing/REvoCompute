@@ -496,16 +496,15 @@ export class CreateTask {
     const current = this.workspace.snapshot().parameters;
     const seen = new Set<string>();
     const conflicts: CloneConflict[] = [];
-    plan.blocked_fields.forEach(finding => {
-      const name = finding.field;
-      if (!name || seen.has(name) || this.cloneResolved.has(name)) return;
-      const parameter = parameters.get(name);
-      // Only a current parameter has a control the reader can resolve.
-      if (!parameter) return;
+    plan.blocked_fields.forEach((finding, index) => {
+      const name = finding.field || `@${finding.code}:${index}`;
+      if (seen.has(name) || this.cloneResolved.has(name)) return;
+      const parameter = finding.field ? parameters.get(finding.field) : undefined;
       seen.add(name);
       conflicts.push({
-        name, label: parameter.label, message: finding.message,
-        recorded: finding.recorded_value ?? '', current: current[name] ?? '',
+        name, label: parameter?.label ?? finding.field ?? t('ct.clone.blockedSetting'),
+        message: finding.message, recorded: finding.recorded_value,
+        ...(parameter ? { current: current[parameter.name] ?? '' } : {}),
       });
     });
     return conflicts;
@@ -537,7 +536,7 @@ export class CreateTask {
     this.cloneEdited.add(name);
     this.renderClone();
     this.refreshValidation();
-    this.setStatus(t('ct.clone.conflictResolved'), 'ok');
+    this.setStatus(t('ct.clone.conflictAcknowledged'), 'ok');
   }
 
   /** Re-render the workbench reconciliation panel from the current draft state. */
@@ -823,6 +822,9 @@ export class CreateTask {
       this.setStatus(error instanceof Error ? error.message : String(error), 'error'); return;
     }
     if (generation !== this.generation) return;
+    // A loaded example replaces the cloned draft's values; its later preflight
+    // must not claim provenance for the discarded clone.
+    this.endClone();
     const application = this.workspace.apply(preset);
     this.setStatus(t(this.demoEnvironment ? 'ct.demo.loadedPreview' : 'ct.demo.loaded', { title: demo.title }), 'ok');
     this.reportDemoApplication(application, previous);

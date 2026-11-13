@@ -36,9 +36,9 @@ export interface CloneConflict {
   label: string;
   message: string;
   /** The source's recorded value, as the control representation (may be empty). */
-  recorded: string;
-  /** The value the draft currently holds; keeping it is an explicit choice. */
-  current: string;
+  recorded?: string;
+  /** Present only when the current schema still has a control for this setting. */
+  current?: string;
 }
 
 export interface ClonePanelActions {
@@ -50,7 +50,7 @@ export interface ClonePanelActions {
   conflicts?: CloneConflict[];
   /** Parameters the reader changed after the preset was applied, with their current value. */
   edited?: Record<string, string>;
-  /** Keep the value the form currently holds for one blocked parameter. */
+  /** Keep the value the form currently holds, or acknowledge a removed setting. */
   onKeepCurrent?: (name: string) => void;
 }
 
@@ -81,16 +81,15 @@ function conflicts(items: CloneConflict[], onKeepCurrent?: (name: string) => voi
   const list = node('ul', 'ct-clone-conflicts');
   items.forEach(item => {
     const row = node('li');
-    const recorded = shown(item.recorded) ?? t('ct.clone.empty');
-    const current = shown(item.current) ?? t('ct.clone.empty');
-    row.append(
-      node('strong', '', item.label),
-      node('p', 'ct-help', item.message),
-      node('small', '', t('ct.clone.recordedValue', { value: recorded })),
-      node('small', '', t('ct.clone.currentValue', { value: current })),
-    );
+    const recorded = shown(item.recorded);
+    row.append(node('strong', '', item.label), node('p', 'ct-help', item.message));
+    if (recorded !== null) row.append(node('small', '', t('ct.clone.recordedValue', { value: recorded })));
+    if (item.current !== undefined) row.append(node('small', '', t('ct.clone.currentValue', { value: shown(item.current)! })));
     if (onKeepCurrent) {
-      const keep = node('button', 'ct-secondary', t('ct.clone.keepCurrent', { value: current }));
+      const label = item.current === undefined
+        ? t('ct.clone.acknowledgeBlocked')
+        : t('ct.clone.keepCurrent', { value: shown(item.current)! });
+      const keep = node('button', 'ct-secondary', label);
       keep.type = 'button';
       keep.addEventListener('click', () => onKeepCurrent(item.name));
       row.append(keep);

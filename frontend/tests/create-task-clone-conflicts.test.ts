@@ -17,6 +17,7 @@ const PARAMETERS_URL = '/compute/api/task-parameters/method';
 const PLAN_ID = 'plan_reference_reference';
 const PLAN_URL = `/compute/api/clone-plans/${PLAN_ID}`;
 const PREFLIGHT_URL = '/compute/api/preflight/method';
+const DEMOS_URL = '/compute/api/types/method/demos';
 const SOURCE_ID = 'a'.repeat(32);
 
 const CATALOG = {
@@ -70,6 +71,16 @@ type Modules = {
   harness: typeof import('./dom-harness');
 };
 
+const DEMOS = {
+  version: 1,
+  demos: [{
+    id: 'example', title: 'Example', purpose: 'A small example.', context: '',
+    inputs: {}, parameters: { seed: '3' },
+    source: { name: 'Example source', url: 'https://example.org/source' },
+    license: { id: 'cc0', name: 'CC0', url: 'https://example.org/license' },
+  }],
+};
+
 function reply(payload: unknown): Response {
   return { ok: true, status: 200, json: async () => payload } as unknown as Response;
 }
@@ -91,10 +102,23 @@ async function load(options: { clone?: boolean } = {}): Promise<Modules> {
   // exercised by the browser suite, not here.
   vi.stubGlobal('HTMLInputElement', class {});
   vi.stubGlobal('HTMLSelectElement', class {});
+  vi.stubGlobal('HTMLAnchorElement', class {});
   vi.stubGlobal('CSS', { escape: (value: string) => value });
   const documentStub = harnessDocument as unknown as { createElement: (tag: string) => HarnessNode };
   const createElement = documentStub.createElement.bind(documentStub);
-  documentStub.createElement = (tag: string) => Object.assign(createElement(tag), { value: '' });
+  documentStub.createElement = (tag: string) => {
+    const element = Object.assign(createElement(tag), { value: '' }) as HarnessNode & {
+      open?: boolean; returnValue?: string; showModal?: () => void; close?: (value?: string) => void;
+    };
+    if (tag === 'dialog') {
+      element.open = false;
+      element.showModal = () => { element.open = true; };
+      element.close = (value?: string) => {
+        element.open = false; element.returnValue = value; element.dispatch('close', {});
+      };
+    }
+    return element;
+  };
   const browser = (globalThis as unknown as {
     window: { location: Record<string, unknown>; scrollTo: () => void };
   }).window;
@@ -108,14 +132,15 @@ async function load(options: { clone?: boolean } = {}): Promise<Modules> {
   };
 }
 
-async function mount(CreateTask: Modules['CreateTask'], preflights: FormData[]): Promise<HarnessNode> {
+async function mount(CreateTask: Modules['CreateTask'], preflights: FormData[], plan: unknown = PLAN): Promise<HarnessNode> {
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = String(input);
     if (url === ENVIRONMENT_URL) return reply({ version: 1, demo_mode: false, execution: 'available' });
     if (url === CATALOG_URL) return reply(CATALOG);
     if (url === DETAIL_URL) return reply(DETAIL);
     if (url === PARAMETERS_URL) return reply(PARAMETERS);
-    if (url === PLAN_URL) return reply(PLAN);
+    if (url === PLAN_URL) return reply(plan);
+    if (url === DEMOS_URL) return reply(DEMOS);
     if (url === '/compute/api/auth/token') return reply({ token: 'test-token' });
     if (url === PREFLIGHT_URL) {
       preflights.push(init!.body as FormData);
@@ -137,6 +162,24 @@ const clear = (root: HarnessNode): HarnessNode => root.querySelector('.ct-snapsh
 afterEach(() => vi.unstubAllGlobals());
 
 describe('a cloned draft with blocked settings', () => {
+  it('requires acknowledgement when the source parameter no longer exists', async () => {
+    const { CreateTask } = await load();
+    const plan = {
+      ...PLAN,
+      blocked_fields: [{ field: 'removed_mode', code: 'parameter_removed', message: 'The parameter no longer exists.', recorded_value: 'legacy' }],
+    };
+    const root = await mount(CreateTask, [], plan);
+    const conflict = root.querySelector('.ct-clone-conflicts')!;
+    expect(conflict.textContent).toContain('removed_mode');
+    expect(conflict.textContent).toContain('legacy');
+    expect(conflict.textContent).not.toContain('Current value:');
+    expect(action(root).disabled).toBe(true);
+
+    conflict.querySelector('button')!.dispatch('click', {});
+    expect(root.querySelector('.ct-clone-conflicts')).toBeNull();
+    expect(action(root).disabled).toBe(false);
+  });
+
   it('shows the recorded values and refuses to run until each is resolved', async () => {
     const { CreateTask } = await load();
     const root = await mount(CreateTask, []);
@@ -154,6 +197,27 @@ describe('a cloned draft with blocked settings', () => {
     root.querySelectorAll('.ct-clone-conflicts button')[0]!.dispatch('click', {});
     expect(root.querySelector('.ct-clone-conflicts')).toBeNull();
     expect(action(root).disabled).toBe(false);
+  });
+
+  it('drops clone lineage when an example replaces the cloned draft', async () => {
+    const { CreateTask } = await load();
+    const preflights: FormData[] = [];
+    const root = await mount(CreateTask, preflights);
+    while (root.querySelectorAll('.ct-clone-conflicts button').length) {
+      root.querySelectorAll('.ct-clone-conflicts button')[0]!.dispatch('click', {});
+    }
+
+    harnessDocument.body.querySelector('[data-ct-demo-open]')!.dispatch('click', {});
+    const dialog = harnessDocument.body.querySelector('dialog')!;
+    await vi.waitFor(() => expect(dialog.querySelector('[data-ct-demo-choose]')).not.toBeNull());
+    dialog.querySelector('[data-ct-demo-choose]')!.dispatch('click', {});
+    const replace = harnessDocument.body.querySelector('dialog')!.querySelector('.ct-primary')!;
+    replace.dispatch('click', {});
+    await vi.waitFor(() => expect(root.querySelector('.ct-clone')).toBeNull());
+
+    action(root).dispatch('click', {});
+    await vi.waitFor(() => expect(preflights).toHaveLength(1));
+    expect(preflights[0]!.get('cloned_from')).toBeNull();
   });
 
   it('records the source only while the clone owns the draft, and only edited fields lose their source label', async () => {
