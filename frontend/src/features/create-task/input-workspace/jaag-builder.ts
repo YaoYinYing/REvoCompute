@@ -344,7 +344,10 @@ const jaagBuilder: WorkspacePlugin = {
     status.textContent = 'Fill the entities, then generate the System YAML.';
 
     return {
-      refresh,
+      // Every host refresh is a non-edit; only the builder's own handlers call
+      // the local ``refresh(true)``. The host may pass preset options that only
+      // the structure viewer consumes.
+      refresh: () => refresh(false),
       readValue: () => ({ active: engaged, target: dialect, entities: rows.length }),
       summarize: () => (engaged && generated ? { label: 'System YAML', value: `JAAG builder · ${rows.length} entities` } : null),
       validate: () => (engaged || !roleExists ? errors : []),
