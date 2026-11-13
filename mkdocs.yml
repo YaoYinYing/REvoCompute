@@ -92,6 +92,7 @@ nav:
       - Architecture: developer-guide/architecture.md
       - Plugin Kernel: developer-guide/plugin-kernel.md
       - Execution Model: developer-guide/execution-model.md
+      - Live Task Reproduction: developer-guide/live-task-reproduction.md
       - Execution Stage State: developer-guide/execution-stage-state.md
       - Composable Execution Architecture: developer-guide/composable-execution-architecture.md
       - Runner Environment–Execution Separation: developer-guide/runner-environment-execution-separation.md
