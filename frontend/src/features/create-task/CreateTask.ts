@@ -7,7 +7,7 @@ import { buildSubmissionFormData, encodeSubmissionFormData } from './submission'
 import type { EncodedSubmission } from './submission';
 import { formatBytes } from './input-workspace/utils';
 import { clonePreset, renderClonePanel } from './clone';
-import type { ClonePlan } from './clone';
+import type { CloneConflict, ClonePlan } from './clone';
 import { getClonePlan } from '../../api/app-api';
 import type { TaskCatalog, TaskFormDefinition, TaskPreflight, TaskSummary } from './types';
 import { submissionNotice, submissionRefusal } from '../runners/readiness-copy';
@@ -52,7 +52,7 @@ export class CreateTask {
   private readonly snapshot = node('dl', 'ct-snapshot');
   private readonly action = node('button', 'ct-primary', t('ct.run'));
   private readonly clear = node('button', 'ct-secondary', t('ct.clear'));
-  private readonly workspace = new InputWorkspace(this.workspaceRoot, { onChange: () => { this.revision++; this.refreshValidation(); }, onError: message => this.setStatus(message, 'error') });
+  private readonly workspace = new InputWorkspace(this.workspaceRoot, { onChange: () => { this.revision++; this.trackCloneEdits(); this.refreshValidation(); }, onError: message => this.setStatus(message, 'error') });
   private busy = false;
   private checking = false;
   // The last action failed. A failed preflight or submission leaves no preflight
@@ -93,6 +93,15 @@ export class CreateTask {
   // the submission; it is never submitted as an input.
   private cloneSource: string | null = null;
   private clonePanel: HTMLElement | null = null;
+  // The plan, the form state it produced, and what the reader has since done
+  // with it. A blocked value stays unresolved until the reader edits that field
+  // or explicitly keeps the current value; it is never accepted by default.
+  private clonePlan: ClonePlan | null = null;
+  private cloneBaseline: WorkspacePreset | null = null;
+  private cloneApplied: Record<string, string> | null = null;
+  private readonly cloneResolved = new Set<string>();
+  private readonly cloneEdited = new Set<string>();
+  private applyingClone = false;
   // Lifts the sticky submit rail above a mobile virtual keyboard. Registered
   // with the route's lifetime: leaving the view must not leave a listener that
   // writes to a root the route no longer owns.
@@ -287,7 +296,9 @@ export class CreateTask {
 
   private async selectTask(name: string, plan: ClonePlan | null = null): Promise<void> {
     this.closeDemoDialog(); this.loadController?.abort(); const controller = new AbortController(); this.loadController = controller; const generation = ++this.generation;
-    this.cloneSource = null;
+    // A new method or a re-resolved plan starts without the previous clone's
+    // provenance, reconciliation state, or panel.
+    this.endClone();
     // The workbench swaps in for the chooser: the loading status that lived in the
     // chooser's now-hidden region has to be on screen, and the region must travel
     // with it or the loading message would be announced from a hidden panel. The
@@ -395,6 +406,11 @@ export class CreateTask {
     if (!preservePreflight) this.preflight = null;
     if (!this.definition) return [];
     const errors = this.workspace.validate();
+    // A blocked recorded setting is a conflict, not a default. The draft stays
+    // unsubmittable until the reader replaces it or explicitly keeps the value
+    // now shown, so an incompatible mode or seed can never be swapped in
+    // silently.
+    this.cloneConflicts().forEach(conflict => errors.push(t('ct.clone.unresolved', { field: conflict.label })));
     const access = this.definition.access;
     if (access.restricted && !access.granted) errors.push(access.request_status === 'pending' ? t('ct.access.pending') : t('ct.access.required'));
     const preflight = this.preflight;
@@ -446,12 +462,20 @@ export class CreateTask {
 
   /** Apply the plan's one preset and state exactly what it did and did not carry. */
   private applyClone(plan: ClonePlan): void {
+    this.endClone();
     this.cloneSource = plan.source_task_id;
+    this.clonePlan = plan;
     // The state the reader would have without the clone, held so the panel's
     // revert is a real undo of this application rather than a second reset.
-    const baseline = this.workspace.snapshot();
+    this.cloneBaseline = this.workspace.snapshot();
+    this.applyingClone = true;
     this.workspace.apply(clonePreset(plan));
-    this.showClonePanel(plan, true, baseline);
+    this.applyingClone = false;
+    // The form's own defaults stand in for blocked values until the reader
+    // chooses a replacement; recording this state is what makes a later edit
+    // distinguishable from the preset application itself.
+    this.cloneApplied = this.workspace.snapshot().parameters;
+    this.showClonePanel(plan, true);
     this.setStatus(t('ct.clone.applied'), 'ok');
     // The reference is consumed: a refresh opens an ordinary draft instead of
     // reapplying the preset over anything the reader changed.
@@ -461,6 +485,74 @@ export class CreateTask {
     history.replaceState(null, '', url);
   }
 
+  /** The blocked parameters the reader has not resolved yet, in form order. */
+  private cloneConflicts(): CloneConflict[] {
+    const definition = this.definition; const plan = this.clonePlan;
+    if (!definition || !plan) return [];
+    const parameters = new Map(definition.params.map(parameter => [parameter.name, parameter]));
+    const current = this.workspace.snapshot().parameters;
+    const seen = new Set<string>();
+    const conflicts: CloneConflict[] = [];
+    plan.blocked_fields.forEach(finding => {
+      const name = finding.field;
+      if (!name || seen.has(name) || this.cloneResolved.has(name)) return;
+      const parameter = parameters.get(name);
+      // Only a current parameter has a control the reader can resolve.
+      if (!parameter) return;
+      seen.add(name);
+      conflicts.push({
+        name, label: parameter.label, message: finding.message,
+        recorded: finding.recorded_value ?? '', current: current[name] ?? '',
+      });
+    });
+    return conflicts;
+  }
+
+  /** Resolve conflicts the reader edited, and record that the plan no longer owns a value. */
+  private trackCloneEdits(): void {
+    if (this.applyingClone || !this.clonePlan || !this.cloneApplied) return;
+    const blocked = new Set(this.clonePlan.blocked_fields.flatMap(finding => finding.field ? [finding.field] : []));
+    const current = this.workspace.snapshot().parameters;
+    let changed = false;
+    Object.entries(current).forEach(([name, value]) => {
+      if (this.cloneApplied![name] === value) return;
+      // An edit is an explicit replacement: the panel must not keep claiming the
+      // value came from the plan.
+      if (!this.cloneEdited.has(name)) { this.cloneEdited.add(name); changed = true; }
+      if (blocked.has(name) && !this.cloneResolved.has(name)) {
+        this.cloneResolved.add(name);
+        changed = true;
+      }
+    });
+    if (changed) this.renderClone();
+  }
+
+  /** Keep the current value for one blocked setting: an explicit choice. */
+  private keepCurrentCloneValue(name: string): void {
+    this.cloneResolved.add(name);
+    this.cloneEdited.add(name);
+    this.renderClone();
+    this.refreshValidation();
+    this.setStatus(t('ct.clone.conflictResolved'), 'ok');
+  }
+
+  /** Re-render the workbench reconciliation panel from the current draft state. */
+  private renderClone(): void {
+    if (this.clonePlan) this.showClonePanel(this.clonePlan, true);
+  }
+
+  /** Forget every fact the clone contributed to this draft. */
+  private endClone(): void {
+    this.cloneSource = null;
+    this.clonePlan = null;
+    this.cloneBaseline = null;
+    this.cloneApplied = null;
+    this.cloneResolved.clear();
+    this.cloneEdited.clear();
+    this.clonePanel?.remove();
+    this.clonePanel = null;
+  }
+
   /**
    * Render the reconciliation panel for one plan.
    *
@@ -468,27 +560,39 @@ export class CreateTask {
    * and revert actions. In the chooser (the source's method is gone) it is
    * read-only: there is no form to reset and no draft to submit.
    */
-  private showClonePanel(plan: ClonePlan, interactive: boolean, baseline?: WorkspacePreset): void {
+  private showClonePanel(plan: ClonePlan, interactive: boolean): void {
     this.clonePanel?.remove();
+    const baseline = this.cloneBaseline;
+    // Reset and revert remove the panel that held the focused control; the
+    // reader's position moves to the form it just changed rather than to BODY.
+    const focusForm = (): void => {
+      const control = this.workspaceRoot.querySelector<HTMLElement>('[data-ct-parameter]');
+      (control ?? this.change ?? this.action).focus();
+    };
     const reset = (): void => {
       // Starting over ends the clone relationship: a later submit must not
       // claim provenance for values the reader has replaced with defaults.
-      this.cloneSource = null;
+      this.endClone();
       this.workspace.apply({ files: new Map(), parameters: {} });
       this.refreshValidation();
       this.setStatus(t('ct.clone.resetDone'), 'ok');
+      focusForm();
     };
     const panel = renderClonePanel(plan, interactive ? {
       onReset: reset,
       onRevert: () => {
         // Reverting is an undo of the clone application, so the reverted draft
         // is the pre-clone one and carries no clone provenance.
-        this.cloneSource = null;
+        this.endClone();
         if (baseline) this.workspace.restore(baseline);
-        else reset();
+        else this.workspace.apply({ files: new Map(), parameters: {} });
         this.refreshValidation();
         this.setStatus(t('ct.clone.reverted'), 'ok');
+        focusForm();
       },
+      conflicts: this.cloneConflicts(),
+      edited: Object.fromEntries([...this.cloneEdited].map(name => [name, this.workspace.snapshot().parameters[name] ?? ''])),
+      onKeepCurrent: name => this.keepCurrentCloneValue(name),
     } : {});
     this.clonePanel = panel;
     const grid = interactive ? this.workbench.querySelector<HTMLElement>('.ct-workbench-grid') : null;
@@ -753,7 +857,12 @@ export class CreateTask {
     // Clearing invalidates any demo load still in flight exactly as leaving the
     // method does: the cleared form is the state the reader asked for, and an
     // older download must not be able to fill it back in afterwards.
-    if (!this.definition) return; this.generation++; const generation = this.generation; this.preflight = null; this.actionFailed = false; this.revision++; await this.workspace.mount(this.definition);
+    if (!this.definition) return; this.generation++; const generation = this.generation; this.preflight = null; this.actionFailed = false; this.revision++;
+    // Clearing discards every cloned value, so the lineage and the
+    // reconciliation panel go with them; a later submit is a fresh draft with no
+    // `cloned_from` provenance and its own deduplication identity.
+    this.endClone();
+    await this.workspace.mount(this.definition);
     if (generation !== this.generation) return; this.setStatus(t('ct.cleared'), 'ok'); this.refreshValidation();
   }
 
@@ -768,7 +877,7 @@ export class CreateTask {
   private showChooser(message: string): void {
     this.loadController?.abort(); this.submitController?.abort(); this.generation++; this.definition = null; this.preflight = null; this.setBusy(false); this.checking = false; this.closeDemoDialog(); this.workspace.destroy();
     this.railObserver?.disconnect(); this.railObserver = null; this.root.style.removeProperty('--ct-rail-space');
-    this.clonePanel?.remove(); this.clonePanel = null; this.cloneSource = null;
+    this.endClone();
     this.chooser.hidden = false; this.pageHeader.hidden = false; this.workbench.hidden = true;
     // The region and the chooser's methods come home with the state, so the
     // chooser's own status message is always inside the live region, whether or
@@ -784,7 +893,7 @@ export class CreateTask {
     this.submitController?.abort();
     this.viewportCleanup?.(); this.viewportCleanup = null;
     this.railObserver?.disconnect(); this.railObserver = null;
-    this.clonePanel?.remove(); this.clonePanel = null;
+    this.endClone();
     // A route change must not leave a modal in the top layer over the next page,
     // and any await holding it open settles as a cancelled decision.
     this.generation++;

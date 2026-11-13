@@ -106,6 +106,10 @@ invented release numbers or dates.
     - Add Clone & reuse to dashboard cards and the remote Result page, opening a
       fresh draft from an opaque plan reference with a keyboard-accessible
       reconciliation panel, re-upload guidance, reset-to-defaults, and revert.
+      Blocked recorded settings are shown with the recorded value and must be
+      explicitly resolved (edited or kept) before the draft can run; an edited
+      field is no longer reported as coming from the source, and Clear ends the
+      clone relationship.
     - Pin the existing Task Snapshot submit rail to the visible viewport bottom,
       respecting safe-area insets, the mobile visual viewport, and reduced
       motion, without adding a second submit control.

@@ -56,6 +56,36 @@ describe('Clone & Reuse draft', () => {
     expect(panel.querySelectorAll('button')).toHaveLength(0);
   });
 
+  it('shows every recorded blocked value, including empty and falsy ones', () => {
+    installHarness(vi.stubGlobal);
+    const drifted: ClonePlan = {
+      ...plan,
+      blocked_fields: [
+        { field: 'seed', code: 'parameter_range_invalid', message: 'Out of range.', recorded_value: '0' },
+        { field: 'enabled', code: 'parameter_constraint_unmet', message: 'Not allowed.', recorded_value: 'false' },
+        { field: 'label', code: 'parameter_format_invalid', message: 'Bad format.', recorded_value: '' },
+      ],
+    };
+    const panel = renderClonePanel(drifted) as unknown as HarnessNode;
+    const blocked = panel.querySelector('.ct-clone-blocked')!.textContent;
+    // `0`, `false` and the empty string are recorded values, not absence.
+    expect(blocked).toContain('Recorded value: 0');
+    expect(blocked).toContain('Recorded value: false');
+    expect(blocked).toContain('Recorded value: empty');
+  });
+
+  it('marks a value the reader edited as no longer coming from the source', () => {
+    installHarness(vi.stubGlobal);
+    const panel = renderClonePanel(plan, { edited: { seed: '9' } }) as unknown as HarnessNode;
+    const rows = panel.querySelectorAll('.ct-clone-parameters li');
+    const seed = rows.find(row => row.textContent.includes('seed'))!;
+    const sample = rows.find(row => row.textContent.includes('sample'))!;
+    expect(seed.textContent).toContain('Edited in this draft');
+    expect(seed.textContent).not.toContain('From the source task');
+    // An untouched compatible value keeps its recorded provenance.
+    expect(sample.textContent).toContain('Current default');
+  });
+
   it('offers reset and revert as explicit reader actions', () => {
     installHarness(vi.stubGlobal);
     let reset = 0; let revert = 0;

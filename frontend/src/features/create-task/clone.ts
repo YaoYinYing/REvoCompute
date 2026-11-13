@@ -29,11 +29,35 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', tex
 
 let headingSequence = 0;
 
+/** One blocked parameter the reader must resolve before the draft can run. */
+export interface CloneConflict {
+  /** The owning parameter name; the control the reader edits. */
+  name: string;
+  label: string;
+  message: string;
+  /** The source's recorded value, as the control representation (may be empty). */
+  recorded: string;
+  /** The value the draft currently holds; keeping it is an explicit choice. */
+  current: string;
+}
+
 export interface ClonePanelActions {
   /** Reset every control to the current schema's own defaults. */
   onReset?: () => void;
   /** Restore the form state that preceded the clone application. */
   onRevert?: () => void;
+  /** Blocked parameters not yet resolved by the reader. */
+  conflicts?: CloneConflict[];
+  /** Parameters the reader changed after the preset was applied, with their current value. */
+  edited?: Record<string, string>;
+  /** Keep the value the form currently holds for one blocked parameter. */
+  onKeepCurrent?: (name: string) => void;
+}
+
+/** A recorded value, with empty shown as an explicit value rather than absence. */
+function shown(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  return value === '' ? t('ct.clone.empty') : value;
 }
 
 function findings(items: CloneFinding[], className: string): HTMLElement | null {
@@ -42,6 +66,35 @@ function findings(items: CloneFinding[], className: string): HTMLElement | null 
   items.forEach(item => {
     const row = node('li');
     row.append(node('strong', '', item.field ? `${item.field}: ` : ''), document.createTextNode(item.message));
+    // The server records a blocked value so the reader can compare it with the
+    // current contract. ``0``, ``false`` and the empty string are values, not
+    // absence, and must be shown along with the reason it was rejected.
+    const recorded = shown(item.recorded_value);
+    if (recorded !== null) row.append(node('small', 'ct-clone-recorded', t('ct.clone.recordedValue', { value: recorded })));
+    list.append(row);
+  });
+  return list;
+}
+
+function conflicts(items: CloneConflict[], onKeepCurrent?: (name: string) => void): HTMLElement | null {
+  if (!items.length) return null;
+  const list = node('ul', 'ct-clone-conflicts');
+  items.forEach(item => {
+    const row = node('li');
+    const recorded = shown(item.recorded) ?? t('ct.clone.empty');
+    const current = shown(item.current) ?? t('ct.clone.empty');
+    row.append(
+      node('strong', '', item.label),
+      node('p', 'ct-help', item.message),
+      node('small', '', t('ct.clone.recordedValue', { value: recorded })),
+      node('small', '', t('ct.clone.currentValue', { value: current })),
+    );
+    if (onKeepCurrent) {
+      const keep = node('button', 'ct-secondary', t('ct.clone.keepCurrent', { value: current }));
+      keep.type = 'button';
+      keep.addEventListener('click', () => onKeepCurrent(item.name));
+      row.append(keep);
+    }
     list.append(row);
   });
   return list;
@@ -84,14 +137,30 @@ export function renderClonePanel(plan: ClonePlan, actions: ClonePanelActions = {
   const blocked = findings(plan.blocked_fields, 'ct-clone-blocked');
   if (blocked) panel.append(node('p', 'ct-clone-label', t('ct.clone.blocked')), blocked);
 
+  const unresolved = conflicts(actions.conflicts ?? [], actions.onKeepCurrent);
+  if (unresolved) {
+    panel.append(
+      node('p', 'ct-clone-label', t('ct.clone.conflicts')),
+      node('p', 'ct-help', t('ct.clone.conflictHelp')),
+      unresolved,
+    );
+  }
+
   if (plan.compatible_parameters.length) {
+    const edited = actions.edited ?? {};
     const list = node('ul', 'ct-clone-parameters');
     plan.compatible_parameters.forEach(parameter => {
+      const changed = Object.prototype.hasOwnProperty.call(edited, parameter.name);
+      const value = changed ? edited[parameter.name]! : parameter.value;
       const row = node('li');
       row.append(
         node('span', '', parameter.name),
-        node('strong', '', parameter.value === '' ? t('ct.clone.empty') : parameter.value),
-        node('small', '', parameter.source === 'recorded' ? t('ct.clone.recorded') : t('ct.clone.defaulted')),
+        node('strong', '', value === '' ? t('ct.clone.empty') : value),
+        // A value the reader changed is no longer the plan's: the panel must not
+        // keep claiming the source is what this draft will submit.
+        node('small', '', changed
+          ? t('ct.clone.edited')
+          : parameter.source === 'recorded' ? t('ct.clone.recorded') : t('ct.clone.defaulted')),
       );
       list.append(row);
     });
