@@ -19,6 +19,11 @@ The dedicated `tool-worker` receives only the Tool definitions, Tool SIFs, deplo
 | `TOOL_OUTPUT_MAX_BYTES` | `33554432` | Maximum declared output bytes per call. |
 | `TOOL_DRAIN_TIMEOUT_SECONDS` | call timeout + 10 | Maximum bounded redeploy drain wait. |
 
+Decoded uploads are charged to `TOOL_REQUEST_MAX_BYTES` during admission. A
+Task-artifact reference is verified and materialized per file; a Tool that
+accepts more than one input must include those bytes in the same aggregate
+budget.
+
 Use `revocompute-tool-status --json` inside the Tool worker to inspect image identity, COLD/WARM/UNAVAILABLE state, active calls, last use, recent startup failure, cold starts, warm hits, and idle shutdowns. This output contains no user filenames, parameters, sequences, structures, or molecules.
 
 For deployment, pause admission, allow active calls at most the configured five-minute bound, stop the old Tool worker and its generation-specific instances, deploy definitions and SIFs together, then restart web, maintenance, and workers COLD. Do not pre-warm families. Use a shortened idle TTL for acceptance and prove cold start, warm reuse, concurrent single-flight startup, workspace isolation, timeout recovery, idle stop, and cold restart before production enablement.

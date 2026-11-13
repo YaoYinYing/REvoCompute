@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { parseWorkspaceDescriptor } from '../src/features/create-task/api';
+import { getTaskDefinition, parseWorkspaceDescriptor } from '../src/features/create-task/api';
 import { parametersFromSchema, seedConstant } from '../src/features/create-task/parameter-controls';
 import { InputWorkspace, selectableExecutionModes } from '../src/features/create-task/input-workspace/InputWorkspace';
 import { HarnessNode, installHarness } from './dom-harness';
 import { buildSubmissionFormData } from '../src/features/create-task/submission';
-import { structureFormat } from '../src/features/create-task/input-workspace/builtins';
+import { maxOriginalBytes, structureFormat } from '../src/features/create-task/input-workspace/builtins';
 import type { ParameterDefinition, TaskFormDefinition } from '../src/features/create-task/types';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -90,6 +90,33 @@ describe('Create Task server contracts', () => {
     const select = root.querySelector('select[data-ct-execution-mode="true"]');
     expect(select?.children.map(option => option.textContent)).toEqual(['Full', 'Prepare only']);
     expect(root.querySelector('.ct-inline-note')?.textContent).toContain('API-only');
+  });
+
+  it('reads the Server-projected gzip expansion ratio and omits an incomplete capability', async () => {
+    const definition = (fileEncodings: unknown) => ({
+      name: 'method', display_name: 'Method', category: 'Test', summary: 'Summary', use_when: 'Use',
+      input_summary: 'Inputs', output_summary: 'Outputs', parameters_url: '/compute/api/task-parameters/method',
+      access: {}, input_workspace: { version: 3, plugins: [], steps: [] }, inputs: [], max_request_bytes: 1024,
+      file_encodings: fileEncodings,
+    });
+    const stub = (fileEncodings: unknown) => vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
+      ok: true, status: 200,
+      json: async () => String(url).includes('/task-parameters') ? { type: 'object', properties: {} } : definition(fileEncodings),
+    })));
+
+    stub({ version: 1, supported: ['identity', 'gzip'], max_expansion_ratio: 200 });
+    expect((await getTaskDefinition('method')).file_encodings).toEqual({
+      version: 1, supported: ['identity', 'gzip'], max_expansion_ratio: 200,
+    });
+
+    stub({ version: 1, supported: ['identity', 'gzip'] });
+    expect((await getTaskDefinition('method')).file_encodings).toBeUndefined();
+  });
+
+  it('validates originals against the decoded cap, not the encoded body cap', () => {
+    expect(maxOriginalBytes({ max_request_bytes: 100, max_decoded_input_bytes: 500 })).toBe(500);
+    // A server that predates the projection keeps the old single-cap behavior.
+    expect(maxOriginalBytes({ max_request_bytes: 100 })).toBe(100);
   });
 
   it('binds files to named roles and emits the versioned workspace document', () => {

@@ -159,9 +159,28 @@ by file extension and fails closed for formats without a Core validator.
   limited to 16 MiB; a submission may contain at most 128 inputs. Limits are
   enforced before Task creation. Quarantine copies are hashed while streaming
   and are removed on every rejection path.
-- No compressed upload format or archive extraction contract is accepted by
-  preflight. Compressed data disguised as a scientific format is rejected;
-  any future compressed-input contract must add explicit decompression bounds.
+- A client may gzip an individual multipart file part and declare it
+  positionally in `file_encodings` (`identity` or `gzip`, exactly one per
+  uploaded file; an absent declaration means `identity`). The envelope, role,
+  filename and logical format stay the ordinary upload contract. Core decodes
+  only declared parts through one bounded quarantine reader before format
+  validation, digesting, admission and the immutable snapshot, and enforces the
+  encoded body cap, the decoded per-file and aggregate caps, a bounded
+  expansion ratio evaluated on the completed part's final decoded and encoded
+  sizes (advertised to clients as `max_expansion_ratio`, so a compressing
+  browser falls back to identity rather than submit a refused representation)
+  and a decode deadline independently. Strict gzip CRC, EOF,
+  single-member and no-trailing-data validation applies; nested/double gzip, a
+  conflicting
+  part/whole-body `Content-Encoding`, and a mislabeled or corrupt payload are
+  rejected. A compressed part is never reinterpreted as a ZIP archive or a
+  different scientific format. No archive extraction contract is accepted.
+- The deployed gateway negotiates `gzip` only for text-like response types
+  (JSON, HTML, CSS/JS, SVG, text and PDB/mmCIF/GRO structure media types
+  projected by the Server's own scientific media-type table) with
+  `Vary: Accept-Encoding`; binary containers, images, archives and
+  `application/octet-stream` pass through unchanged, and nginx never compresses
+  a 206 ranged response.
 - Text formats require UTF-8 and reject NUL and unsafe control bytes. JSON and
   YAML carry 1 MiB pre-parse ceilings plus node/depth caps; YAML aliases are
   rejected. Parquet inputs must have the standard leading and trailing magic.

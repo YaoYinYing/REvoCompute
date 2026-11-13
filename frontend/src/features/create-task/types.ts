@@ -75,6 +75,13 @@ export interface ExecutionModeOption {
   reuse?: ExecutionModeReuse[];
 }
 
+export interface FileEncodingCapability {
+  version: 1;
+  supported: Array<'identity' | 'gzip'>;
+  /** Decoded/encoded ratio the Server accepts for a declared gzip part. */
+  max_expansion_ratio: number;
+}
+
 export interface TaskFormDefinition {
   name: string;
   display_name: string;
@@ -95,6 +102,10 @@ export interface TaskFormDefinition {
   execution_modes: ExecutionModeOption[];
   params: ParameterDefinition[];
   max_request_bytes: number;
+  /** Aggregate decoded/original input bytes; absent on a server that predates the projection. */
+  max_decoded_input_bytes?: number;
+  /** Per-file-part transport encodings the Server advertises; absent means identity only. */
+  file_encodings?: FileEncodingCapability;
 }
 
 export interface InputFile {

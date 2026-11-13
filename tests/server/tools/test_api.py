@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import io
 import os
+import gzip
 import hashlib
 import json
 import time
@@ -529,3 +530,48 @@ def test_tool_output_download_is_owner_only(monkeypatch, tmp_path):
     assert download.status_code == 200
     assert download.data == b">A\nACDEFG\n"
     assert client.get(f"/compute/api/tool-calls/{call_id}/outputs/sequence", headers=other_headers).status_code == 404
+
+
+def test_the_tool_call_sets_its_own_multipart_body_tier(monkeypatch, tmp_path):
+    """A Tool tier above the global Task cap is reachable on the call route."""
+    module = _app(monkeypatch, tmp_path, extra_env={"TOOL_REQUEST_MAX_BYTES": "1048576"})
+    monkeypatch.setattr(module.celery, "send_task", lambda *args, **kwargs: SimpleNamespace(id="celery-tool-tier"))
+    module.app.config["MAX_CONTENT_LENGTH"] = 200  # the ordinary Task body cap
+    client = module.app.test_client()
+    fixture = Path(__file__).resolve().parents[2] / "data" / "3fap_hf3_A_short.pdb"
+
+    response = client.post(
+        "/compute/api/tools/structure_inspect/call",
+        headers=_test_client_auth(module),
+        data={"parameters": "{}", "file_roles": "structure", "files": (io.BytesIO(fixture.read_bytes()), "sample.pdb")},
+    )
+
+    assert response.status_code == 202, response.get_data(as_text=True)[:300]
+
+
+def test_a_declared_gzip_tool_part_uses_the_shared_bounded_decode_path(monkeypatch, tmp_path):
+    module = _app(monkeypatch, tmp_path)
+    monkeypatch.setattr(module.celery, "send_task", lambda *args, **kwargs: SimpleNamespace(id="celery-tool-gzip"))
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    fixture = Path(__file__).resolve().parents[2] / "data" / "3fap_hf3_A_short.pdb"
+    original = fixture.read_bytes()
+
+    response = client.post(
+        "/compute/api/tools/structure_inspect/call",
+        headers=headers,
+        data={
+            "parameters": "{}",
+            "file_roles": "structure",
+            "files": (io.BytesIO(gzip.compress(original)), "sample.pdb"),
+            "file_encodings": "gzip",
+        },
+    )
+
+    assert response.status_code == 202, response.get_data(as_text=True)[:300]
+    call_id = response.get_json()["tool_call_id"]
+    materialized = module.tool_workspace.call_root(call_id) / "input" / "structure" / "sample.pdb"
+    assert materialized.read_bytes() == original
+    request = json.loads((module.tool_workspace.call_root(call_id) / "scratch" / "request.json").read_text())
+    assert request["inputs"]["structure"][0]["sha256"] == hashlib.sha256(original).hexdigest()
+    assert request["inputs"]["structure"][0]["size"] == len(original)

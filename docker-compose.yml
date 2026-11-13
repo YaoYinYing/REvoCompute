@@ -143,10 +143,14 @@ services:
       - web
     environment:
       UPSTREAM_PORT: ${PORT:-8080}
+      # Multipart body cap for the Tool call location.  Keep it above the
+      # application's TOOL_REQUEST_MAX_BYTES with headroom for multipart
+      # framing; ordinary Task submissions stay on the 16m http-level cap.
+      TOOL_CLIENT_MAX_BODY_SIZE: ${TOOL_CLIENT_MAX_BODY_SIZE:-17m}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        envsubst '$$UPSTREAM_PORT' < /etc/nginx/nginx.conf.template > /tmp/nginx.conf
+        envsubst '$$UPSTREAM_PORT $$TOOL_CLIENT_MAX_BODY_SIZE' < /etc/nginx/nginx.conf.template > /tmp/nginx.conf
         && exec nginx -c /tmp/nginx.conf -g 'daemon off;'
     # Loopback-only by default: the documented entry point is a host-side
     # proxy (nginx TLS / Cloudflare Tunnel) reaching the gateway via

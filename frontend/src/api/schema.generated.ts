@@ -2607,6 +2607,16 @@ export interface components {
             detail_url: string;
             parameters_url: string;
             max_request_bytes: number;
+            /** @description Aggregate decoded/original input bytes a submission may carry, independent of the encoded multipart body cap. */
+            max_decoded_input_bytes?: number;
+            /** @description Versioned per-file-part transport encodings the Server decodes before format validation; an omitted declaration is identity. */
+            file_encodings?: {
+                /** @constant */
+                version: 1;
+                supported: ("identity" | "gzip")[];
+                /** @description Maximum decoded/encoded byte ratio a declared gzip part may expand to; a client must send identity when a compressed part would exceed it. */
+                max_expansion_ratio: number;
+            };
             input_workspace: components["schemas"]["InputWorkspace"];
             /** @description The canonical graph a workflow Task freezes at submission; omitted for single-stage Task Types. */
             execution_graph?: components["schemas"]["ExecutionGraph"];
@@ -2873,6 +2883,8 @@ export interface components {
             input_roles?: string[];
             /** @description Optional relative paths corresponding to files, used by multi-file task types. */
             input_paths?: string[];
+            /** @description Optional per-file-part transport encoding aligned 1:1 with files; omitted means identity. */
+            file_encodings?: ("identity" | "gzip")[];
             /** @description Enabled task-type name from GET /compute/api/types; omitted when it is supplied by the request path. */
             task_type?: string;
             /** @description Manifest-declared execution mode from the Task Type projection; defaults to full. */

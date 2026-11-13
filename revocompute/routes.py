@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import mimetypes
 import ntpath
 import os
 import re
@@ -234,9 +233,20 @@ from revocompute.workspace_contracts import (
     validate_selected_residues,
 )
 from revocompute.task_types import workspace_backend
+from revocompute.media_types import media_type_for_path
 from revocompute.tool_calls import ToolAdmissionError, new_tool_call_id, normalize_tool_call_id
 from revocompute.tool_types import canonical_parameters, public_tool
 from revocompute.tool_workspace import ToolWorkspaceError
+from revocompute.upload_encoding import (
+    DECLARATION_FIELD,
+    MULTIPART_HEADROOM_BYTES,
+    DecodeBudget,
+    DecodeLimits,
+    DecodedStream,
+    UploadEncodingError,
+    capability as file_encoding_capability,
+    parse_declarations,
+)
 from jsonschema import ValidationError as JSONSchemaValidationError
 from jsonschema import validate as validate_json_schema
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -844,6 +854,12 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
         raise ToolWorkspaceError("Task artifact reference is unavailable")
     stream = resolved.pop("verified_stream")
     try:
+        # #156 gate: verified artifact bytes are materialized outside the decoded
+        # upload budget, so a request's total input is uploads + artifact bytes.
+        # Every shipped Tool has one {min: 1, max: 1} role, which keeps the
+        # total equal to one per-file-bounded input. A Tool that accepts more
+        # than one input must charge this stream to the same per-request budget
+        # before materializing it.
         # Materialize from the verified snapshot, not from the resolved name:
         # the bytes copied into the Tool workspace are exactly the bytes whose
         # manifest identity was checked, so a replacement between resolution and
@@ -870,6 +886,10 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
 @login_required
 @rate_limit(max_requests=60, window_seconds=3600)
 def submit_tool_call(name):
+    # Tool inputs can opt into a larger tier than an ordinary Task submission.
+    # Set Flask's per-request body cap before any form access; the gateway's
+    # Tool location carries the same multipart headroom.
+    request.max_content_length = TOOL_CONFIG.request_max_bytes + MULTIPART_HEADROOM_BYTES
     if blocked := require_bearer_auth():
         return blocked
     if blocked := _reject_guest():
@@ -903,6 +923,26 @@ def submit_tool_call(name):
     artifact_refs, artifact_roles = request.form.getlist("artifact_references"), request.form.getlist("artifact_roles")
     if len(uploads) != len(upload_roles) or len(artifact_refs) != len(artifact_roles):
         return jsonify({"error": "Every Tool input must be bound to a named role"}), 400
+    # Tool inputs share the Task upload transport contract: a part may declare
+    # ``gzip`` and is decoded through the same bounded admission helper before
+    # the workspace hashes and validates it.  A future larger Tool tier raises
+    # TOOL_REQUEST_MAX_BYTES (and the gateway's per-location body cap) without
+    # adding a second decompression path.
+    try:
+        encodings = parse_declarations(
+            request.form.getlist(DECLARATION_FIELD),
+            len(uploads),
+            request_content_encoding=request.headers.get("Content-Encoding"),
+            part_content_encodings=[uploaded.headers.get("Content-Encoding") for uploaded in uploads],
+        )
+    except UploadEncodingError as exc:
+        return jsonify({"error": str(exc), "error_class": "invalid_input", "code": exc.code}), 400
+    tool_decode_limits = DecodeLimits(
+        encoded_max_bytes=int(request.max_content_length),
+        decoded_max_bytes=TOOL_CONFIG.request_max_bytes,
+        decoded_total_max_bytes=TOOL_CONFIG.request_max_bytes,
+    )
+    tool_decode_budget = DecodeBudget(tool_decode_limits.decoded_total_max_bytes)
     submitted_roles = [*upload_roles, *artifact_roles]
     known_roles = {role.name: role for role in tool.inputs}
     if any(role not in known_roles for role in submitted_roles):
@@ -915,14 +955,17 @@ def submit_tool_call(name):
     inputs: dict[str, list[dict[str, Any]]] = {role.name: [] for role in tool.inputs}
     try:
         tool_workspace.create(call_id)
-        for uploaded, role_name in zip(uploads, upload_roles, strict=True):
+        for uploaded, role_name, encoding in zip(uploads, upload_roles, encodings, strict=True):
             if not uploaded.filename:
                 raise ToolWorkspaceError("Tool input filename is required")
             role = known_roles[role_name]
             inputs[role_name].append(
                 tool_workspace.materialize_stream(
                     call_id, role=role_name, filename=uploaded.filename,
-                    accepted_formats=role.formats, stream=uploaded.stream,
+                    accepted_formats=role.formats,
+                    stream=DecodedStream(
+                        uploaded.stream, encoding, tool_decode_limits, budget=tool_decode_budget
+                    ),
                 )
             )
         for expression, role_name in zip(artifact_refs, artifact_roles, strict=True):
@@ -935,9 +978,9 @@ def submit_tool_call(name):
                 if error:
                     raise ToolWorkspaceError(error)
         tool_workspace.write_request(call_id, tool, inputs, parameters)
-        input_bytes = sum(int(item["size"]) for values in inputs.values() for item in values)
-        if input_bytes > TOOL_CONFIG.request_max_bytes:
-            raise ToolWorkspaceError("Tool request input limit exceeded")
+        # The shared decode budget refused an aggregate overage before its
+        # crossing chunk reached the workspace, so no post-write size check is
+        # relied on here.
         workspace_bytes = tool_workspace.bytes_used(call_id)
         output_headroom = TOOL_CONFIG.output_max_bytes
         required_bytes = workspace_bytes + output_headroom
@@ -986,6 +1029,9 @@ def submit_tool_call(name):
     except PermissionError as exc:
         tool_workspace.delete(call_id)
         return jsonify({"error": str(exc)}), 403
+    except UploadEncodingError as exc:
+        tool_workspace.delete(call_id)
+        return jsonify({"error": str(exc), "error_class": "invalid_input", "code": exc.code}), 400
     except ToolWorkspaceError as exc:
         tool_workspace.delete(call_id)
         return jsonify({"error": str(exc), "error_class": "invalid_input"}), 400
@@ -1415,6 +1461,8 @@ def task_type_form(name: str):
             for mode in tt.execution_modes
         ],
         "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
+        "max_decoded_input_bytes": current_app.config["MAX_INPUT_TOTAL_BYTES"],
+        "file_encodings": file_encoding_capability(),
         "input_workspace": workspace_payload,
     }
     if execution_graph is not None:
@@ -1624,6 +1672,15 @@ def _validate_input_uploads(task_type: str | None = None):
         return None, (jsonify({"error": f"Unknown task type: {task_type}"}), 400)
     uploads = request.files.getlist("files") or request.files.getlist("file")
     uploads = [uploaded for uploaded in uploads if uploaded.filename]
+    try:
+        encodings = parse_declarations(
+            request.form.getlist(DECLARATION_FIELD),
+            len(uploads),
+            request_content_encoding=request.headers.get("Content-Encoding"),
+            part_content_encodings=[uploaded.headers.get("Content-Encoding") for uploaded in uploads],
+        )
+    except UploadEncodingError as exc:
+        return None, _input_contract_error(exc.code, str(exc))
     max_input_files = int(current_app.config["MAX_INPUT_FILES"])
     if len(uploads) > max_input_files:
         return None, _input_contract_error(
@@ -1638,9 +1695,11 @@ def _validate_input_uploads(task_type: str | None = None):
     if error := _validate_role_counts(tt, submitted_roles):
         return None, error
     submitted_paths = request.form.getlist("input_paths")
-    validated: list[tuple[Any, str, str, str]] = []
+    validated: list[tuple[Any, str, str, str, str]] = []
     seen_paths: set[tuple[str, str]] = set()
-    for index, (uploaded, role_name) in enumerate(zip(uploads, submitted_roles, strict=True)):
+    for index, (uploaded, role_name, encoding) in enumerate(
+        zip(uploads, submitted_roles, encodings, strict=True)
+    ):
         raw_path = submitted_paths[index] if index < len(submitted_paths) else uploaded.filename
         safe_path, reason = canonical_relative_path(raw_path)
         role = _role_by_name(tt, role_name)
@@ -1667,17 +1726,17 @@ def _validate_input_uploads(task_type: str | None = None):
                 format_name=format_name or None,
             )
         seen_paths.add(key)
-        validated.append((uploaded, safe_path, role_name, format_name))
+        validated.append((uploaded, safe_path, role_name, format_name, encoding))
     # A path may not also be a directory prefix of another path in the same role:
     # ``x.pdb`` cannot be both a file and the directory ``x.pdb/`` the other path
     # needs.  The collision set above only catches exact repeats, so a prefix
     # pair would otherwise reach materialization, where ``copyfile`` fails and the
     # request dies as a 500 with a durable failed row and orphan state.
-    for _uploaded, safe_path, role_name, _format in validated:
+    for _uploaded, safe_path, role_name, _format, _encoding in validated:
         prefix = safe_path + "/"
         if any(
             other_role == role_name and other_path.startswith(prefix)
-            for _other_uploaded, other_path, other_role, _other_format in validated
+            for _other_uploaded, other_path, other_role, _other_format, _other_encoding in validated
         ):
             return None, _input_contract_error(
                 "input_namespace_collision",
@@ -1688,16 +1747,21 @@ def _validate_input_uploads(task_type: str | None = None):
 
 
 def _quarantine_uploaded_inputs(
-    uploads: list[tuple[Any, str, str, str]],
+    uploads: list[tuple[Any, str, str, str, str]],
     task_type: str,
 ) -> tuple[list[dict[str, Any]], dict[str, str], list[str]]:
     """Quarantine and validate every input before extension code can inspect it."""
     metadata = _request_metadata()
     saved: list[dict[str, Any]] = []
     quarantined: list[str] = []
-    total_bytes = 0
+    limits = DecodeLimits(
+        encoded_max_bytes=int(current_app.config["MAX_CONTENT_LENGTH"]),
+        decoded_max_bytes=int(current_app.config["MAX_INPUT_FILE_BYTES"]),
+        decoded_total_max_bytes=int(current_app.config["MAX_INPUT_TOTAL_BYTES"]),
+    )
+    budget = DecodeBudget(limits.decoded_total_max_bytes)
     try:
-        for uploaded, relative_path, role, format_name in uploads:
+        for uploaded, relative_path, role, format_name, encoding in uploads:
             temp_name = f".tmp_{os.urandom(8).hex()}_{os.path.basename(relative_path)}"
             temp_path = _safe_join(app.config["UPLOAD_FOLDER"], temp_name)
             quarantined.append(temp_path)
@@ -1711,24 +1775,14 @@ def _quarantine_uploaded_inputs(
             }
             file_bytes = 0
             with open(temp_path, "wb") as handle:
-                while chunk := uploaded.stream.read(65536):
-                    file_bytes += len(chunk)
-                    total_bytes += len(chunk)
-                    if file_bytes > int(current_app.config["MAX_INPUT_FILE_BYTES"]):
-                        raise InputPreflightError(
-                            item,
-                            "input_file_size_limit",
-                            f"Input file exceeds the {current_app.config['MAX_INPUT_FILE_BYTES']} byte limit.",
-                        )
-                    if total_bytes > int(current_app.config["MAX_INPUT_TOTAL_BYTES"]):
-                        limit = current_app.config["MAX_INPUT_TOTAL_BYTES"]
-                        raise InputPreflightError(
-                            item,
-                            "input_total_size_limit",
-                            f"Combined uploaded inputs exceed the {limit} byte limit.",
-                        )
-                    handle.write(chunk)
-                    hasher.update(chunk)
+                try:
+                    decoded = DecodedStream(uploaded.stream, encoding, limits, budget=budget)
+                    while chunk := decoded.read(65536):
+                        file_bytes += len(chunk)
+                        handle.write(chunk)
+                        hasher.update(chunk)
+                except UploadEncodingError as exc:
+                    raise InputPreflightError(item, exc.code, str(exc)) from exc
             item["hash"] = hasher.hexdigest()
             item["size"] = file_bytes
             saved.append(item)
@@ -2131,7 +2185,8 @@ def _input_preflight_error_response(error: InputPreflightError):
 
 @app.errorhandler(RequestEntityTooLarge)
 def _request_entity_too_large(_error):
-    message = f"Request body exceeds the {current_app.config['MAX_CONTENT_LENGTH']} byte limit."
+    limit = request.max_content_length or current_app.config["MAX_CONTENT_LENGTH"]
+    message = f"Request body exceeds the {limit} byte limit."
     finding = PreflightFinding(code="request_size_limit", message=message)
     emit_event(
         "preflight.security_rejected",
@@ -2264,6 +2319,9 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     raw_form = request.form.to_dict(flat=True)
     raw_form.pop("input_paths", None)
     raw_form.pop("input_roles", None)
+    # The per-part encoding declaration is transport metadata consumed by the
+    # quarantine boundary, not part of the typed Task submission contract.
+    raw_form.pop(DECLARATION_FIELD, None)
     form_data: dict[str, Any] = {}
     nested_params: dict[str, Any] = {}
     for key, value in raw_form.items():
@@ -3702,7 +3760,15 @@ def get_result_artifact(md5sum: str, relative_path: str):
     # delivery therefore replaces the offload on the artifact and archive
     # endpoints.
     response = _verified_payload(stream, int(resolved["size"]))
-    response.mimetype = artifact.get("media_type") or "application/octet-stream"
+    # A manifest written before the server-owned projection carries the old
+    # octet-stream fallback; re-project from the path rather than preserving a
+    # type that made live structures ineligible for gateway compression.
+    declared_media_type = str(artifact.get("media_type") or "")
+    response.mimetype = (
+        declared_media_type
+        if declared_media_type and declared_media_type != "application/octet-stream"
+        else media_type_for_path(str(resolved["path"]))
+    )
     response.headers.set(
         "Content-Disposition",
         "attachment" if as_attachment else "inline",
@@ -4376,7 +4442,7 @@ def task_input_file(md5sum):
     return send_from_directory(
         os.path.dirname(file_path) or ".",
         os.path.basename(file_path),
-        mimetype=mimetypes.guess_type(str(structure.get("relative_path") or ""))[0] or "application/octet-stream",
+        mimetype=media_type_for_path(str(structure.get("relative_path") or "")),
         conditional=True,
     )
 

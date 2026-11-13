@@ -1,7 +1,7 @@
 import { createIcons, Dice5 } from 'lucide';
 import { alignmentPreview, residueTone } from './alignment-preview';
 import { parameterValue, seedConstant, validateParameter } from '../parameter-controls';
-import type { ParameterDefinition } from '../types';
+import type { ParameterDefinition, TaskFormDefinition } from '../types';
 import { t } from '../../../app/i18n';
 import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance } from './plugin-contract';
 import { element, filePath, formatBytes, matchesExtension, parseSequence } from './utils';
@@ -146,6 +146,18 @@ function validateParameters(parameters: ParameterDefinition[]): string[] {
   return errors;
 }
 
+/**
+ * The original-byte ceiling for a submission.
+ *
+ * ``max_request_bytes`` bounds the encoded multipart body; the aggregate
+ * decoded/original limit is a distinct server-owned value so a larger
+ * compressed upload tier does not make the form refuse valid originals. A
+ * server that predates the projection keeps the old single-cap behavior.
+ */
+export function maxOriginalBytes(form: Pick<TaskFormDefinition, 'max_request_bytes' | 'max_decoded_input_bytes'>): number {
+  return form.max_decoded_input_bytes ?? form.max_request_bytes;
+}
+
 const filesPlugin: WorkspacePlugin = {
   id: 'files',
   mount(target, definition, context) {
@@ -254,7 +266,8 @@ const filesPlugin: WorkspacePlugin = {
           input.toggleAttribute('aria-invalid', roleErrors.length > 0); error.textContent = roleErrors[0] || ''; error.hidden = !roleErrors.length; errors.push(...roleErrors);
         });
         const bytes = context.inputFiles().reduce((sum, item) => sum + item.file.size, 0) + new Blob([context.sequence()]).size;
-        if (bytes > context.form.max_request_bytes) errors.push(t('ct.files.tooLarge', { limit: formatBytes(context.form.max_request_bytes) }));
+        const limit = maxOriginalBytes(context.form);
+        if (bytes > limit) errors.push(t('ct.files.tooLarge', { limit: formatBytes(limit) }));
         return errors;
       },
     };

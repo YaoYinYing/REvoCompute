@@ -79,6 +79,12 @@ _DETAIL_CODE_TO_CLASS = {
     "input_file_count_limit": CONTENT_TOO_LARGE,
     "input_file_size_limit": CONTENT_TOO_LARGE,
     "input_total_size_limit": CONTENT_TOO_LARGE,
+    # ingress_security.Phase.SECURITY -- per-file-part transport encoding.
+    "input_encoding_declaration": INVALID_PARAMETERS,
+    "input_encoding_conflict": INVALID_PARAMETERS,
+    "input_encoding_unsupported": INVALID_PARAMETERS,
+    "input_encoding_invalid": INVALID_PARAMETERS,
+    "input_encoding_limit": CONTENT_TOO_LARGE,
     "input_snapshot_mismatch": INVALID_PARAMETERS,
     "request_size_limit": CONTENT_TOO_LARGE,
     "workspace_json_invalid": INVALID_PARAMETERS,

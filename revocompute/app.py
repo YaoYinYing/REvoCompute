@@ -32,6 +32,7 @@ from revocompute.tool_calls import ToolCallDatabase
 from revocompute.tool_types import ToolRegistry
 from revocompute.tool_workspace import ToolWorkspace
 from revocompute.task_types import list_types as _list_task_types
+from revocompute.upload_encoding import reconcile_stale_quarantine
 from sqlalchemy.exc import IntegrityError
 from werkzeug.utils import secure_filename
 
@@ -69,6 +70,34 @@ def _start_request_trace() -> None:
         http_method=request.method,
         http_route=request.url_rule.rule if request.url_rule is not None else "unmatched",
     )
+
+
+@app.before_request
+def _reject_whole_body_encoding():
+    """Refuse a compressed multipart envelope before Flask parses it.
+
+    The upload contract compresses individual file parts and declares them in
+    ``file_encodings``; a whole-body ``Content-Encoding: gzip`` has no declared
+    per-part admission and would otherwise reach the multipart parser as
+    opaque bytes.
+    """
+    if request.mimetype == "multipart/form-data":
+        encoding = request.headers.get("Content-Encoding", "").strip().lower()
+        if encoding and encoding != "identity":
+            message = (
+                f"Whole-multipart Content-Encoding {encoding!r} is not supported; "
+                "encode individual file parts and declare file_encodings instead."
+            )
+            return (
+                jsonify(
+                    {
+                        "error": message,
+                        "details": [{"code": "input_encoding_unsupported", "message": message}],
+                    }
+                ),
+                400,
+            )
+    return None
 
 
 @app.after_request
@@ -205,6 +234,9 @@ app.config["WORKSPACE_FOLDER"] = CONFIG.workspace_folder
 app.config["RESULTS_FOLDER"] = CONFIG.results_folder
 
 _ensure_directories(CONFIG.upload_folder, CONFIG.workspace_folder, CONFIG.results_folder)
+_reconciled_quarantine = reconcile_stale_quarantine(CONFIG.upload_folder)
+if _reconciled_quarantine:
+    logging.warning("Removed %d stale quarantine upload(s) after restart", _reconciled_quarantine)
 app.config["storage_resolver"] = StorageResolver(CONFIG.results_folder, CONFIG.workspace_folder, task_store)
 
 # A demo deployment serves recorded result scenarios and validates every bundle

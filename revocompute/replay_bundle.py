@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any
 
 from revocompute.contracts import validate_openapi_payload
+from revocompute.media_types import media_type_for_path
 from revocompute.storage import manifest_byte_limit, open_published_regular_file, verify_regular_file
 
 REPLAY_BUNDLE_VERSION = 1
@@ -73,27 +74,6 @@ DEFAULT_MAX_BUNDLE_BYTES = 1_048_576
 VOLATILE_MANIFEST_FIELDS = ("filename", "message")
 
 _TASK_ID = re.compile("[0-9a-fA-F]{32}")
-
-# Media types for artifact paths whose payload the browser fetches directly.
-_MEDIA_TYPE_BY_SUFFIX = {
-    ".txt": "text/plain",
-    ".log": "text/plain",
-    ".stdout": "text/plain",
-    ".err": "text/plain",
-    ".a3m": "text/x-a3m",
-    ".fasta": "text/x-fasta",
-    ".fa": "text/x-fasta",
-    ".csv": "text/csv",
-    ".tsv": "text/tab-separated-values",
-    ".json": "application/json",
-    ".pdb": "chemical/x-pdb",
-    ".cif": "chemical/x-cif",
-    ".mmcif": "chemical/x-mmcif",
-    ".png": "image/png",
-    ".zip": "application/zip",
-    ".xtc": "application/octet-stream",
-    ".dcd": "application/octet-stream",
-}
 
 class ReplayBundleError(ValueError):
     """A replay bundle could not be captured, validated, or served faithfully."""
@@ -673,8 +653,7 @@ def _media_type(artifact: Mapping[str, Any]) -> str:
     declared = str(artifact.get("media_type") or "")
     if declared and declared != "application/octet-stream":
         return declared
-    suffix = os.path.splitext(str(artifact.get("path") or ""))[1].lower()
-    return _MEDIA_TYPE_BY_SUFFIX.get(suffix, "application/octet-stream")
+    return media_type_for_path(str(artifact.get("path") or ""))
 
 
 def _capture_storyboard(

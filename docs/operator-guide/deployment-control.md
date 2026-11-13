@@ -283,6 +283,18 @@ load newer manifests into older running Python code. Missing server images,
 invalid Compose, stale SIF provenance, or an absent/mismatched candidate
 receipt aborts activation without starting an inconsistent stack.
 
+### Admission-boundary revision and drain
+
+The Core validation boundary identity (`validator_revision`) is a content hash
+of the validator and ingress sources, including
+`revocompute/ingress_security.py`. Every admitted input receipt records that
+identity. A Task submitted under the previous revision but dispatched after a
+deploy that changed it fails closed with `input_snapshot_mismatch`, even when
+the snapshot bytes are identical, and the user must resubmit to obtain fresh
+receipts. Before deploying a change that touches a validation or ingress
+source, drain queued and pending submissions (or accept and communicate their
+terminal failure). Merging the change alone affects nothing until deployment.
+
 The deployment’s external auth, management, task, result, and workspace stores
 retain their existing ownership and backup rules. The live worker creates an
 isolated test database/workspace and copies only immutable fixtures from

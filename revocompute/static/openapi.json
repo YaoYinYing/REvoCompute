@@ -2607,6 +2607,28 @@
           "detail_url": {"type": "string"},
           "parameters_url": {"type": "string"},
           "max_request_bytes": {"type": "integer"},
+          "max_decoded_input_bytes": {
+            "type": "integer",
+            "description": "Aggregate decoded/original input bytes a submission may carry, independent of the encoded multipart body cap."
+          },
+          "file_encodings": {
+            "type": "object",
+            "required": ["version", "supported", "max_expansion_ratio"],
+            "properties": {
+              "version": {"type": "integer", "const": 1},
+              "supported": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["identity", "gzip"]}
+              },
+              "max_expansion_ratio": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Maximum decoded/encoded byte ratio a declared gzip part may expand to; a client must send identity when a compressed part would exceed it."
+              }
+            },
+            "additionalProperties": false,
+            "description": "Versioned per-file-part transport encodings the Server decodes before format validation; an omitted declaration is identity."
+          },
           "input_workspace": {"$ref": "#/components/schemas/InputWorkspace"},
           "execution_graph": {
             "$ref": "#/components/schemas/ExecutionGraph",
@@ -2949,6 +2971,7 @@
           "files": {"type": "array", "items": {"type": "string", "format": "binary"}, "description": "Input files; requirements depend on the selected task type."},
           "input_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding positionally to each multipart files part."},
           "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional relative paths corresponding to files, used by multi-file task types."},
+          "file_encodings": {"type": "array", "items": {"type": "string", "enum": ["identity", "gzip"]}, "description": "Optional per-file-part transport encoding aligned 1:1 with files; omitted means identity."},
           "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types; omitted when it is supplied by the request path."},
           "execution_mode": {"type": "string", "description": "Manifest-declared execution mode from the Task Type projection; defaults to full."},
           "reuse": {"type": "string", "description": "Optional JSON-encoded object mapping each declared reuse role to {source_task, stage, port, digest}."},
