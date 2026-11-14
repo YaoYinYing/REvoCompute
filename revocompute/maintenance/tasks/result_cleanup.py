@@ -16,20 +16,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from revocompute import resource_lifecycle
-from revocompute import resource_ledger as rloan
+from revocompute import task_state
 from revocompute.config import ComputeConfig, env_float
 from revocompute.db import TaskDatabase
 from revocompute.maintenance.model import PeriodicTask
 from revocompute.storage import StorageResolver
 
 _TASK_ID_PATTERN = re.compile(r"[a-fA-F0-9]{32}$")
-_TERMINAL_RESULT_STATUSES = {"finished", "failed", "cancelled"}
-_CLEANUP_CLAIMS = {
-    "finished": ("deleting:finished", "cleaned:finished"),
-    "failed": ("deleting:cancel", "cleaned:cancel"),
-    "cancelled": ("deleting:cancel", "cleaned:cancel"),
-}
-_CLAIMED_CLEANUPS = dict(_CLEANUP_CLAIMS.values())
 
 
 def _path_is_within(base_dir: str, candidate: str) -> bool:
@@ -155,8 +148,9 @@ def cleanup_expired_task_artifacts(
     quota consumed forever for data that is gone.
 
     The status marker the UI and API present (``deleting:*`` while a deletion is
-    in flight, ``cleaned:*`` once the bytes are gone) is *derived from the purge
-    outcome* rather than maintained as a parallel cleanup state machine: it is
+    in flight, then the terminal lane its recorded request names) is *derived
+    from the purge outcome* rather than maintained as a parallel cleanup state
+    machine: it is
     claimed before the purge so a resubmission cannot be retired by mistake, and
     completed only once the purge reports the data is gone.
     """
@@ -168,17 +162,16 @@ def cleanup_expired_task_artifacts(
     remove_artifacts = _artifact_remover(results_folder, workspace_folder)
     cleaned = 0
     for task in task_store.list_tasks():
-        status = str(task.get("status") or "").strip().lower()
-        if status in _CLAIMED_CLEANUPS:
+        status = task_state.normalize(task.get("status"))
+        if status in task_state.DISPOSAL_CLAIMS:
             # A deletion that was already claimed and interrupted: resume it
             # from the durable claim rather than deciding eligibility again.
             claim_status = status
-            cleaned_status = _CLAIMED_CLEANUPS[status]
-        elif status in _TERMINAL_RESULT_STATUSES:
+        elif status in task_state.OUTCOMES:
             finished_at = task.get("finished_at")
             if finished_at is None or finished_at > cutoff:
                 continue
-            claim_status, cleaned_status = _CLEANUP_CLAIMS[status]
+            claim_status = task_state.disposal(status).claim
             if not task_store.claim_task_cleanup(
                 task["md5sum"],
                 expected_status=status,
@@ -194,10 +187,10 @@ def cleanup_expired_task_artifacts(
             # The lifecycle row records the failure and keeps the charge, so the
             # next pass retries it; the claim stays in place meanwhile.
             continue
-        if not task_store.complete_task_cleanup(
+        if not task_store.settle_disposal_claim(
             task["md5sum"],
             claim_status=claim_status,
-            cleaned_status=cleaned_status,
+            at=timestamp,
         ):
             logging.warning("Cleanup claim changed before completion for task %s", task["md5sum"])
             continue
@@ -229,26 +222,8 @@ def _retire_expired_task(
     # The durable request precedes any filesystem work: after it, a crash is a
     # resumable purge rather than an intact tree whose row still reads ACTIVE.
     resource_lifecycle.request_data_deletion(task_store, task, actor_user_id=None, at=at)
-    record = task_store.get_data_lifecycle(task_id)
-    if record is None:  # pragma: no cover - request_data_deletion always records one
-        return False
-    state = str(record["state"])
-    if state == rloan.DataLifecycleState.PURGED.value:
-        return True
-    if state == rloan.DataLifecycleState.ERROR.value:
-        # A purge that failed keeps its charge; re-queue it through the same
-        # guarded transition the first attempt used rather than freeing quota.
-        if not task_store.requeue_data_lifecycle(task_id, at=at):
-            return False
-    elif state == rloan.DataLifecycleState.PURGING.value:
-        claimed_at = float(record.get("claimed_at") or record.get("updated_at") or 0.0)
-        if at - claimed_at < resource_lifecycle.PURGE_STALE_SECONDS:
-            # A live purge owns this Task right now.
-            return False
-        if not task_store.reclaim_stale_purge(task_id, at=at):
-            return False
     try:
-        return resource_lifecycle.purge_task_data(
+        return resource_lifecycle.ensure_task_purged(
             task_store, task, remove_artifacts=remove_artifacts, at=at
         )
     except Exception:

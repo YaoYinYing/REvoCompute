@@ -18,6 +18,13 @@ from conftest import _anchor_result_publication, _load_pssm_module, _test_client
 from revocompute.tool_calls import new_tool_call_id
 
 
+def _finish_call(calls, call_id, **fields):
+    """Settle a call through its real lifecycle, not a queued shortcut."""
+    assert calls.transition(call_id, expected=("queued",), status="preparing")
+    assert calls.transition(call_id, expected=("preparing",), status="running")
+    return calls.transition(call_id, expected=("running",), status="finished", **fields)
+
+
 def _app(monkeypatch, tmp_path, extra_env=None):
     images = tmp_path / "tool-images"
     images.mkdir()
@@ -333,10 +340,9 @@ def test_storage_pressure_evicts_terminal_calls_but_never_active_calls(monkeypat
         workspace_bytes=700,
     )
     now = time.time()
-    assert module.tool_calls.transition(
+    assert _finish_call(
+        module.tool_calls,
         terminal_id,
-        expected=("queued",),
-        status="finished",
         finished_at=now,
         expires_at=now + 86400,
         result_manifest_json='{"outputs":{}}',
@@ -422,10 +428,9 @@ def test_user_storage_pressure_reclaims_only_that_users_terminal_workspace(monke
     assert first.status_code == 202, first.get_json()
     first_id = first.get_json()["tool_call_id"]
     now = time.time()
-    assert module.tool_calls.transition(
+    assert _finish_call(
+        module.tool_calls,
         first_id,
-        expected=("queued",),
-        status="finished",
         finished_at=now,
         expires_at=now + 86400,
         result_manifest_json='{"outputs":{}}',
@@ -448,10 +453,9 @@ def test_user_storage_pressure_reclaims_only_that_users_terminal_workspace(monke
         global_limit=8,
         workspace_bytes=700,
     )
-    assert module.tool_calls.transition(
+    assert _finish_call(
+        module.tool_calls,
         other_id,
-        expected=("queued",),
-        status="finished",
         # Older than the owner's terminal row, so a reclaimer that does not
         # skip other tenants would evict this row first.
         finished_at=now - 1,
@@ -590,10 +594,9 @@ def test_tool_output_download_is_owner_only(monkeypatch, tmp_path):
         global_limit=8,
     )
     now = time.time()
-    assert module.tool_calls.transition(
+    assert _finish_call(
+        module.tool_calls,
         call_id,
-        expected=("queued",),
-        status="finished",
         finished_at=now,
         expires_at=now + 86400,
         result_manifest_json=json.dumps(manifest),

@@ -524,17 +524,6 @@ def _revoke_celery_task(task: dict[str, Any]) -> None:
         logging.warning("Failed to revoke Celery task %s: %s", celery_id, exc)
 
 
-def _is_deleted_status(status: Any) -> bool:
-    """True when task artifacts were removed by a user or maintenance."""
-    normalized = str(status or "").strip().lower()
-    return normalized in {
-        "deleted:finshed",
-        "deleted:cancel",
-        "cleaned:finished",
-        "cleaned:cancel",
-    }
-
-
 # ---------------------------------------------------------------------------
 # Register HTTP routes (imported late to avoid circular imports — routes.py
 # needs ``app`` and helpers that are only available after this module loads).

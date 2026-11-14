@@ -28,6 +28,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from revocompute import resource_ledger as rloan
+from revocompute import task_state
 from revocompute.db import TaskDatabase
 from revocompute.operational_events import emit_event
 
@@ -130,6 +131,69 @@ def purge_task_data(
                 storage_bytes=released_bytes,
             )
     return purged
+
+
+def ensure_task_purged(
+    task_store: TaskDatabase,
+    task: dict[str, Any],
+    *,
+    remove_artifacts: Callable[[dict[str, Any]], None],
+    at: float | None = None,
+) -> bool:
+    """Drive one Task's durable data to ``PURGED``, resuming an interrupted purge.
+
+    The caller records the deletion request first; this owns the resumption
+    ladder and the destructive step.  Returns whether the artifacts are gone and
+    the quota charged for them was released — already, or as a result of this
+    call.  ``False`` means the Task must stay in its disposal claim and be
+    retried: either a live purge owns it or a guarded transition refused.  A
+    fresh ``PURGING`` claim is never stolen;
+    only a claim older than :data:`PURGE_STALE_SECONDS` is reclaimed.
+    """
+    task_id = str(task["md5sum"])
+    record = task_store.get_data_lifecycle(task_id)
+    if record is None:
+        return False
+    state = str(record["state"])
+    if state == rloan.DataLifecycleState.PURGED.value:
+        return True
+    if state == rloan.DataLifecycleState.ERROR.value:
+        if not task_store.requeue_data_lifecycle(task_id, at=at):
+            return False
+    elif state == rloan.DataLifecycleState.PURGING.value:
+        timestamp = time.time() if at is None else at
+        claimed_at = float(record.get("claimed_at") or record.get("updated_at") or 0.0)
+        if timestamp - claimed_at < PURGE_STALE_SECONDS:
+            return False
+        if not task_store.reclaim_stale_purge(task_id, expected_claimed_at=claimed_at, at=at):
+            return False
+    elif state != rloan.DataLifecycleState.DELETE_REQUESTED.value:
+        return False
+    return purge_task_data(task_store, task, remove_artifacts=remove_artifacts, at=at)
+
+
+def settle_purged_claims(
+    task_store: TaskDatabase,
+    *,
+    at: float | None = None,
+    limit: int = 500,
+) -> int:
+    """Finish the status write for deletions whose purge already completed.
+
+    ``PURGED`` is written only after the artifacts are gone and the charge was
+    released, so these Tasks have nothing left to purge and no client should keep
+    polling them.  Only the lane decision and its audit fields remain.
+    """
+    timestamp = time.time() if at is None else at
+    settled = 0
+    for task in task_store.list_purged_disposal_claims(limit=limit):
+        if task_store.settle_disposal_claim(
+            task["md5sum"],
+            claim_status=task_state.normalize(task.get("status")),
+            at=timestamp,
+        ):
+            settled += 1
+    return settled
 
 
 def _finish_orphan_purge(task_store: TaskDatabase, task_id: str, *, at: float) -> bool:
@@ -239,7 +303,9 @@ def retry_stale_purges(
             # A fresh claim is a live purge; a stale one is a crash.  Recovery is
             # the reclaim itself, so a pass that reclaims but cannot finish leaves
             # a retryable row for the next pass instead of a permanent wedge.
-            if not task_store.reclaim_stale_purge(task_id, at=timestamp):
+            if not task_store.reclaim_stale_purge(
+                task_id, expected_claimed_at=float(claimed_at), at=timestamp
+            ):
                 continue
         elif state == rloan.DataLifecycleState.ERROR.value:
             # ERROR goes back to DELETE_REQUESTED through the same guard the
@@ -293,7 +359,7 @@ def detect_drift(
             )
             continue
         status = str(task.get("status") or "")
-        if status in {"finished", "failed", "cancelled"} | set(task_store.DELETED_STATUSES):
+        if task_state.normalize(status) in task_state.SETTLED:
             drift.append(
                 rloan.ReconciliationDrift(
                     kind="terminal_task_unsettled_allocation",

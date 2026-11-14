@@ -518,6 +518,7 @@ def _seed_pending_storage_charge(module, monkeypatch, tmp_path, *, name: str = "
     task = module.task_store.get_task(task_id)
     task_root = Path(module.app.config["storage_resolver"].get_task_root(task))
     (task_root / "result.txt").write_text("score\n", encoding="utf-8")
+    assert module.task_store.claim_task_execution(task_id)
     module.task_store.update_task(task_id, status="finished")
 
     def refuse_charge(*_args, **_kwargs):

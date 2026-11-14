@@ -22,6 +22,17 @@ ACTIVE_STATUSES = ("queued", "preparing", "running")
 TERMINAL_STATUSES = ("finished", "failed")
 VALID_STATUSES = frozenset((*ACTIVE_STATUSES, *TERMINAL_STATUSES))
 
+#: The only step a call may take.  A caller's ``expected`` set names the race it
+#: thinks it is in; this table decides whether the step itself exists, so a call
+#: can never regress from running to queued or leave a terminal state.
+TRANSITIONS: dict[str, frozenset[str]] = {
+    "queued": frozenset({"preparing", "failed"}),
+    "preparing": frozenset({"running", "failed"}),
+    "running": frozenset({"finished", "failed"}),
+    "finished": frozenset(),
+    "failed": frozenset(),
+}
+
 
 class ToolAdmissionError(RuntimeError):
     """A retryable outstanding-work or storage admission rejection."""
@@ -237,6 +248,9 @@ class ToolCallDatabase:
     def transition(self, tool_call_id: str, *, expected: tuple[str, ...], status: str, **fields: Any) -> bool:
         if status not in VALID_STATUSES or any(item not in VALID_STATUSES for item in expected):
             raise ValueError("Invalid Tool call lifecycle status")
+        for source in expected:
+            if status not in TRANSITIONS[source]:
+                raise ValueError(f"Illegal Tool call transition {source} -> {status}")
         if status in TERMINAL_STATUSES and ("finished_at" not in fields or "expires_at" not in fields):
             raise ValueError("Terminal Tool calls require finish and expiry times")
         statement = (

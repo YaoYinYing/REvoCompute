@@ -42,6 +42,7 @@ from revocompute.mcp.errors import (
     classify,
 )
 from revocompute.mcp.handles import canonical_state
+from revocompute.task_state import PUBLISHED_RESULTS, POLLING_COMPLETE, is_active, normalize
 from revocompute.storage import PUBLICATION_AVAILABLE, PUBLICATION_NOT_FINALIZED
 
 # ---------------------------------------------------------------------------
@@ -321,13 +322,12 @@ def get_task_status(principal: Any, *, operation_id: str) -> dict[str, Any]:
     """Project one owned Task's canonical lifecycle state."""
     from revocompute.task_runtime import _progress_summary, _sanitize_task_error
 
-    state = canonical_state()
     task = _owned_task(principal, operation_id)
-    status = str(task.get("status") or "").strip().lower()
+    status = normalize(task.get("status"))
     summary = _progress_summary(task) or {}
     payload: dict[str, Any] = {
         "status": status,
-        "terminal": status in state.web.task_store.STOP_POLLING_STATUSES,
+        "terminal": status in POLLING_COMPLETE,
         "task_type": task.get("task_type"),
         "submitted_at": _iso(task.get("uploaded_at")),
         "finished_at": _iso(task.get("finished_at")),
@@ -335,7 +335,7 @@ def get_task_status(principal: Any, *, operation_id: str) -> dict[str, Any]:
         "progress": summary.get("progress"),
         "outcome": summary.get("outcome"),
         "results_available": _manifest_available(task),
-        "cancellable": status in {"pending", "queued", "running"},
+        "cancellable": is_active(status),
     }
     error = _sanitize_task_error(task, task.get("error"))
     if error:
@@ -373,8 +373,8 @@ def get_task_results(principal: Any, *, operation_id: str) -> dict[str, Any]:
     complete one.
     """
     task = _owned_task(principal, operation_id)
-    status = str(task.get("status") or "").strip().lower()
-    if status not in {"finished", "failed"}:
+    status = normalize(task.get("status"))
+    if status not in PUBLISHED_RESULTS:
         raise McpError(RESULT_NOT_READY, f"Results are not ready (task status: {status or 'unknown'})")
     body = _canonical_result_body(principal, task)
     artifacts = body.get("artifacts") if isinstance(body.get("artifacts"), list) else []

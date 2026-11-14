@@ -63,9 +63,11 @@ def test_race_cancel_loses_atomic_claim_to_completion(monkeypatch, tmp_path):
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
     md5sum = _insert_pending_task(module, tmp_path / "result")
+    assert module.task_store.claim_task_execution(md5sum)
 
     def finish_before_claim(task_id, **fields):
         assert task_id == md5sum
+        # The execution the cancel races really finished before the claim ran.
         module.task_store.update_task(md5sum, status="finished")
         return False
 

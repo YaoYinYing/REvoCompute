@@ -6,6 +6,10 @@ plan names the TaskType, immutable inputs, typed parameters, resource profile,
 runtime artifact, and output contract. Only after these checks does the worker
 create task storage and submit to Slurm.
 
+The Task row's own lifecycle — which states exist, which transitions are legal,
+and how a retired Task is disposed — is defined in [Task Lifecycle
+State](task-lifecycle-state.md).
+
 Slurm launches the family entrypoint inside the exact Apptainer SIF. The worker
 captures status and logs, then the family parser validates declared outputs and
 artifact references before marking the task complete. Failures are explicit

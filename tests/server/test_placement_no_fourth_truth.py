@@ -395,6 +395,7 @@ def test_unmeasured_runtime_is_reported_as_no_total_rather_than_zero(app):
     assert report["queue_latency"]["total_seconds"] is None
 
     # The control: once the store records a runtime, the same reader reports it.
+    assert app.task_store.claim_task_execution(_task_row(app)["md5sum"])
     app.task_store.update_task(
         _task_row(app)["md5sum"], status="finished", started_at=1_000.0, finished_at=1_060.0, walltime=60.0
     )

@@ -37,6 +37,7 @@ from revocompute.job import (
 )
 from revocompute.job._stages import extract_stage_from_log_line
 from revocompute import runtime_bundle, runtime_image
+from revocompute import task_state
 from revocompute.runtime_image import RuntimeImageObservation
 from revocompute.execution_diagnostics import (
     MAX_LOG_BYTES,
@@ -1919,7 +1920,7 @@ class SlurmJob(Job):
                 task = self._task_store.get_task(self.task_id)
                 lifecycle = self._task_store.get_data_lifecycle(self.task_id)
                 if (
-                    task is None or task["status"] in self._task_store.TERMINAL_STATUSES
+                    task is None or task_state.normalize(task["status"]) in task_state.LOCKED
                     or (lifecycle is not None and lifecycle["state"] not in {"ACTIVE", "ARCHIVED"})
                 ):
                     return

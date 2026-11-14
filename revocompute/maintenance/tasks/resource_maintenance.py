@@ -8,8 +8,9 @@ Two jobs with one thing in common: both must be safe to run again after a crash,
 and neither may guess.
 
 *Purge* finishes deletions that were *authorized* — a user or an Admin already
-moved the Task to ``DELETE_REQUESTED`` — and re-drives a purge whose worker died
-between its claim and its completion.  It deliberately never decides on its own
+moved the Task to ``DELETE_REQUESTED`` — re-drives a purge whose worker died
+between its claim and its completion, and completes the status write of a purge
+that finished before its process did.  It deliberately never decides on its own
 that data is old enough to delete: automatic retention is a policy nobody has
 opted into yet (see ``docs/``), and the same env knob that would carry it is
 what disables this task entirely.
@@ -154,6 +155,7 @@ def run_resource_maintenance(
     recovered = resource_lifecycle.retry_stale_purges(
         store, remove_artifacts=remove_artifacts, now=timestamp
     )
+    settled_claims = resource_lifecycle.settle_purged_claims(store, at=timestamp)
     report = resource_lifecycle.reconcile_resources(
         store,
         settle_allocations=lambda: fetch_scheduler_evidence(store),
@@ -161,11 +163,19 @@ def run_resource_maintenance(
         unadopted_tasks=unadopted,
         now=timestamp,
     )
-    if purged["purged"] or recovered["recovered"] or report.drift or report.reclaimed_reservations:
+    if (
+        purged["purged"]
+        or recovered["recovered"]
+        or settled_claims
+        or report.drift
+        or report.reclaimed_reservations
+    ):
         logging.info(
-            "Resource maintenance: purged=%d recovered=%d expired_reservations=%d released_reservations=%d drift=%d",
+            "Resource maintenance: purged=%d recovered=%d settled_claims=%d "
+            "expired_reservations=%d released_reservations=%d drift=%d",
             purged["purged"],
             recovered["recovered"],
+            settled_claims,
             report.expired_reservations,
             report.reclaimed_reservations,
             len(report.drift),
@@ -176,6 +186,7 @@ def run_resource_maintenance(
         "purged": purged["purged"],
         "purge_failures": purged["failed"],
         "recovered_purges": recovered["recovered"],
+        "settled_claims": settled_claims,
         "settled_allocations": report.settled_allocations,
         "expired_reservations": report.expired_reservations,
         "released_reservations": report.reclaimed_reservations,

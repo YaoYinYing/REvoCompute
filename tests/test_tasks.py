@@ -2099,9 +2099,16 @@ def test_task_store_update_ignores_late_non_deleted_updates(monkeypatch, tmp_pat
     )
     md5sum = _insert_pending_task(module, tmp_path / "result")
     deleted_at = time.time()
-    module.task_store.update_task(
+    assert module.task_store.claim_task_cleanup(
         md5sum,
-        status="deleted:cancel",
+        expected_status="pending",
+        expected_finished_at=None,
+        claim_status="deleting:cancel",
+    )
+    assert module.task_store.complete_task_cleanup(
+        md5sum,
+        claim_status="deleting:cancel",
+        cleaned_status="deleted:cancel",
         finished_at=deleted_at,
         error="Task deleted by user",
     )
@@ -2170,13 +2177,20 @@ def test_run_compute_task_does_not_resurrect_deleted_task(monkeypatch, tmp_path)
         output_path = Path(output_dir)
         (output_path / "log").mkdir(parents=True, exist_ok=True)
         (output_path / "log" / "task_finished").write_text("done\n", encoding="utf-8")
-        original_update_task(
+        current = module.task_store.get_task(md5sum)["status"]
+        assert module.task_store.claim_task_cleanup(
             md5sum,
-            status="deleted:cancel",
+            expected_status=current,
+            expected_finished_at=None,
+            claim_status="deleting:cancel",
+        )
+        assert module.task_store.complete_task_cleanup(
+            md5sum,
+            claim_status="deleting:cancel",
+            cleaned_status="deleted:cancel",
             finished_at=time.time(),
             walltime=0.1,
             error="Task deleted by user",
-            celery_task_id=None,
         )
         task = module.task_store.get_task(md5sum)
         assert task is not None
@@ -2304,7 +2318,8 @@ def test_cleanup_expired_task_artifacts_only_removes_old_terminal_results(monkey
         assert zip_path.exists() is not expired
 
 
-def test_cleanup_skips_task_replaced_before_atomic_claim(monkeypatch, tmp_path):
+def test_cleanup_skip_leaves_a_row_that_moved_on_untouched(monkeypatch, tmp_path):
+    """The claim's ``finished_at`` predicate, not the scan, decides the race."""
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -2327,7 +2342,7 @@ def test_cleanup_skips_task_replaced_before_atomic_claim(monkeypatch, tmp_path):
         file_path=str(result_dir / "input.fasta"),
         uploaded_at=now - 32 * 86400,
         finished_at=now - 31 * 86400,
-        status="finished",
+        status="failed",
         is_binary=0,
         username="tester",
         task_type="cpu_runner",
@@ -2336,7 +2351,8 @@ def test_cleanup_skips_task_replaced_before_atomic_claim(monkeypatch, tmp_path):
     )
     original_claim = module.task_store.claim_task_cleanup
 
-    def replace_then_claim(task_id, **claim):
+    def retry_then_claim(task_id, **claim):
+        # A handle-less failure may be resubmitted; this row is now a new run.
         module.task_store.update_task(
             task_id,
             uploaded_at=now,
@@ -2346,7 +2362,7 @@ def test_cleanup_skips_task_replaced_before_atomic_claim(monkeypatch, tmp_path):
         fresh_artifact.write_text("new run\n", encoding="utf-8")
         return original_claim(task_id, **claim)
 
-    monkeypatch.setattr(module.task_store, "claim_task_cleanup", replace_then_claim)
+    monkeypatch.setattr(module.task_store, "claim_task_cleanup", retry_then_claim)
     from revocompute.maintenance.tasks.result_cleanup import cleanup_expired_task_artifacts
 
     assert (
@@ -3147,7 +3163,7 @@ def test_owner_can_delete_own_task_results(monkeypatch, tmp_path):
     assert running.json["status"] == "deleted:finshed"
 
 
-def test_cleanup_claim_blocks_resubmission_and_user_deletion(monkeypatch, tmp_path):
+def test_cleanup_claim_blocks_resubmission_and_a_repeated_delete_resumes_it(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -3190,8 +3206,10 @@ def test_cleanup_claim_blocks_resubmission_and_user_deletion(monkeypatch, tmp_pa
     deleted = client.delete(f"/compute/api/delete/{md5sum}", headers=auth_header)
 
     assert resubmitted.status_code == 202
-    assert deleted.status_code == 409
-    assert module.task_store.get_task(md5sum)["status"] == "deleting:cancel"
+    # A repeated deletion resumes the durable cleanup claim a previous request
+    # left, rather than refusing forever.
+    assert deleted.status_code == 200
+    assert module.task_store.get_task(md5sum)["status"] == "deleted:cancel"
 
 
 def test_task_list_filters_deleted_tasks_but_keeps_cancelled_ones(monkeypatch, tmp_path):

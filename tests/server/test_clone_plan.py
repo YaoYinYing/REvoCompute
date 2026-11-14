@@ -278,7 +278,17 @@ def test_an_expired_reference_or_a_deleted_source_is_unavailable(monkeypatch, tm
     live = module.app.test_client().post(
         f"/compute/api/tasks/{source_id}/clone-plan", headers=_test_client_auth(module)
     ).get_json()
-    module.task_store.update_task(source_id, status="deleted:cancel")
+    # Retire the source through the real disposal lane: the claim, then the
+    # user-deletion terminal state.
+    assert module.task_store.claim_task_cleanup(
+        source_id,
+        expected_status="finished",
+        expected_finished_at=1_700_000_100.0,
+        claim_status="deleting:finished",
+    )
+    assert module.task_store.complete_task_cleanup(
+        source_id, claim_status="deleting:finished", cleaned_status="deleted:finshed"
+    )
     response = module.app.test_client().get(
         f"/compute/api/clone-plans/{live['plan_id']}", headers=_test_client_auth(module)
     )

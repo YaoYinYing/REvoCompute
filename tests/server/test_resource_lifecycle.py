@@ -718,7 +718,7 @@ def test_retention_keeps_the_charge_and_stays_retryable_when_the_purge_fails(tmp
     _retention_task(database, task_id, user_id=51, finished_at=now - 31 * 86400)
     _charge(database, task_id, user_id=51, owned=GIB)
 
-    def _explode(_task):
+    def _explode(_task, _results_folder, _workspace_folder):
         raise OSError("filesystem went away")
 
     monkeypatch.setattr(cleanup, "delete_task_artifacts", _explode)

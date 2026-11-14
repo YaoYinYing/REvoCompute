@@ -21,12 +21,13 @@ import json
 from dataclasses import asdict, dataclass
 
 from revocompute.config import ComputeConfig
+from revocompute import task_state
 from revocompute.db import TaskDatabase
 from revocompute.storage import PUBLICATION_AVAILABLE, PUBLICATION_QUARANTINE_STATES, StorageResolver
 
 #: Publication states of a terminal task, in reporting order.  A state is either
 #: available or quarantined; the two sets partition every reported row.
-_TERMINAL_RESULT_STATUSES = {"finished", "failed"}
+_TERMINAL_RESULT_STATUSES = task_state.PUBLISHED_RESULTS
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +43,7 @@ def collect_publications(task_store: TaskDatabase, storage: StorageResolver) -> 
     """Classify every terminal task's result through the canonical reader."""
     entries: list[PublicationEntry] = []
     for task in task_store.list_tasks():
-        status = str(task.get("status") or "").strip().lower()
+        status = task_state.normalize(task.get("status"))
         if status not in _TERMINAL_RESULT_STATUSES:
             continue
         state = storage.publication_state(task)
