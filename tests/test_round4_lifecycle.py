@@ -124,18 +124,18 @@ def test_delete_claims_before_removing_artifacts(monkeypatch, tmp_path):
 
     observed: list[tuple[str, bool]] = []
     original_claim = module.task_store.claim_task_cleanup
-    original_complete = module.task_store.complete_task_cleanup
+    original_settle = module.task_store.settle_disposal_claim
 
     def _claim(*args, **kwargs):
         observed.append(("claim", artifact.exists()))
         return original_claim(*args, **kwargs)
 
-    def _complete(*args, **kwargs):
+    def _settle(*args, **kwargs):
         observed.append(("complete", artifact.exists()))
-        return original_complete(*args, **kwargs)
+        return original_settle(*args, **kwargs)
 
     monkeypatch.setattr(module.task_store, "claim_task_cleanup", _claim)
-    monkeypatch.setattr(module.task_store, "complete_task_cleanup", _complete)
+    monkeypatch.setattr(module.task_store, "settle_disposal_claim", _settle)
 
     response = client.delete(f"/compute/api/delete/{md5sum}", headers=auth_header)
 

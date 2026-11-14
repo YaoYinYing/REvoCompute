@@ -5298,11 +5298,9 @@ def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> bool:
     ):
         logging.warning("Data purge for task %s did not complete; it will be retried", md5sum)
         return False
-    if not resource_lifecycle.settle_disposal_claim(
-        task_store,
-        task,
+    if not task_store.settle_disposal_claim(
+        md5sum,
         claim_status=claim_status,
-        requested_by_user_id=int(g.current_user["id"]),
         at=time.time(),
     ):
         # Another finisher (a concurrent request or the maintenance pass) may

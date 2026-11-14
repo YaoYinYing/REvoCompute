@@ -30,6 +30,7 @@ from sqlalchemy import (
     Table,
     Text,
     and_,
+    case,
     create_engine,
     delete,
     desc,
@@ -1626,6 +1627,78 @@ class TaskDatabase:
                 self.tasks_table.c.status == claim_status,
             )
             .values(status=cleaned_status, celery_task_id=None, **fields)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def settle_disposal_claim(self, md5sum: str, *, claim_status: str, at: float) -> bool:
+        """Settle one disposal claim from its committed request, atomically.
+
+        Lane selection and the Task completion are one UPDATE statement.  The
+        actor is read by a correlated subquery of the same committed ``PURGED``
+        lifecycle row this statement requires, so a request committed before the
+        settlement decides the lane; a concurrent writer serializes after the
+        write lock this update takes.  No caller supplies the actor, so a stale
+        observation cannot pick a lane that disagrees with the recorded request.
+        """
+        if claim_status not in task_state.DISPOSAL_CLAIMS:
+            raise ValueError(f"Invalid cleanup claim status {claim_status}")
+        lifecycle_actor = (
+            select(self.data_lifecycle_table.c.requested_by_user_id)
+            .where(
+                self.data_lifecycle_table.c.task_id == self.tasks_table.c.md5sum,
+                self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGED.value,
+            )
+            .scalar_subquery()
+        )
+        purged = (
+            select(literal(1))
+            .select_from(self.data_lifecycle_table)
+            .where(
+                self.data_lifecycle_table.c.task_id == self.tasks_table.c.md5sum,
+                self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGED.value,
+            )
+            .exists()
+        )
+        user_requested = lifecycle_actor.is_not(None)
+        stamps_finished_at = self.tasks_table.c.finished_at.is_(None)
+        if claim_status == task_state.DELETING_CANCELLED:
+            # A user-owned delete of a cancelled Task carries the completion
+            # time the live route writes; retention keeps the recorded time.
+            stamps_finished_at = or_(stamps_finished_at, user_requested)
+        stmt = (
+            update(self.tasks_table)
+            .where(
+                self.tasks_table.c.md5sum == md5sum,
+                self.tasks_table.c.status == claim_status,
+                purged,
+            )
+            .values(
+                status=case(
+                    (user_requested, literal(task_state.cleanup_termination(claim_status))),
+                    else_=literal(task_state.cleanup_completion(claim_status)),
+                ),
+                finished_at=case(
+                    (stamps_finished_at, literal(at)),
+                    else_=self.tasks_table.c.finished_at,
+                ),
+                walltime=case(
+                    (
+                        and_(
+                            user_requested,
+                            self.tasks_table.c.walltime.is_(None),
+                            self.tasks_table.c.started_at.is_not(None),
+                        ),
+                        literal(at) - self.tasks_table.c.started_at,
+                    ),
+                    else_=self.tasks_table.c.walltime,
+                ),
+                error=case(
+                    (user_requested, literal("Task deleted by user")),
+                    else_=self.tasks_table.c.error,
+                ),
+                celery_task_id=None,
+            )
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
@@ -5686,22 +5759,18 @@ class TaskDatabase:
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
-    def list_purged_disposal_claims(
-        self, *, limit: int = 500
-    ) -> list[tuple[dict[str, Any], int | None]]:
+    def list_purged_disposal_claims(self, *, limit: int = 500) -> list[dict[str, Any]]:
         """Tasks still in a disposal claim whose purge already completed.
 
-        A crash between ``complete_data_purge`` and ``complete_task_cleanup``
-        leaves exactly this pair: the bytes are gone and the charge was released,
-        and only the status write is missing.  The join reads the claim and its
-        lifecycle as one fact instead of scanning Tasks and looking each up.
-
-        Each entry also carries the deletion request's ``requested_by_user_id``,
-        which is the only record of whether a user or automatic retention asked:
-        a user or Admin request names the actor, retention requests ``None``.
+        A crash between ``complete_data_purge`` and the Task settlement leaves
+        exactly this pair: the bytes are gone and the charge was released, and
+        only the status write is missing.  The join keeps the claim and its
+        lifecycle row one fact instead of scanning Tasks and looking each up;
+        the lane is decided later from the committed request, in the settlement
+        itself.
         """
         stmt = (
-            select(self.tasks_table, self.data_lifecycle_table.c.requested_by_user_id)
+            select(self.tasks_table)
             .select_from(
                 self.tasks_table.join(
                     self.data_lifecycle_table,
@@ -5718,12 +5787,7 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             rows = conn.execute(stmt).mappings().all()
         return [
-            (
-                self._normalize_task_row(
-                    {name: row[name] for name in self.tasks_table.c.keys()}
-                ),
-                row["requested_by_user_id"],
-            )
+            self._normalize_task_row({name: row[name] for name in self.tasks_table.c.keys()})
             for row in rows
         ]
 

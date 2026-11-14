@@ -376,3 +376,145 @@ def test_a_user_delete_of_a_cancelled_task_dates_the_completion(tmp_path):
     assert settled["finished_at"] == 1_300.0
     assert settled["error"] == "Task deleted by user"
     assert _releases(database, user_id) == [GIB]
+
+
+def test_retention_decides_the_lane_from_the_committed_actor(monkeypatch, tmp_path):
+    """A stale actor snapshot cannot make retention relabel a user's deletion."""
+    database = _database(tmp_path)
+    task_id = "b2" + "0" * 30
+    user_id = 51
+    _own_task(database, task_id, user_id=user_id, status=task_state.DELETING_FINISHED)
+    _charge(database, task_id, user_id=user_id)
+    task = database.get_task(task_id)
+    resource_lifecycle.request_data_deletion(database, task, actor_user_id=None, at=1_100.0)
+    assert resource_lifecycle.purge_task_data(
+        database, task, remove_artifacts=lambda _task: None, at=1_200.0
+    )
+    stale = database.get_data_lifecycle(task_id)
+    assert (stale["state"], stale["requested_by_user_id"]) == (
+        DataLifecycleState.PURGED.value,
+        None,
+    )
+
+    original_get = database.get_data_lifecycle
+    committed = False
+
+    def observe_then_commit(observed_task_id):
+        nonlocal committed
+        if not committed:
+            committed = True
+            # B's user DELETE commits while the lifecycle stays PURGED.
+            database.claim_data_deletion(
+                task_id, user_id=user_id, actor_user_id=user_id, at=1_250.0
+            )
+        return stale
+
+    monkeypatch.setattr(database, "get_data_lifecycle", observe_then_commit)
+    monkeypatch.setattr(
+        cleanup,
+        "delete_task_artifacts",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("a completed purge must not remove artifacts again")
+        ),
+    )
+
+    cleaned = cleanup.cleanup_expired_task_artifacts(
+        30, task_store=database, results_folder=str(tmp_path / "results"), now=1_300.0
+    )
+
+    assert cleaned == 1
+    record = original_get(task_id)
+    assert (record["state"], record["requested_by_user_id"]) == (
+        DataLifecycleState.PURGED.value,
+        user_id,
+    )
+    settled = database.get_task(task_id)
+    assert (settled["status"], settled["error"]) == (
+        task_state.DELETED_FINISHED,
+        "Task deleted by user",
+    )
+    assert _releases(database, user_id) == [GIB]
+
+
+def test_maintenance_decides_the_lane_from_the_committed_actor(monkeypatch, tmp_path):
+    """A stale maintenance list cannot make it relabel a user's deletion."""
+    database = _database(tmp_path)
+    task_id = "b3" + "0" * 30
+    user_id = 52
+    _own_task(database, task_id, user_id=user_id, status=task_state.DELETING_FINISHED)
+    _charge(database, task_id, user_id=user_id)
+    task = database.get_task(task_id)
+    resource_lifecycle.request_data_deletion(database, task, actor_user_id=None, at=1_100.0)
+    assert resource_lifecycle.purge_task_data(
+        database, task, remove_artifacts=lambda _task: None, at=1_200.0
+    )
+    stale = database.list_purged_disposal_claims()
+    assert len(stale) == 1
+
+    def observe_then_commit(*, limit=500):
+        # B's user DELETE commits after the lister observed the purge.
+        database.claim_data_deletion(
+            task_id, user_id=user_id, actor_user_id=user_id, at=1_250.0
+        )
+        return stale
+
+    monkeypatch.setattr(database, "list_purged_disposal_claims", observe_then_commit)
+
+    assert resource_lifecycle.settle_purged_claims(database, at=1_300.0) == 1
+
+    record = database.get_data_lifecycle(task_id)
+    assert record["requested_by_user_id"] == user_id
+    settled = database.get_task(task_id)
+    assert (settled["status"], settled["error"]) == (
+        task_state.DELETED_FINISHED,
+        "Task deleted by user",
+    )
+    assert _releases(database, user_id) == [GIB]
+
+
+def test_a_non_purged_lifecycle_refuses_settlement(tmp_path):
+    """The authority requires a committed PURGED lifecycle, not just a claim."""
+    database = _database(tmp_path)
+    task_id = "b4" + "0" * 30
+    user_id = 53
+    _own_task(database, task_id, user_id=user_id, status=task_state.DELETING_FINISHED)
+    _charge(database, task_id, user_id=user_id)
+    task = database.get_task(task_id)
+    resource_lifecycle.request_data_deletion(database, task, actor_user_id=user_id, at=1_100.0)
+
+    assert database.settle_disposal_claim(
+        task_id, claim_status=task_state.DELETING_FINISHED, at=1_200.0
+    ) is False
+    assert database.get_task(task_id)["status"] == task_state.DELETING_FINISHED
+    assert database.get_data_lifecycle(task_id)["state"] == DataLifecycleState.DELETE_REQUESTED.value
+    assert _releases(database, user_id) == []
+
+
+def test_a_retention_settlement_is_final_for_a_later_user_delete(tmp_path):
+    """Once settled in the cleaned lane, a later user DELETE cannot flip it."""
+    database = _database(tmp_path)
+    task_id = "b5" + "0" * 30
+    user_id = 54
+    _own_task(database, task_id, user_id=user_id, status=task_state.DELETING_FINISHED)
+    _charge(database, task_id, user_id=user_id)
+    task = database.get_task(task_id)
+    resource_lifecycle.request_data_deletion(database, task, actor_user_id=None, at=1_100.0)
+    assert resource_lifecycle.purge_task_data(
+        database, task, remove_artifacts=lambda _task: None, at=1_200.0
+    )
+
+    assert database.settle_disposal_claim(
+        task_id, claim_status=task_state.DELETING_FINISHED, at=1_300.0
+    )
+    assert database.get_task(task_id)["status"] == task_state.CLEANED_FINISHED
+
+    # A user DELETE arriving after disposal records provenance but cannot
+    # settle the Task a second time.
+    resource_lifecycle.request_data_deletion(database, task, actor_user_id=user_id, at=1_400.0)
+    assert database.settle_disposal_claim(
+        task_id, claim_status=task_state.DELETING_FINISHED, at=1_500.0
+    ) is False
+
+    settled = database.get_task(task_id)
+    assert (settled["status"], settled["error"]) == (task_state.CLEANED_FINISHED, None)
+    assert _releases(database, user_id) == [GIB]

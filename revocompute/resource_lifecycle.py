@@ -172,48 +172,6 @@ def ensure_task_purged(
     return purge_task_data(task_store, task, remove_artifacts=remove_artifacts, at=at)
 
 
-def settle_disposal_claim(
-    task_store: TaskDatabase,
-    task: dict[str, Any],
-    *,
-    claim_status: str,
-    requested_by_user_id: int | None,
-    at: float,
-) -> bool:
-    """Complete one disposal claim in the lane its recorded request names.
-
-    A user or Admin request settles to ``deleted:*`` with the audit fields the
-    delete route writes; an automatic retention request names no actor and
-    settles to ``cleaned:*``.  The claim row is the compare-and-set, so a
-    concurrent finisher of the same claim simply loses.
-
-    ``finished_at`` is stamped when the Task has none, or when a user-owned
-    deletion of a cancelled Task needs the completion time the delete route
-    writes.  Retention leaves a present ``finished_at`` alone, so it never
-    overwrites the Task's real cancellation time.
-    """
-    user_requested = requested_by_user_id is not None
-    fields: dict[str, Any] = {}
-    if not task.get("finished_at") or (
-        claim_status == task_state.DELETING_CANCELLED and user_requested
-    ):
-        fields["finished_at"] = at
-    if user_requested:
-        fields["error"] = "Task deleted by user"
-        if task.get("walltime") is None and task.get("started_at"):
-            fields["walltime"] = at - float(task["started_at"])
-    return task_store.complete_task_cleanup(
-        task["md5sum"],
-        claim_status=claim_status,
-        cleaned_status=(
-            task_state.cleanup_termination(claim_status)
-            if user_requested
-            else task_state.cleanup_completion(claim_status)
-        ),
-        **fields,
-    )
-
-
 def settle_purged_claims(
     task_store: TaskDatabase,
     *,
@@ -228,12 +186,10 @@ def settle_purged_claims(
     """
     timestamp = time.time() if at is None else at
     settled = 0
-    for task, requested_by_user_id in task_store.list_purged_disposal_claims(limit=limit):
-        if settle_disposal_claim(
-            task_store,
-            task,
+    for task in task_store.list_purged_disposal_claims(limit=limit):
+        if task_store.settle_disposal_claim(
+            task["md5sum"],
             claim_status=task_state.normalize(task.get("status")),
-            requested_by_user_id=requested_by_user_id,
             at=timestamp,
         ):
             settled += 1

@@ -187,12 +187,9 @@ def cleanup_expired_task_artifacts(
             # The lifecycle row records the failure and keeps the charge, so the
             # next pass retries it; the claim stays in place meanwhile.
             continue
-        record = task_store.get_data_lifecycle(task["md5sum"]) or {}
-        if not resource_lifecycle.settle_disposal_claim(
-            task_store,
-            task,
+        if not task_store.settle_disposal_claim(
+            task["md5sum"],
             claim_status=claim_status,
-            requested_by_user_id=record.get("requested_by_user_id"),
             at=timestamp,
         ):
             logging.warning("Cleanup claim changed before completion for task %s", task["md5sum"])
