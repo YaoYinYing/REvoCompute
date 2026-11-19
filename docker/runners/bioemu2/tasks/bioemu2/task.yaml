@@ -62,8 +62,8 @@ input_workspace:
   steps:
   - id: material
     title: Provide the molecular system
-    description: Upload a BioEmu2 System YAML or build one with JAAG. Propagation
-      also needs the starting mmCIF structure.
+    description: Upload a BioEmu2 System YAML or build one with the BioNuTA workbench.
+      Propagation also needs the starting mmCIF structure.
     capabilities:
     - plugin: files
       id: source_files

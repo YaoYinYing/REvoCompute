@@ -32,6 +32,8 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
+from revocompute.input_builders import MAX_STATE_BYTES
+
 #: How long a clone-plan reference stays resolvable. A draft is opened
 #: immediately after the button click; the window only needs to cover that hop.
 DEFAULT_TTL_SECONDS = 900
@@ -185,7 +187,7 @@ def recorded_authoring(source: dict[str, Any], capability_id: str) -> dict[str, 
         encoded = json.dumps(value.get("state"), separators=(",", ":"), ensure_ascii=True)
     except (TypeError, ValueError):
         return None
-    if len(encoded.encode("utf-8")) > 1_048_576:
+    if len(encoded.encode("utf-8")) > MAX_STATE_BYTES:
         return None
     return value
 

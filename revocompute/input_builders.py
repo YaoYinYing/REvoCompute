@@ -23,9 +23,11 @@ from typing import Any, Mapping
 
 #: The one envelope version this deployment understands.
 ENVELOPE_VERSION = 1
-#: Bound on one capability's opaque authoring state.  A native document larger
-#: than this is rejected explicitly instead of bloating the Task row.
-MAX_STATE_BYTES = 1_048_576
+#: Bound on one capability's opaque authoring state.  The whole workspace
+#: document is itself capped at 1 MiB, so this leaves room for the envelope and
+#: other capabilities; it is deliberately reachable rather than shadowed by the
+#: enclosing request limit.
+MAX_STATE_BYTES = 512 * 1024
 #: Bounded dependency metadata; unresolved bytes are never persisted here.
 MAX_DEPENDENCIES = 256
 #: The only logical output a current provider exposes.
@@ -156,10 +158,6 @@ SHARED_BUILDERS: dict[str, BuilderDescriptor] = {
 }
 
 
-def shared_builder(identifier: str) -> BuilderDescriptor | None:
-    return SHARED_BUILDERS.get(identifier)
-
-
 def resolve_builder(identifier: str, *, owner: str | None, manager: Any | None) -> BuilderDescriptor | None:
     """Resolve a shared builder first, then the runner's own contribution."""
 
@@ -228,7 +226,7 @@ def _bounded_state(value: Any) -> dict[str, Any]:
     if len(encoded.encode("utf-8")) > MAX_STATE_BYTES:
         raise BuilderValidationError(
             "builder_state_too_large",
-            "The builder's native state exceeds the 1 MiB authoring limit; upload the generated file instead.",
+            "The builder's native state exceeds the 512 KiB authoring limit; upload the generated file instead.",
         )
     return value
 
@@ -237,6 +235,8 @@ def validate_envelope(
     capability: Any,
     value: Any,
     saved_inputs: list[dict[str, Any]],
+    *,
+    builder: BuilderDescriptor,
 ) -> None:
     """Check one submitted builder envelope against the accepted input bytes.
 
@@ -283,6 +283,16 @@ def validate_envelope(
     for field in ("builder_version", "state_schema_version", "revision"):
         if not isinstance(value.get(field), int) or isinstance(value.get(field), bool) or value[field] < 0:
             raise BuilderValidationError("builder_envelope_invalid", f"Builder state {field} is invalid.")
+    if (
+        value["builder_version"] != builder.builder_version
+        or value["state_schema_version"] != builder.state_schema_version
+    ):
+        # The deployment persists authoring state against the versions it can
+        # actually restore; a stale editor must not record a schema it does not run.
+        raise BuilderValidationError(
+            "builder_version_mismatch",
+            "The builder's version or state schema does not match the registered builder.",
+        )
     state = _bounded_state(value.get("state"))
 
     dependencies = value.get("dependencies")
@@ -362,10 +372,6 @@ def validate_envelope(
             raise BuilderValidationError(
                 "builder_output_unbound", "A builder-owned role contains an unbound file."
             )
-    if not state:
-        # An empty object is a valid native state for providers whose document
-        # is the bound output itself, so only type/size matter here.
-        return
 
 
 def builder_payload(builder: BuilderDescriptor, *, available: bool) -> dict[str, Any]:

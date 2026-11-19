@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { inputBuilder } from '../src/features/create-task/input-workspace/input-builder';
-import { builderAdapters, sha256Hex } from '../src/features/create-task/input-workspace/builders';
+import { BuilderUnavailableError, builderAdapters, sha256Hex } from '../src/features/create-task/input-workspace/builders';
 import type { WorkspaceContext, WorkspacePluginInstance } from '../src/features/create-task/input-workspace/plugin-contract';
 import type { TaskFormDefinition, WorkspaceBuilder } from '../src/features/create-task/types';
 import { HarnessNode, installHarness } from './dom-harness';
@@ -211,5 +211,114 @@ describe('generic Input Builder capability', () => {
     ) as WorkspacePluginInstance;
     expect(instance.readValue!()).toBeUndefined();
     expect(findByText(target, 'This builder is unavailable in this deployment; upload a prepared file instead.')).toBeTruthy();
+  });
+
+  it('lets a plain upload proceed after a clone restore could not mount the builder', async () => {
+    installHarness(vi.stubGlobal);
+    builderAdapters.synthetic = { async mount() { throw new BuilderUnavailableError('builder is offline'); } };
+    const { instance, files } = mountPlugin();
+    await instance.restoreAuthoring!({
+      capability_id: 'builder', builder: 'synthetic', target: 'af3', builder_version: 3, state_schema_version: 1,
+      revision: 1, outputs: [], dependencies: [], state_available: true, compatible: true, reason: null,
+    }, { native: 'recorded' });
+    expect((instance.validate!() as string[]).join(' ')).toContain('could not be restored');
+
+    const upload = new File(['{"prepared":true}'], 'prepared.json', { type: 'application/json' });
+    files.set('specification', [upload]);
+    instance.refresh!();
+    expect(files.get('specification')).toEqual([upload]);
+    expect(instance.validate!()).toEqual([]);
+  });
+
+  it('refuses a capture that finishes after an editor change', async () => {
+    installHarness(vi.stubGlobal);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let listener: (() => void) | null = null;
+    let materializeCalls = 0;
+    builderAdapters.synthetic = {
+      async mount() {
+        return {
+          async materialize() {
+            materializeCalls += 1;
+            await gate;
+            const bytes = new TextEncoder().encode('late');
+            return {
+              snapshot: { native: true }, revision: 1,
+              output: { role: 'input' as const, name: 'late.json', mime: 'application/json', bytes, sha256: await sha256Hex(bytes) },
+              dependencies: [], errors: [], warnings: [],
+            };
+          },
+          async restore() {},
+          subscribe(value: () => void) { listener = value; return () => { listener = null; }; },
+          destroy() { listener = null; },
+        };
+      },
+    };
+    const { instance, files, target } = mountPlugin();
+    findByText(target, 'Build input')!.dispatch('click', new Event('click'));
+    await tick();
+    findByText(target, 'Apply builder output')!.dispatch('click', new Event('click'));
+    await tick();
+    expect(materializeCalls).toBe(1);
+    expect(listener).not.toBeNull();
+
+    listener!();
+    release();
+    await waitFor(() => expect(String((instance.validate!() as string[]).join(' '))).toContain('Apply the builder output'));
+    expect(files.get('specification')).toBeUndefined();
+    expect(instance.readValue!()).toBeUndefined();
+  });
+
+  it('refuses dependency-bearing provider output in the generic host', async () => {
+    installHarness(vi.stubGlobal);
+    builderAdapters.synthetic = {
+      async mount() {
+        return {
+          async materialize() {
+            const bytes = new TextEncoder().encode('with-deps');
+            return {
+              snapshot: { native: true }, revision: 1,
+              output: { role: 'input' as const, name: 'deps.json', mime: 'application/json', bytes, sha256: await sha256Hex(bytes) },
+              dependencies: [{ id: 'msa', kind: 'msa', name: 'a.a3m', size: 1, sha256: '0'.repeat(64) }],
+              errors: [], warnings: [],
+            };
+          },
+          async restore() {},
+          subscribe() { return () => undefined; },
+          destroy() {},
+        };
+      },
+    };
+    const { instance, files, target } = mountPlugin();
+    findByText(target, 'Build input')!.dispatch('click', new Event('click'));
+    await tick();
+    findByText(target, 'Apply builder output')!.dispatch('click', new Event('click'));
+    await waitFor(() => expect(String((instance.validate!() as string[]).join(' '))).toContain('Apply the builder output'));
+    expect(files.get('specification')).toBeUndefined();
+  });
+
+  it('does not install a mount that finishes after switching to Upload', async () => {
+    installHarness(vi.stubGlobal);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let destroyed = false;
+    builderAdapters.synthetic = {
+      async mount() {
+        await gate;
+        return {
+          async materialize() { throw new Error('unused'); },
+          async restore() {},
+          subscribe() { return () => undefined; },
+          destroy() { destroyed = true; },
+        };
+      },
+    };
+    const { target } = mountPlugin();
+    findByText(target, 'Build input')!.dispatch('click', new Event('click'));
+    await tick();
+    findByText(target, 'Upload file')!.dispatch('click', new Event('click'));
+    release();
+    await waitFor(() => expect(destroyed).toBe(true));
   });
 });

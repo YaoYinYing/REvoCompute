@@ -10,6 +10,8 @@
  * decides which Task input role a result belongs to, and never submits.
  */
 
+import { t } from '../../../app/i18n';
+
 export interface BuilderOutput {
   role: 'input';
   name: string;
@@ -131,10 +133,7 @@ class BioNuTAAdapter implements BuilderAdapterInstance {
     // dependency bytes, so a dependency-bearing build is refused explicitly
     // instead of silently submitting a different system.
     if ((await this.builder.listDependencies()).length) {
-      throw new BuilderDependencyUnsupported(
-        'This input references supporting files, which no input role in this Task can stage. '
-        + 'Export the generated file and upload it with its dependencies instead.',
-      );
+      throw new BuilderDependencyUnsupported(t('ct.builder.dependencies'));
     }
     const result = await this.builder.materialize();
     if (result.diagnostics.errors.length) {

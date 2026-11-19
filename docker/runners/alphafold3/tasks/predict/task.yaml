@@ -92,8 +92,8 @@ input_workspace:
   steps:
   - id: material
     title: Provide the molecular system
-    description: Upload an AlphaFold 3 JSON input document. Need to prepare one? Create
-      it with JAAG ↗ https://jaag.bio-tools.yaoyy.moe/
+    description: Upload an AlphaFold 3 JSON input document, or build it with the
+      BioNuTA workbench.
     capabilities:
     - plugin: files
       id: source_files

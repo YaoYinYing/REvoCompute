@@ -114,8 +114,8 @@ Task's `input_form.workspace`:
 ```
 
 `revision` is the mounted editor's monotonic edit counter. It is metadata, not
-Task identity. The native `state` is bounded to 1 MiB; larger documents are
-rejected explicitly.
+Task identity. The native `state` is bounded to 512 KiB (the enclosing workspace
+document is capped at 1 MiB); larger states are rejected explicitly.
 
 ### Submission verification
 
@@ -211,6 +211,8 @@ atomworks-studio --host 127.0.0.1 --port 8000
 
 Configure `REVOCOMPUTE_ATOMWORKS_STUDIO_URL=http://127.0.0.1:8000`. Absent or
 empty disables the builder; the RFD4 task keeps its YAML/JSON + scaffold path.
+The shared guest account also sees it as unavailable: guests share one identity,
+so per-user session ownership cannot separate them.
 
 The server exposes a small owner-scoped gateway, not a blanket reverse proxy:
 
@@ -220,6 +222,8 @@ The server exposes a small owner-scoped gateway, not a blanket reverse proxy:
 - a session ID owned by another user is answered exactly like a missing one and
   is never forwarded upstream;
 - client cookies, authorization and forwarding headers are not sent to Studio;
+- `/compute/atomworks/api/...` is refused: API traffic enters only through the
+  owner-scoped `/api/...` gateway, never through the asset route;
 - the editor shell and its assets are served under `/compute/atomworks/` so the
   editor's absolute `/api/...` calls stay on this origin and pass the ownership
   gate.
@@ -238,7 +242,8 @@ scaffold; the existing YAML/JSON + scaffold path is unchanged.
 ## Limits
 
 - Builder dependencies are refused in this delivery, not silently dropped.
-- Opaque authoring state is capped at 1 MiB per capability.
+- Opaque authoring state is capped at 512 KiB per capability, below the 1 MiB
+  workspace document limit.
 - Task identity is derived from the accepted bytes and typed parameters, not
   from editor state. Submitting the same bytes returns the existing Task and
   never overwrites its authoring record; a different authoring state that

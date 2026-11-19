@@ -421,7 +421,8 @@ export class CreateTask {
     // silently.
     this.cloneConflicts().forEach(conflict => errors.push(t('ct.clone.unresolved', { field: conflict.label })));
     if (this.cloneRestoring) errors.push(t('ct.clone.restoring'));
-    if (this.cloneAuthoringError) errors.push(this.cloneAuthoringError);
+    // A builder that could not be restored is a status, not a form error: the
+    // reader can switch to Upload and supply the same role by hand.
     const access = this.definition.access;
     if (access.restricted && !access.granted) errors.push(access.request_status === 'pending' ? t('ct.access.pending') : t('ct.access.required'));
     const preflight = this.preflight;
@@ -507,6 +508,7 @@ export class CreateTask {
   private async restoreCloneAuthoring(plan: ClonePlan): Promise<void> {
     const entries = plan.authoring.filter(entry => entry.compatible && entry.state_available);
     if (!entries.length) return;
+    const generation = this.generation;
     this.cloneRestoring = true;
     this.cloneAuthoringError = null;
     this.refreshValidation();
@@ -514,15 +516,18 @@ export class CreateTask {
     try {
       await this.workspace.restoreAuthoring(plan.plan_id, entries);
     } catch (error) {
+      if (generation !== this.generation) return;
       this.cloneAuthoringError = t('ct.clone.authoringFailed', {
         message: error instanceof Error ? error.message : String(error),
       });
-    } finally {
-      this.cloneRestoring = false;
-      this.refreshValidation();
-      this.setStatus(this.cloneAuthoringError ?? t('ct.clone.authoringRestored'), this.cloneAuthoringError ? 'error' : 'ok');
-      if (!this.cloneAuthoringError) this.renderClone();
     }
+    // A later task selection owns the draft now; an old restore must not
+    // re-set its status or block its validation.
+    if (generation !== this.generation) return;
+    this.cloneRestoring = false;
+    this.refreshValidation();
+    this.setStatus(this.cloneAuthoringError ?? t('ct.clone.authoringRestored'), this.cloneAuthoringError ? 'error' : 'ok');
+    if (!this.cloneAuthoringError) this.renderClone();
   }
 
   /** The blocked parameters the reader has not resolved yet, in form order. */

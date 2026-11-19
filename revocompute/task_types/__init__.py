@@ -873,9 +873,6 @@ _INPUT_CAPABILITY_PLUGINS = {
     "regions",
     "parameters",
     "review",
-    # Frontend builtin: a pinned third-party serializer that binds generated
-    # content to a declared input role. The Server still owns role validation.
-    "jaag-builder",
     # Generic adapter host for a registered Input Builder (BioNuTA, AtomWorks
     # Studio, ...). The builder and its logical-output mapping are declarative.
     "input-builder",
@@ -887,7 +884,6 @@ _INPUT_CAPABILITY_OPTION_KEYS = {
     "regions": {"source", "fields", "syntax", "modes"},
     "parameters": set(),
     "review": {"show_paths"},
-    "jaag-builder": {"role", "target"},
     "input-builder": {"builder", "target", "outputs", "exclusive"},
 }
 
@@ -1074,15 +1070,6 @@ def input_builder_descriptor(identifier: str, *, owner: str | None = None):
     from revocompute.input_builders import resolve_builder
 
     return resolve_builder(identifier, owner=owner, manager=_active().plugin_manager)
-
-
-def input_builders_for(owner: str | None) -> tuple[BuilderDescriptor, ...]:
-    """Every builder a Task owned by ``owner`` may name, in stable ID order."""
-    manager = _active().plugin_manager
-    builders = dict(SHARED_BUILDERS)
-    if manager is not None:
-        builders.update({item.id: item for item in manager.input_builders() if item.owner == owner})
-    return tuple(builders[key] for key in sorted(builders))
 
 
 def workspace_backend(identifier: str, *, owner: str | None = None):

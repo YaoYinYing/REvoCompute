@@ -18,7 +18,7 @@ from typing import Any, Callable, Iterable, Mapping
 import importlib.util
 import yaml
 
-from revocompute.input_builders import BuilderDescriptor
+from revocompute.input_builders import SHARED_BUILDERS, BuilderDescriptor
 
 
 def _identifier(value: Any, field_name: str) -> str:
@@ -81,6 +81,11 @@ class PluginManifest:
                     normalized.append(identifier)
                 elif kind == "input_builders" and isinstance(value, Mapping):
                     identifier = _identifier(value.get("id"), f"contribution {kind}")
+                    if identifier in SHARED_BUILDERS:
+                        # Shared builders are deployment-owned. A bare name must
+                        # resolve to exactly one descriptor everywhere, so a
+                        # runner may add a scoped builder but never shadow one.
+                        raise ValueError(f"Input builder {identifier!r} is deployment-owned and cannot be contributed")
                     input_builders[identifier] = BuilderDescriptor.from_contribution(
                         identifier, value, owner=runner or plugin_id
                     )

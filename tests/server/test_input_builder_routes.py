@@ -107,8 +107,39 @@ def test_atomworks_gateway_scopes_sessions_to_their_owner(monkeypatch, tmp_path)
     assert cross_site.status_code == 403
     assert calls == before
 
+    # The editor's HTTP surface has one entrance. The static-asset route must
+    # never become a second, unowned path to a session document.
+    before = list(calls)
+    assert client.get(f"/compute/atomworks/api/sessions/{sid}", headers=second).status_code == 404
+    assert client.get(f"/compute/atomworks/api/sessions/{sid}", headers=first).status_code == 404
+    assert client.get("/compute/atomworks/api/health", headers=first).status_code == 404
+    assert calls == before
+
     assert client.delete(f"/api/sessions/{sid}", headers=first).status_code == 204
     assert client.get(f"/api/sessions/{sid}", headers=first).status_code == 404
+
+
+def test_atomworks_gateway_refuses_the_shared_guest_account(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path, extra_env={"REVOCOMPUTE_ATOMWORKS_STUDIO_URL": "http://studio.test", "RUNNER_UID": "1234", "RUNNER_GID": "5678"}
+    )
+    db = module.app.config["user_db"]
+    guest = db.create_user(
+        username="visitor", email="visitor" + "@test.local", password="password", role="guest",
+        user_status="active", registration_status="approved",
+    )
+    db.verify_email(guest["id"])
+    from revocompute.auth import generate_token
+
+    headers = {"Authorization": f"Bearer {generate_token(guest['id'])}"}
+    client = module.app.test_client()
+    called: list[tuple[str, str]] = []
+    monkeypatch.setattr(atomworks, "forward", lambda *args, **kwargs: called.append(args) or (200, "text/plain", b"", {}))
+    # Guests share one account, so a session binding cannot separate them.
+    assert client.post("/api/sessions", headers=headers, data={}).status_code == 403
+    assert client.get("/api/health", headers=headers).status_code == 403
+    assert client.get("/compute/atomworks/", headers=headers).status_code == 403
+    assert called == []
 
 
 def test_atomworks_gateway_is_absent_without_a_configured_service(monkeypatch, tmp_path):

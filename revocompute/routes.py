@@ -862,8 +862,14 @@ def atomworks_editor(asset: str = ""):
     base = _atomworks_base()
     if not base:
         abort(404)
+    if blocked := _reject_guest():
+        return blocked
     requested = str(asset or "").replace("\\", "/").strip("/")
     if requested and any(part in {"", ".", ".."} for part in requested.split("/")):
+        abort(404)
+    if requested == "api" or requested.startswith("api/"):
+        # The editor's HTTP surface has exactly one entrance, the owner-scoped
+        # `/api/<path>` gateway.  Forwarding it here would bypass that gate.
         abort(404)
     if not requested:
         session_id = str(request.args.get("session") or "")
@@ -895,6 +901,8 @@ def atomworks_api(path: str):
     base = _atomworks_base()
     if not base:
         abort(404)
+    if blocked := _reject_guest():
+        return blocked
     upstream_path = "/api/" + str(path or "")
     if not atomworks.route_allowed(request.method, upstream_path):
         abort(404)
@@ -931,7 +939,7 @@ def atomworks_api(path: str):
         )
     except atomworks.AtomWorksProxyError as exc:
         return Response(exc.message, status=exc.status, content_type="text/plain")
-    if request.method == "POST" and upstream_path == "/api/sessions" and result[0] == 200:
+    if request.method == "POST" and upstream_path == "/api/sessions" and 200 <= result[0] < 300:
         try:
             payload = json.loads(result[2]) if result[2] else {}
         except (TypeError, ValueError):
@@ -1522,6 +1530,11 @@ def _input_builder_available(builder) -> bool:
                          builder.adapter_path.removeprefix("/compute/bionuta/"))
         )
     if builder.adapter == "atomworks":
+        # Guests share one account, so a per-user session binding cannot keep
+        # two anonymous visitors apart.  The builder stays off for them rather
+        # than presenting an editor the gateway will refuse.
+        if g.get("current_user", {}).get("role") == "guest":
+            return False
         return bool(getattr(CONFIG, "atomworks_studio_url", ""))
     return False
 
@@ -3390,7 +3403,15 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             if capability is None:
                 continue
             try:
-                input_builders.validate_envelope(capability, builder_value, saved_inputs)
+                builder = input_builder_descriptor(
+                    str(capability.options.get("builder") or ""), owner=tt.runtime.name
+                )
+                if builder is None:
+                    raise input_builders.BuilderValidationError(
+                        "builder_binding_invalid",
+                        "This capability's input builder is not registered in this deployment.",
+                    )
+                input_builders.validate_envelope(capability, builder_value, saved_inputs, builder=builder)
             except input_builders.BuilderValidationError as exc:
                 return (
                     jsonify(

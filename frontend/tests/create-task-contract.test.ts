@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getTaskDefinition, parseWorkspaceDescriptor } from '../src/features/create-task/api';
+import { getTaskDefinition, parseWorkspace, parseWorkspaceDescriptor } from '../src/features/create-task/api';
 import { parametersFromSchema, seedConstant } from '../src/features/create-task/parameter-controls';
 import { InputWorkspace, selectableExecutionModes } from '../src/features/create-task/input-workspace/InputWorkspace';
 import { HarnessNode, installHarness } from './dom-harness';
@@ -39,6 +39,23 @@ describe('Create Task server contracts', () => {
       descriptor_url: '/compute/api/workspace/plugins/runner/regions',
       module: { url: 'https://evil.example/index.js', type: 'module' }, stylesheets: [],
     })).toThrow(/same-origin/);
+  });
+
+  it('keeps the projected builders when parsing the workspace payload', () => {
+    const workspace = parseWorkspace({
+      version: 3, plugins: [], steps: [],
+      builders: [{
+        id: 'bionuta', owner: null, api_version: 1, builder_version: 2, state_schema_version: 1,
+        targets: { alphafold3: 'json' }, adapter: 'bionuta', available: true,
+        editor_path: '/compute/bionuta/index.html', adapter_path: '/compute/bionuta/integration/input-builder/index.mjs',
+      }],
+    });
+    expect(workspace.builders).toEqual([{
+      id: 'bionuta', owner: null, api_version: 1, builder_version: 2, state_schema_version: 1,
+      targets: { alphafold3: 'json' }, adapter: 'bionuta', available: true,
+      editor_path: '/compute/bionuta/index.html', adapter_path: '/compute/bionuta/integration/input-builder/index.mjs',
+    }]);
+    expect(() => parseWorkspace({ version: 3, plugins: [], steps: [], builders: 'nope' })).toThrow();
   });
 
   it('projects parameter type, bounds, enum, help, unit, default, and seed metadata', () => {

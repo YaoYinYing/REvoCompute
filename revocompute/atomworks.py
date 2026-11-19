@@ -17,7 +17,6 @@ import re
 import sqlite3
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
 
 import requests
 
@@ -34,13 +33,6 @@ _PUBLIC_ROUTES = (
     re.compile(r"^/api/examples(?:/[A-Za-z0-9_-]+)?(?:/cif)?$"),
     re.compile(r"^/api/import/inspect$"),
 )
-
-
-@dataclass(frozen=True, slots=True)
-class SessionOwner:
-    session_id: str
-    user_id: int
-    expires_at: float
 
 
 class AtomWorksSessionStore:

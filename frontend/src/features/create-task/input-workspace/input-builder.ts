@@ -23,6 +23,7 @@ import type { WorkspaceBuilder } from '../types';
 import { t } from '../../../app/i18n';
 import { element } from './utils';
 import {
+  BuilderChangedDuringCapture,
   BuilderDependencyUnsupported,
   BuilderUnavailableError,
   builderAdapters,
@@ -32,6 +33,10 @@ import {
 } from './builders';
 
 type Mode = 'upload' | 'build';
+
+//: Kept below the 1 MiB workspace document cap so the explicit
+//: "state too large" diagnostic is reachable before the generic limit.
+const MAX_AUTHORING_STATE_BYTES = 512 * 1024;
 
 interface EnvelopeOutput {
   logical: 'input';
@@ -105,11 +110,11 @@ const inputBuilder: WorkspacePlugin = {
     let pending = false;
     let destroyed = false;
     let restoreError: string | null = null;
-    let restoreChanged = false;
     let lastWarnings: string[] = [];
+    let changeToken = 0;
 
     const available = Boolean(builder?.available);
-    const canBuild = Boolean(builder && roleExists && available && builderId in builderAdapters);
+    const canBuild = Boolean(builder && roleExists && available && builder.adapter in builderAdapters);
 
     const ownsRole = (): boolean => {
       const files = context.roleFiles(role);
@@ -165,15 +170,17 @@ const inputBuilder: WorkspacePlugin = {
     };
 
     const invalidate = (): void => {
-      // An edit makes the applied bytes stale immediately.  Only the builder's
-      // own bound file is removed; an independent upload is never touched.
+      // An edit makes the applied bytes stale immediately, and any capture
+      // already in flight no longer describes the document the reader sees.
+      // Only the builder's own bound file is removed; an independent upload is
+      // never touched.
+      changeToken += 1;
       if (ownsRole()) {
         clearOwnOutput(false);
         generated = null;
         envelope = null;
       }
       status.textContent = t('ct.builder.changed');
-      restoreChanged = false;
       renderMode();
       context.changed();
     };
@@ -182,6 +189,7 @@ const inputBuilder: WorkspacePlugin = {
       if (!canBuild || !builder) return null;
       if (adapter) return adapter;
       if (opening) return opening;
+      const current = epoch;
       opening = (async () => {
         const factory = builderAdapters[builder.adapter];
         if (!factory) throw new BuilderUnavailableError(t('ct.builder.unavailable'));
@@ -191,7 +199,9 @@ const inputBuilder: WorkspacePlugin = {
           editorPath: builder.editor_path,
           adapterPath: builder.adapter_path,
         });
-        if (destroyed) { mounted.destroy(); return null; }
+        // Switching back to Upload detaches the host while the mount may still
+        // be running; that mount must not install itself afterwards.
+        if (destroyed || current !== epoch) { mounted.destroy(); return null; }
         adapter = mounted;
         unsubscribe = mounted.subscribe(invalidate);
         status.textContent = t('ct.builder.ready');
@@ -206,24 +216,32 @@ const inputBuilder: WorkspacePlugin = {
 
     const bind = async (state: BuilderAdapterInstance, recorded: WorkspaceAuthoringEntry | null): Promise<void> => {
       const current = epoch;
+      const token = changeToken;
       const captured = await state.materialize();
-      // Core persists the native state with the Task and bounds it at 1 MiB.
-      // Refuse an oversized snapshot here, where the reader can still switch
-      // to Upload, instead of failing only at submission.
+      if (captured.dependencies.length) {
+        // No Task declares a role or staging layout for dependency bytes, so
+        // the host refuses them rather than letting an adapter drop them.
+        throw new BuilderDependencyUnsupported(t('ct.builder.dependencies'));
+      }
+      // Core persists the native state with the Task and bounds it; refuse an
+      // oversized snapshot here, where the reader can still switch to Upload,
+      // instead of failing only at submission.
       let stateBytes = 0;
       try {
         stateBytes = new TextEncoder().encode(JSON.stringify(captured.snapshot)).byteLength;
       } catch {
         throw new Error(t('ct.builder.stateUnavailable'));
       }
-      if (stateBytes > 1_048_576) throw new Error(t('ct.builder.stateTooLarge'));
+      if (stateBytes > MAX_AUTHORING_STATE_BYTES) throw new Error(t('ct.builder.stateTooLarge'));
       const digest = await sha256Hex(captured.output.bytes);
       if (!captured.output.sha256 || captured.output.sha256 !== digest) {
         throw new Error(t('ct.builder.digest'));
       }
-      // Recheck ownership after every await: another capability may have bound
-      // or removed the role while the provider was working.
+      // Recheck ownership and the edit counter after every await: another
+      // capability may have bound or removed the role while the provider was
+      // working, and an edit means these bytes no longer match the editor.
       if (destroyed || current !== epoch) throw new Error(t('ct.builder.stale'));
+      if (token !== changeToken) throw new BuilderChangedDuringCapture(t('ct.builder.stale'));
       const occupied = context.roleFiles(role).length > 0 && !ownsRole();
       if (occupied) throw new Error(t('ct.builder.occupied', { role }));
       if (!builder) throw new BuilderUnavailableError(t('ct.builder.unavailable'));
@@ -236,12 +254,10 @@ const inputBuilder: WorkspacePlugin = {
       context.setRoleFiles(role, [file]);
       lastWarnings = captured.warnings;
       restoreError = null;
-      restoreChanged = false;
       const recordedDigest = recorded?.outputs?.[0]?.sha256;
       if (recordedDigest && recordedDigest !== digest) {
         // A restore that re-materializes different bytes is a deliberate new
         // input, not the source's scientific document silently reused.
-        restoreChanged = true;
         status.textContent = t('ct.builder.restoreChanged', {
           before: recordedDigest.slice(0, 12), after: digest.slice(0, 12),
         });
@@ -278,6 +294,7 @@ const inputBuilder: WorkspacePlugin = {
     uploadMode.addEventListener('click', () => {
       if (mode === 'upload') return;
       mode = 'upload';
+      restoreError = null;
       clearOwnOutput();
       detachAdapter();
       status.textContent = t('ct.builder.uploadHelp');
@@ -295,7 +312,7 @@ const inputBuilder: WorkspacePlugin = {
     clear.addEventListener('click', () => {
       clearOwnOutput();
       setError(null);
-      restoreChanged = false;
+      restoreError = null;
       status.textContent = t('ct.builder.cleared');
       renderMode(); context.changed();
     });
@@ -323,10 +340,12 @@ const inputBuilder: WorkspacePlugin = {
       validate: () => {
         const errors: string[] = [];
         if (!roleExists) return [t('ct.builder.roleInvalid', { role })];
-        if (restoreError) errors.push(restoreError);
-        if (mode === 'build') {
-          if (canBuild && !envelope && !pending) errors.push(t('ct.builder.applyRequired'));
-          if (!canBuild) errors.push(t('ct.builder.unavailable'));
+        // A role already supplied by another capability or a plain upload is
+        // the documented fallback: this editor must not keep the form blocked.
+        // That includes a clone restore that could not mount its builder.
+        if (mode === 'build' && !context.roleFiles(role).length) {
+          if (restoreError) errors.push(restoreError);
+          if (canBuild && !envelope) errors.push(t('ct.builder.applyRequired'));
         }
         if (exclusive && context.roleFiles(role).length) {
           const extra = otherRoles.filter(item => context.roleFiles(item.id).length);

@@ -162,6 +162,7 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         "/compute/api/tasks": {"get"},
         "/compute/api/tasks/{task_id}/clone-plan": {"post"},
         "/compute/api/clone-plans/{plan_id}": {"get"},
+        "/compute/api/clone-plans/{plan_id}/authoring/{capability_id}": {"get"},
         "/compute/api/tasks/{task_id}/diagnostics": {"get"},
         "/compute/api/tasks/{task_id}/diagnostics/{stream}": {"get"},
         "/compute/api/running/{task_id}": {"get"},

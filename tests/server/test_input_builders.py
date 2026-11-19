@@ -117,7 +117,7 @@ def test_capability_binding_rejects_a_role_that_cannot_hold_the_target_format():
 
 
 def test_envelope_binds_exactly_the_accepted_bytes():
-    validate_envelope(_capability(), _envelope(), _saved())
+    validate_envelope(_capability(), _envelope(), _saved(), builder=BIONUTA)
 
 
 @pytest.mark.parametrize(
@@ -140,8 +140,14 @@ def test_envelope_binds_exactly_the_accepted_bytes():
 )
 def test_envelope_rejects_a_stale_or_foreign_binding(value, saved, code):
     with pytest.raises(BuilderValidationError) as error:
-        validate_envelope(_capability(), value, saved)
+        validate_envelope(_capability(), value, saved, builder=BIONUTA)
     assert error.value.code == code
+
+
+def test_envelope_rejects_a_stale_builder_version():
+    with pytest.raises(BuilderValidationError) as error:
+        validate_envelope(_capability(), _envelope(builder_version=3), _saved(), builder=BIONUTA)
+    assert error.value.code == "builder_version_mismatch"
 
 
 def test_envelope_rejects_an_extra_file_in_a_builder_owned_role():
@@ -150,13 +156,14 @@ def test_envelope_rejects_an_extra_file_in_a_builder_owned_role():
             _capability(),
             _envelope(),
             _saved() + [{"role": "specification", "original_name": "extra.json", "size": 1, "hash": DIGEST}],
+            builder=BIONUTA,
         )
 
 
 def test_envelope_bounds_the_opaque_state():
     oversized = {"blob": "x" * (MAX_STATE_BYTES + 1)}
     with pytest.raises(BuilderValidationError) as error:
-        validate_envelope(_capability(), _envelope(state=oversized), _saved())
+        validate_envelope(_capability(), _envelope(state=oversized), _saved(), builder=BIONUTA)
     assert error.value.code == "builder_state_too_large"
 
 
@@ -166,21 +173,32 @@ def test_exclusive_builder_refuses_any_other_accepted_file():
             _capability(exclusive=True),
             _envelope(),
             _saved() + [{"role": "scaffold", "original_name": "s.cif", "size": 1, "hash": DIGEST}],
+            builder=BIONUTA,
         )
     assert error.value.code == "builder_exclusive_input"
+
+
+def test_runner_cannot_shadow_a_deployment_owned_builder():
+    from revocompute.plugins import PluginManifest
+
+    with pytest.raises(ValueError, match="deployment-owned"):
+        PluginManifest.from_mapping({
+            "id": "synthetic_family",
+            "contributions": {"input_builders": [{"id": "bionuta", "targets": {"af3": "json"}}]},
+        })
 
 
 def test_contribution_descriptor_validates_identity_and_targets():
     descriptor = BuilderDescriptor.from_contribution(
         "atomworks",
         {"targets": {"rfd4": "cif"}, "api_version": 1, "builder_version": 1, "state_schema_version": 1},
-        owner="rfd4_proteina",
+        owner="synthetic_runner",
     )
-    assert descriptor.global_id == "rfd4_proteina:atomworks"
+    assert descriptor.global_id == "synthetic_runner:atomworks"
     with pytest.raises(ValueError):
-        BuilderDescriptor.from_contribution("x", {"targets": {}}, owner="rfd4_proteina")
+        BuilderDescriptor.from_contribution("x", {"targets": {}}, owner="synthetic_runner")
     with pytest.raises(ValueError):
-        BuilderDescriptor.from_contribution("x", {"targets": {"rfd4": "pdb"}}, owner="rfd4_proteina")
+        BuilderDescriptor.from_contribution("x", {"targets": {"rfd4": "pdb"}}, owner="synthetic_runner")
 
 
 def _source_form(*, state=None, output_digest=DIGEST):
