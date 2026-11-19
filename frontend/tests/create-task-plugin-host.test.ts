@@ -133,4 +133,25 @@ describe('Create Task workspace PluginHost', () => {
     host.refresh(); await Promise.resolve(); await Promise.resolve();
     expect(host.validate()).toContain('async: refresh failed');
   });
+
+  it('reports a failed authoring restore after attempting every capability', async () => {
+    vi.stubGlobal('document', { createElement: () => new FakeElement(), head: { append: vi.fn() } });
+    const restored = vi.fn(async () => undefined);
+    const broken: WorkspacePlugin = {
+      id: 'broken', mount: () => ({ async restoreAuthoring() { throw new Error('restore broke'); } }),
+    };
+    const healthy: WorkspacePlugin = { id: 'healthy', mount: () => ({ restoreAuthoring: restored }) };
+    const host = new PluginHost([broken, healthy], { fetch });
+    host.mount([
+      { plugin: 'broken', id: 'broken', title: 'Broken', options: {}, stepId: 'one' },
+      { plugin: 'healthy', id: 'healthy', title: 'Healthy', options: {}, stepId: 'one' },
+    ], {} as WorkspaceContext, () => new FakeElement() as unknown as HTMLElement);
+    const entry = (capability: string) => ({
+      capability_id: capability, builder: 'b', target: 't', outputs: [], dependencies: [],
+      state_available: true, compatible: true,
+    });
+    await expect(host.restoreAuthoring([entry('broken'), entry('healthy')], async () => ({})))
+      .rejects.toThrow('restore broke');
+    expect(restored).toHaveBeenCalledOnce();
+  });
 });

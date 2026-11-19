@@ -1,0 +1,11 @@
+collections:
+  smoke:
+    cases:
+    - id: minimal-synthetic
+      task: builder_runner
+      input:
+        roles:
+          specification:
+          - tests/data/synthetic/af3.json
+      parameters: {}
+version: 1

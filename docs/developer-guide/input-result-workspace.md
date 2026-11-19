@@ -14,7 +14,9 @@ operational release gates. This document is not an activation checklist and
 does not authorize production changes.
 
 The [result-view plugin contract](result-view-plugins.md) defines how
-result views are contributed.
+result views are contributed. The reusable
+[Input Builder contract](input-builders.md) defines how an upstream scientific
+editor binds its native output to a declared input role.
 
 ## Why this work exists
 

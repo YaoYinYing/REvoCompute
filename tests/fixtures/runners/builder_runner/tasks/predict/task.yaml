@@ -1,0 +1,39 @@
+id: builder_runner
+display_name: Synthetic builder_runner
+category: analysis
+summary: Synthetic Input Builder contract behavior.
+inputs:
+  specification:
+    title: Specification
+    type: supporting_data
+    formats:
+    - json
+    cardinality:
+      min: 1
+      max: 1
+input_workspace:
+  steps:
+  - id: material
+    title: Material
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Specification
+    - plugin: input-builder
+      id: bionuta_builder
+      title: Build specification
+      options:
+        builder: bionuta
+        target: alphafold3
+        outputs:
+          input: specification
+  - id: review
+    title: Review
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+parameters:
+  type: object
+  additionalProperties: false
+  properties: {}

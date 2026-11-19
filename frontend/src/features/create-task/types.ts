@@ -56,9 +56,26 @@ export interface WorkspaceStep {
   capabilities: Omit<WorkspaceCapability, 'stepId'>[];
 }
 
+export interface WorkspaceBuilder {
+  id: string;
+  /** `null` for a deployment-owned shared builder; a runner family for a scoped one. */
+  owner: string | null;
+  api_version: number;
+  builder_version: number;
+  state_schema_version: number;
+  targets: Record<string, string>;
+  adapter: string;
+  /** Whether this deployment can actually serve the builder's editor assets/service. */
+  available: boolean;
+  editor_path?: string;
+  adapter_path?: string;
+}
+
 export interface WorkspaceContract {
   version: 3;
   plugins: WorkspaceDescriptor[];
+  /** Registered Input Builders referenced by this Task, with operational availability. */
+  builders?: WorkspaceBuilder[];
   steps: WorkspaceStep[];
 }
 

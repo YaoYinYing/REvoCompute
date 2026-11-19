@@ -44,6 +44,12 @@ BOUNDARY_FILES = {
 }
 # These are protocol vocabularies or legacy route targets, not dispatch branches.
 VALUE_EXCEPTIONS = {
+    # BioNuTA target dialects are the upstream provider's own vocabulary; some
+    # token names coincide with runner family IDs without dispatching on them.
+    "revocompute/input_builders.py": {"alphafold3", "opendde", "mol1", "boltz", "bioemu2"},
+    "tests/server/test_input_builders.py": {"alphafold3", "bioemu2"},
+    "tests/server/test_input_builder_routes.py": {"alphafold3"},
+    "tests/server/test_input_builder_submission.py": {"alphafold3"},
     "revocompute/input_validators/profiles.py": {
         "alphafold3", "AlphaFold 3 JSON object must declare the alphafold3 dialect and a positive integer version",
     },

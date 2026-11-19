@@ -1,6 +1,7 @@
 import type { WorkspaceCapability, WorkspaceDescriptor, WorkspaceSummary, WorkspaceValues } from '../types';
 import { t } from '../../../app/i18n';
 import type {
+  WorkspaceAuthoringEntry,
   WorkspaceContext,
   WorkspacePlugin,
   WorkspacePluginInstance,
@@ -142,6 +143,32 @@ export class PluginHost {
         this.faults.push(`${item.plugin.id}: ${error instanceof Error ? error.message : String(error)}`);
       }
     });
+  }
+
+  /**
+   * Restore recorded builder state into the capabilities that are mounted now.
+   *
+   * A capability whose plugin has no restore hook is left alone: its recorded
+   * state was not advertised as restorable, and guessing is never a restore.
+   */
+  async restoreAuthoring(
+    entries: WorkspaceAuthoringEntry[],
+    loadState: (capabilityId: string) => Promise<unknown>,
+  ): Promise<void> {
+    const failures: string[] = [];
+    for (const entry of entries) {
+      const item = this.mounted.find(mounted => mounted.definition.id === entry.capability_id);
+      if (!item?.instance.restoreAuthoring) continue;
+      try {
+        const state = await loadState(entry.capability_id);
+        await item.instance.restoreAuthoring(entry, state);
+      } catch (error) {
+        // Every capability gets its attempt, but a failed restore must reach
+        // the draft so it can report the outcome instead of claiming success.
+        failures.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+    if (failures.length) throw new Error(failures.join('; '));
   }
 
   destroy(): void {

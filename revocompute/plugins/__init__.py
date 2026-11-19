@@ -18,6 +18,8 @@ from typing import Any, Callable, Iterable, Mapping
 import importlib.util
 import yaml
 
+from revocompute.input_builders import SHARED_BUILDERS, BuilderDescriptor
+
 
 def _identifier(value: Any, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip() or not value.replace("_", "").replace("-", "").isalnum():
@@ -38,6 +40,7 @@ class PluginManifest:
     configuration_schemas: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
     workspace_plugins: Mapping[str, "WorkspacePluginDescriptor"] = field(default_factory=dict)
+    input_builders: Mapping[str, BuilderDescriptor] = field(default_factory=dict)
     api_version: str = "1"
     runtime: Mapping[str, Any] = field(default_factory=dict)
     tasks: tuple[str, ...] = ()
@@ -60,6 +63,7 @@ class PluginManifest:
             raise ValueError(f"Plugin manifest {plugin_id!r} contributions must be a mapping")
         contributions: dict[str, tuple[str, ...]] = {}
         workspace_plugins: dict[str, WorkspacePluginDescriptor] = {}
+        input_builders: dict[str, BuilderDescriptor] = {}
         for kind, values in raw_contributions.items():
             if not isinstance(kind, str) or not kind.strip():
                 raise ValueError("Plugin contribution kind must be non-empty text")
@@ -73,6 +77,17 @@ class PluginManifest:
                     identifier = _identifier(value.get("id"), f"contribution {kind}")
                     workspace_plugins[identifier] = WorkspacePluginDescriptor.from_mapping(
                         identifier, value, owner=runner or plugin_id, root=Path(path)
+                    )
+                    normalized.append(identifier)
+                elif kind == "input_builders" and isinstance(value, Mapping):
+                    identifier = _identifier(value.get("id"), f"contribution {kind}")
+                    if identifier in SHARED_BUILDERS:
+                        # Shared builders are deployment-owned. A bare name must
+                        # resolve to exactly one descriptor everywhere, so a
+                        # runner may add a scoped builder but never shadow one.
+                        raise ValueError(f"Input builder {identifier!r} is deployment-owned and cannot be contributed")
+                    input_builders[identifier] = BuilderDescriptor.from_contribution(
+                        identifier, value, owner=runner or plugin_id
                     )
                     normalized.append(identifier)
                 else:
@@ -119,8 +134,8 @@ class PluginManifest:
         metadata = {key: value for key, value in raw.items() if key not in known}
         return cls(
             plugin_id, version.strip(), Path(path), str(raw.get("name") or plugin_id), runner, contributions,
-            configuration_schemas, metadata, workspace_plugins, str(api_version), dict(runtime), tasks, access_policies,
-            runtime_overlay,
+            configuration_schemas, metadata, workspace_plugins, input_builders, str(api_version), dict(runtime),
+            tasks, access_policies, runtime_overlay,
         )
 
     @classmethod
@@ -240,6 +255,7 @@ class PluginManager:
         self.contributions = ContributionRegistry()
         self._plugins: dict[str, PluginContext] = {}
         self._workspace_plugins: dict[str, WorkspacePluginDescriptor] = {}
+        self._input_builders: dict[str, BuilderDescriptor] = {}
         self._workspace_backends: dict[str, tuple[Callable[..., Any], Callable[..., Any] | None]] = {}
 
     @property
@@ -269,6 +285,10 @@ class PluginManager:
             backend = descriptor.backend
             if backend.get("normalizer"):
                 self._workspace_backends[descriptor.global_id] = self._load_workspace_backend(manifest, descriptor)
+        for descriptor in manifest.input_builders.values():
+            if descriptor.global_id in self._input_builders:
+                raise ValueError(f"Duplicate input builder: {descriptor.global_id!r}")
+            self._input_builders[descriptor.global_id] = descriptor
         return context
 
     @staticmethod
@@ -307,6 +327,19 @@ class PluginManager:
 
     def workspace_plugins(self) -> tuple[WorkspacePluginDescriptor, ...]:
         return tuple(self._workspace_plugins.values())
+
+    def input_builder(self, identifier: str, *, owner: str | None = None) -> BuilderDescriptor | None:
+        """Resolve a runner-scoped builder by local or namespaced ID."""
+        if ":" in identifier:
+            return self._input_builders.get(identifier)
+        matches = [
+            item for item in self._input_builders.values()
+            if item.id == identifier and (owner is None or item.owner == owner)
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def input_builders(self) -> tuple[BuilderDescriptor, ...]:
+        return tuple(self._input_builders.values())
 
     def workspace_backend(self, identifier: str, *, owner: str | None = None):
         descriptor = self.workspace_plugin(identifier, owner=owner)

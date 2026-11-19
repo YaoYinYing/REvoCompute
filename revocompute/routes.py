@@ -49,7 +49,9 @@ from werkzeug.http import parse_range_header
 from revocompute.account_pages import register_account_pages
 from revocompute.admin_pages import register_admin_pages
 from revocompute import admin_reports
+from revocompute import atomworks
 from revocompute import clone_plan
+from revocompute import input_builders
 from revocompute import task_state
 from revocompute.access_control import (
     authorize,
@@ -231,6 +233,7 @@ from revocompute.task_types import (
     declared_entitlements,
     get_policy,
     get_runtime_family,
+    input_builder_descriptor,
     iter_capabilities,
     list_categories,
     list_policies,
@@ -776,6 +779,188 @@ def workspace_plugin_asset(owner: str, plugin_id: str, asset: str):
     response = send_from_directory(descriptor.root, requested, conditional=True)
     response.headers["Cache-Control"] = "private, no-cache"
     return response
+
+
+#: The served BioNuTA tree is pinned, same-origin static content.  The editor
+#: upstream uses inline handlers and d3 3.x's `Function` constructor, so those
+#: two relaxations are part of the audited asset trust; no external origin is
+#: allowed to be a script, style, frame or data endpoint.  The frame itself is
+#: NOT a security sandbox: the host adapter requires exact same-origin access.
+_BIONUTA_CSP = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+    "font-src 'self' data:; connect-src 'self'; frame-src 'self'; "
+    "frame-ancestors 'self'; base-uri 'self'; form-action 'none'"
+)
+
+
+@app.route("/compute/bionuta/<path:asset>", methods=["GET"])
+@login_required
+def bionuta_asset(asset: str):
+    """Serve the pinned BioNuTA workbench only from its provisioned tree.
+
+    The editor and the host must share an origin, so these assets are served by
+    this application rather than from a CDN, a second port, or a dev server.
+    Login is required for the same reason the workspace assets require it: this
+    is executable JavaScript on the application's origin.
+    """
+    root = str(getattr(CONFIG, "bionuta_root", "") or "")
+    requested = str(asset or "").replace("\\", "/").strip("/")
+    if not root or not requested or any(part in {"", ".", ".."} for part in requested.split("/")):
+        abort(404)
+    try:
+        target = (Path(root) / requested).resolve()
+        if not target.is_relative_to(Path(root).resolve()) or not target.is_file():
+            abort(404)
+    except (OSError, ValueError):
+        abort(404)
+    response = send_from_directory(root, requested, conditional=True)
+    response.headers["Content-Security-Policy"] = _BIONUTA_CSP
+    # The workbench is iframed by Create Task on this origin; the app-wide
+    # DENY default would contradict frame-ancestors for older engines.
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # The tree is content-pinned by commit and digest; a short private cache
+    # keeps the editor responsive without making a stale pin permanent.
+    response.headers["Cache-Control"] = "private, max-age=300"
+    return response
+
+
+def _atomworks_base() -> str:
+    return str(getattr(CONFIG, "atomworks_studio_url", "") or "")
+
+
+def _atomworks_store() -> atomworks.AtomWorksSessionStore:
+    store = current_app.config.get("atomworks_session_store")
+    if store is None:
+        store = atomworks.AtomWorksSessionStore(
+            os.path.join(CONFIG.server_dir, "atomworks_sessions.sqlite3")
+        )
+        current_app.config["atomworks_session_store"] = store
+    return store
+
+
+def _atomworks_proxy_response(result: tuple[int, str, bytes, dict[str, str]]) -> Response:
+    status, content_type, content, headers = result
+    response = Response(content, status=status, content_type=content_type)
+    for name, value in headers.items():
+        if name.lower() != "content-type":
+            response.headers[name] = value
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@app.route("/compute/atomworks/", methods=["GET"])
+@app.route("/compute/atomworks/<path:asset>", methods=["GET"])
+@login_required
+def atomworks_editor(asset: str = ""):
+    """Serve the native editor shell and its assets through this origin.
+
+    The shell is same-origin with the host because the editor's absolute
+    ``/api/...`` calls must reach the owner-scoped gateway, not an anonymous
+    upstream port.  Only files under the Studio application root are forwarded.
+    """
+    base = _atomworks_base()
+    if not base:
+        abort(404)
+    if blocked := _reject_guest():
+        return blocked
+    requested = str(asset or "").replace("\\", "/").strip("/")
+    if requested and any(part in {"", ".", ".."} for part in requested.split("/")):
+        abort(404)
+    if requested == "api" or requested.startswith("api/"):
+        # The editor's HTTP surface has exactly one entrance, the owner-scoped
+        # `/api/<path>` gateway.  Forwarding it here would bypass that gate.
+        abort(404)
+    if not requested:
+        session_id = str(request.args.get("session") or "")
+        if not _atomworks_store().owns(session_id, user_id=int(g.current_user["id"])):
+            abort(404)
+        upstream_path = "/"
+    else:
+        upstream_path = "/" + requested
+    try:
+        result = atomworks.forward(
+            base,
+            "GET",
+            upstream_path,
+            query=request.query_string.decode("latin-1"),
+            accept=request.headers.get("Accept"),
+        )
+    except atomworks.AtomWorksProxyError as exc:
+        return Response(exc.message, status=exc.status, content_type="text/plain")
+    response = _atomworks_proxy_response(result)
+    # The proxied shell is framed by the Create Task page on this same origin.
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'self'"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    return response
+
+
+@app.route("/api/<path:path>", methods=["GET", "POST", "DELETE", "PUT", "PATCH"])
+@login_required
+@rate_limit(max_requests=120, window_seconds=60)
+def atomworks_api(path: str):
+    """Owner-scoped gateway for the editor's small, explicit HTTP surface."""
+    base = _atomworks_base()
+    if not base:
+        abort(404)
+    if blocked := _reject_guest():
+        return blocked
+    upstream_path = "/api/" + str(path or "")
+    if not atomworks.route_allowed(request.method, upstream_path):
+        abort(404)
+    # The editor shell posts mutations with the session cookie, so the bearer
+    # CSRF gate used by other state-changing routes is unavailable.  Require the
+    # browser's own same-origin signal instead; a cross-site form cannot forge
+    # `Sec-Fetch-Site`, and a present Origin must be this deployment.
+    if request.method != "GET":
+        site = (request.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        origin = (request.headers.get("Origin") or "").strip()
+        if (site and site not in {"same-origin", "none"}) or (
+            origin and origin.rstrip("/") != request.host_url.rstrip("/")
+        ):
+            return Response("Cross-origin editor request refused.", status=403, content_type="text/plain")
+    session_id = atomworks.session_id_from_path(upstream_path)
+    if session_id is not None and not _atomworks_store().owns(
+        session_id, user_id=int(g.current_user["id"])
+    ):
+        # A guessed or other-owner session is indistinguishable from a missing
+        # one, so the gateway never confirms another user's session exists.
+        abort(404)
+    body = request.get_data(cache=False)
+    if len(body) > atomworks.MAX_PROXY_RESPONSE_BYTES:
+        return Response("Request body exceeded the gateway limit.", status=413, content_type="text/plain")
+    try:
+        result = atomworks.forward(
+            base,
+            request.method,
+            upstream_path,
+            query=request.query_string.decode("latin-1"),
+            body=body or None,
+            content_type=request.headers.get("Content-Type"),
+            accept=request.headers.get("Accept"),
+        )
+    except atomworks.AtomWorksProxyError as exc:
+        return Response(exc.message, status=exc.status, content_type="text/plain")
+    if request.method == "POST" and upstream_path == "/api/sessions" and 200 <= result[0] < 300:
+        try:
+            payload = json.loads(result[2]) if result[2] else {}
+        except (TypeError, ValueError):
+            payload = {}
+        created = payload.get("session_id") if isinstance(payload, dict) else None
+        if isinstance(created, str):
+            _atomworks_store().record(created, user_id=int(g.current_user["id"]))
+            if isinstance(payload.get("editor_path"), str):
+                # The shell is served under this application, not the upstream
+                # root, so the opaque session stays in a same-origin path.
+                payload["editor_path"] = f"/compute/atomworks/?session={created}&embed=1"
+                body_out = json.dumps(payload).encode("utf-8")
+                return _atomworks_proxy_response((200, "application/json", body_out, {}))
+    if request.method == "DELETE" and session_id is not None and result[0] in (200, 204):
+        _atomworks_store().forget(session_id)
+    return _atomworks_proxy_response(result)
 
 
 # ---------------------------------------------------------------------------
@@ -1333,6 +1518,33 @@ def _available_task_types(*, include_runner_metadata: bool = False) -> dict[str,
     }
 
 
+def _input_builder_available(builder) -> bool:
+    """Whether this deployment can actually serve one registered builder.
+
+    Availability is an operational fact, never a manifest claim: a Task still
+    offers ordinary upload when the pinned assets or the optional service are
+    absent.
+    """
+    if builder.adapter == "bionuta":
+        root = getattr(CONFIG, "bionuta_root", "")
+        if not root or not os.path.isdir(root):
+            return False
+        return bool(builder.editor_path and builder.adapter_path) and all(
+            os.path.isfile(os.path.join(root, *path.lstrip("/").split("/")))
+            for path in (builder.editor_path.removeprefix("/compute/bionuta/"),
+                         builder.adapter_path.removeprefix("/compute/bionuta/"))
+        )
+    if builder.adapter == "atomworks":
+        # Guests share one account, so a per-user session binding cannot keep
+        # two anonymous visitors apart.  The builder stays off for them rather
+        # than presenting an editor the gateway will refuse.  Anonymous task
+        # detail requests set `current_user` to None.
+        if (g.get("current_user") or {}).get("role") == "guest":
+            return False
+        return bool(getattr(CONFIG, "atomworks_studio_url", ""))
+    return False
+
+
 def _input_workspace_payload(tt) -> dict:
     """Serialize the declarative, non-executable input workspace contract."""
     plugin_ids = {capability.plugin for step in tt.input_workspace for capability in step.capabilities}
@@ -1342,9 +1554,21 @@ def _input_workspace_payload(tt) -> dict:
         if descriptor is None:
             continue
         descriptors.append(_workspace_plugin_payload(descriptor))
+    builders = []
+    seen_builders: set[str] = set()
+    for capability in iter_capabilities(tt):
+        if capability.plugin.split(":", 1)[-1] != "input-builder":
+            continue
+        identifier = str(capability.options.get("builder") or "")
+        builder = input_builder_descriptor(identifier, owner=tt.runtime.name)
+        if builder is None or builder.global_id in seen_builders:
+            continue
+        seen_builders.add(builder.global_id)
+        builders.append(input_builders.builder_payload(builder, available=_input_builder_available(builder)))
     return {
         "version": 3,
         "plugins": descriptors,
+        "builders": builders,
         "steps": _input_workspace_steps(tt),
     }
 
@@ -3171,6 +3395,39 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             uploaded_inputs,
             task_type,
         )
+        # A builder envelope is an assertion about these exact accepted bytes.
+        # Verify it after Core has hashed and quarantined the uploads, before a
+        # Task ID is derived or anything is committed, so a stale or edited
+        # output can never be submitted as the authoring state that produced it.
+        builder_capabilities = {
+            capability.id: capability
+            for capability in iter_capabilities(tt)
+            if capability.plugin.split(":", 1)[-1] == "input-builder"
+        }
+        for capability_id, builder_value in capability_values.items():
+            capability = builder_capabilities.get(str(capability_id))
+            if capability is None:
+                continue
+            try:
+                builder = input_builder_descriptor(
+                    str(capability.options.get("builder") or ""), owner=tt.runtime.name
+                )
+                if builder is None:
+                    raise input_builders.BuilderValidationError(
+                        "builder_binding_invalid",
+                        "This capability's input builder is not registered in this deployment.",
+                    )
+                input_builders.validate_envelope(capability, builder_value, saved_inputs, builder=builder)
+            except input_builders.BuilderValidationError as exc:
+                return (
+                    jsonify(
+                        {
+                            "error": exc.message,
+                            "details": [{"code": exc.code, "message": exc.message}],
+                        }
+                    ),
+                    400,
+                )
         if reuse_identity:
             refusal = _reuse_input_refusal(declared_reuse, reuse_identity, saved_inputs)
             if refusal is not None:
@@ -4963,6 +5220,16 @@ def _clone_plan_payload(source: dict[str, Any]) -> dict[str, Any]:
         snapshot_root = current_app.config["storage_resolver"].get_input_root(source)
     except (KeyError, RuntimeError, ValueError):
         snapshot_root = None
+    builder_bindings: dict[str, tuple[Any, dict[str, Any]]] = {}
+    if current_type is not None:
+        for capability in iter_capabilities(current_type):
+            if capability.plugin.split(":", 1)[-1] != "input-builder":
+                continue
+            descriptor = input_builder_descriptor(
+                str(capability.options.get("builder") or ""), owner=current_type.runtime.name
+            )
+            if descriptor is not None:
+                builder_bindings[capability.id] = (descriptor, dict(capability.options))
     return clone_plan.build_plan(
         source,
         current_type=current_type,
@@ -4971,6 +5238,7 @@ def _clone_plan_payload(source: dict[str, Any]) -> dict[str, Any]:
         snapshot_root=snapshot_root,
         access_granted=access_granted,
         submission_available=submission_available,
+        builder_bindings=builder_bindings,
     )
 
 
@@ -5062,6 +5330,98 @@ def get_clone_plan(plan_id: str):
         ),
         200,
     )
+
+
+@app.route("/compute/api/clone-plans/<plan_id>/authoring/<capability_id>", methods=["GET"])
+@login_required
+def get_clone_authoring(plan_id: str, capability_id: str):
+    """Resolve one plan's recorded builder state for its owner.
+
+    The plan reference is the entitlement: it is owner-scoped and expires, and
+    the source Task is re-read here so deletion or a visibility change between
+    the plan and this read is observed.  Only the bounded native state and
+    dependency metadata travel; acceptance and execution still use the
+    re-materialized bytes.
+    """
+    if blocked := _reject_guest():
+        return blocked
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", capability_id or ""):
+        abort(404)
+    reference = _clone_plan_store().get(plan_id, user_id=int(g.current_user["id"]))
+    if reference is None:
+        return (
+            jsonify(
+                {
+                    "error": "This clone plan has expired or is unavailable",
+                    "details": [{"code": "clone_plan_unavailable", "message": "Open Clone & Reuse again."}],
+                }
+            ),
+            404,
+        )
+    source = _cloneable_source(reference.source_task_id)
+    if source is None:
+        return (
+            jsonify(
+                {
+                    "error": "The source Task is no longer available",
+                    "details": [{"code": "clone_source_unavailable", "message": "Open Clone & Reuse again."}],
+                }
+            ),
+            404,
+        )
+    plan = _clone_plan_payload(source)
+    entry = next((item for item in plan["authoring"] if item["capability_id"] == capability_id), None)
+    if entry is None:
+        return (
+            jsonify(
+                {
+                    "error": "This Task recorded no authoring state for that builder",
+                    "details": [{"code": "authoring_state_missing", "message": "Use ordinary upload instead."}],
+                }
+            ),
+            404,
+        )
+    if not entry["compatible"] or not entry["state_available"]:
+        return (
+            jsonify(
+                {
+                    "error": "The recorded builder state is not compatible with the current Task",
+                    "details": [
+                        {
+                            "code": entry["reason"] or "authoring_incompatible",
+                            "message": "Re-author the input or upload a prepared file.",
+                        }
+                    ],
+                }
+            ),
+            409,
+        )
+    recorded = clone_plan.recorded_authoring(source, capability_id)
+    if recorded is None:
+        return (
+            jsonify(
+                {
+                    "error": "The recorded builder state is unavailable",
+                    "details": [{"code": "authoring_state_missing", "message": "Use ordinary upload instead."}],
+                }
+            ),
+            404,
+        )
+    response = jsonify(
+        {
+            "capability_id": capability_id,
+            "builder": entry["builder"],
+            "target": entry["target"],
+            "builder_version": entry["builder_version"],
+            "state_schema_version": entry["state_schema_version"],
+            "revision": entry["revision"],
+            "state": recorded["state"],
+            "dependencies": entry["dependencies"],
+            "outputs": entry["outputs"],
+        }
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @app.route("/compute/api/auth/admin/placement/explain/<task_type>", methods=["GET"])

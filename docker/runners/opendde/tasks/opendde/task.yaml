@@ -44,12 +44,23 @@ input_workspace:
   steps:
   - id: material
     title: Provide the molecular system
-    description: Upload an OpenDDE JSON job specification. Need to prepare one? Create
-      it with JAAG ↗ https://jaag.bio-tools.yaoyy.moe/
+    description: Upload an OpenDDE JSON job specification, or build it with the BioNuTA
+      workbench.
     capabilities:
     - plugin: files
       id: source_files
       title: OpenDDE JSON input
+    - plugin: input-builder
+      id: bionuta_builder
+      title: Build with BioNuTA
+      description: Assemble an OpenDDE job specification in the shared BioNuTA workbench,
+        or upload a prepared JSON above. Generating binds the JSON to the specification
+        role; a later upload through the file field replaces it.
+      options:
+        builder: bionuta
+        target: opendde
+        outputs:
+          input: specification
   - id: review
     title: Review and run
     description: Check the uploaded JSON before creating the task snapshot.

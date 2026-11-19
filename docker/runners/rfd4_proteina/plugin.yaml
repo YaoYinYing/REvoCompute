@@ -17,3 +17,15 @@ runtime:
     - rfd4_proteina/model-assets.sha256
   entrypoint: [bash, /opt/revocompute/runtime/rfd4_proteina/run.sh]
 tasks: [tasks/rfd4_proteina/task.yaml]
+contributions:
+  # Runner-scoped Input Builder: the native AtomWorks Studio editor authors an
+  # annotated CIF that is this Task's own `condition` input. The editor service
+  # is deployment-optional; when it is absent, ordinary upload remains.
+  input_builders:
+  - id: atomworks
+    api_version: 1
+    builder_version: 1
+    state_schema_version: 1
+    targets:
+      rfd4: cif
+    adapter: atomworks

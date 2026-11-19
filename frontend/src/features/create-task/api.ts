@@ -1,7 +1,7 @@
 import type { components } from '../../api/schema.generated';
 import { t } from '../../app/i18n';
 import { authorizedFetch } from '../../app/session';
-import type { TaskCatalog, TaskFormDefinition, TaskPreflight, TaskStatus, WorkspaceContract, WorkspaceDescriptor } from './types';
+import type { TaskCatalog, TaskFormDefinition, TaskPreflight, TaskStatus, WorkspaceBuilder, WorkspaceContract, WorkspaceDescriptor } from './types';
 import { parametersFromSchema } from './parameter-controls';
 
 export class CreateTaskApiError extends Error {
@@ -31,6 +31,13 @@ function object(value: unknown, field: string): Record<string, unknown> {
 
 function text(value: unknown, field: string): string {
   if (typeof value !== 'string' || !value) throw new PayloadFault(t('ct.payload.fault.invalid', { field }));
+  return value;
+}
+
+function count(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new PayloadFault(t('ct.payload.fault.invalid', { field }));
+  }
   return value;
 }
 
@@ -73,12 +80,42 @@ export function parseWorkspaceDescriptor(value: unknown): WorkspaceDescriptor {
   };
 }
 
+export function parseWorkspaceBuilder(value: unknown): WorkspaceBuilder {
+  const item = object(value, t('ct.payload.field.workspaceBuilder'));
+  if (typeof item.available !== 'boolean') {
+    throw new PayloadFault(t('ct.payload.fault.invalid', { field: t('ct.payload.field.workspaceBuilder') }));
+  }
+  const targets: Record<string, string> = {};
+  for (const [target, format] of Object.entries(object(item.targets, t('ct.payload.field.workspaceBuilderTargets')))) {
+    targets[target] = text(format, t('ct.payload.field.workspaceBuilderTargets'));
+  }
+  return {
+    id: text(item.id, t('ct.payload.field.workspaceBuilder')),
+    owner: item.owner === null ? null : text(item.owner, t('ct.payload.field.owner')),
+    api_version: count(item.api_version, t('ct.payload.field.workspaceBuilder')),
+    builder_version: count(item.builder_version, t('ct.payload.field.workspaceBuilder')),
+    state_schema_version: count(item.state_schema_version, t('ct.payload.field.workspaceBuilder')),
+    targets,
+    adapter: text(item.adapter, t('ct.payload.field.workspaceBuilder')),
+    available: item.available,
+    ...(typeof item.editor_path === 'string' ? { editor_path: item.editor_path } : {}),
+    ...(typeof item.adapter_path === 'string' ? { adapter_path: item.adapter_path } : {}),
+  };
+}
+
 export function parseWorkspace(value: unknown): WorkspaceContract {
   const workspace = object(value, t('ct.payload.field.workspace'));
   if (workspace.version !== 3 || !Array.isArray(workspace.steps) || !Array.isArray(workspace.plugins)) {
     throw new PayloadFault(t('ct.payload.fault.invalid', { field: t('ct.payload.field.contract') }));
   }
   const plugins = workspace.plugins.map(parseWorkspaceDescriptor);
+  let builders: WorkspaceBuilder[] | undefined;
+  if (workspace.builders != null) {
+    if (!Array.isArray(workspace.builders)) {
+      throw new PayloadFault(t('ct.payload.fault.invalid', { field: t('ct.payload.field.workspaceBuilder') }));
+    }
+    builders = workspace.builders.map(parseWorkspaceBuilder);
+  }
   const steps = workspace.steps.map((rawStep) => {
     const step = object(rawStep, t('ct.payload.field.step'));
     if (!Array.isArray(step.capabilities)) throw new PayloadFault(t('ct.payload.fault.invalid', { field: t('ct.payload.field.stepCapabilities') }));
@@ -97,7 +134,7 @@ export function parseWorkspace(value: unknown): WorkspaceContract {
       }),
     };
   });
-  return { version: 3, plugins, steps };
+  return { version: 3, plugins, ...(builders ? { builders } : {}), steps };
 }
 
 async function responseJson(response: Response): Promise<unknown> {

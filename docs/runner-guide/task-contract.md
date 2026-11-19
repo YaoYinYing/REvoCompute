@@ -133,22 +133,22 @@ required roles or outputs. See
 `input_workspace.steps[].capabilities[]` names a capability the Create Task form
 renders. Runner-owned plugins resolve from the family's `plugin.yaml`; Core also
 provides the built-ins `files`, `sequence`, `structure`, `regions`,
-`parameters`, `review`, and `jaag-builder`.
+`parameters`, `review`, and `input-builder`.
 
-`jaag-builder` collects a molecular model, validates it with the pinned JAAG
-serializer, and binds the generated file to the declared input role:
+`input-builder` mounts a registered scientific editor and binds its materialized
+output to the declared input role:
 
 ```yaml
-- plugin: jaag-builder
-  id: jaag_system_builder
-  options: {target: bioemu2, role: system}
+- plugin: input-builder
+  id: bionuta_builder
+  options: {builder: bionuta, target: alphafold3, outputs: {input: specification}}
 ```
 
 The Server still resolves the role and enforces its type and cardinality, and the
 generated file enters the same immutable Task snapshot. A plain upload through
-`files` remains a first-class path. The Apache-2.0 JAAG core is fetched at build
-time from a pinned commit and verified by checksum
-(`frontend/provenance/jaag.json`); third-party JavaScript is not committed.
+`files` remains a first-class path. See
+[Input Builders](../developer-guide/input-builders.md) for registration,
+authoring state and Clone & Reuse.
 
 ## Demo inputs
 
