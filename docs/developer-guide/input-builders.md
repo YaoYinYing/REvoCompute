@@ -165,8 +165,25 @@ input path. It compares the new output digest with the source:
 - unavailable, expired or incompatible state: an explicit error, with upload as
   the fallback.
 
+AtomWorks Studio writes `_entry.time` into every export, so its re-materialized
+clone normally differs in that timestamp and is labelled changed rather than
+verified; annotations and coordinates are preserved.
+
 Cloning never mutates the source, reserves resources or submits. Old Tasks with
 no authoring state keep the manual-upload behavior.
+
+## Provider evidence
+
+The committed screenshots record the pinned workbench and the real Studio
+editor used for the integration:
+
+![BioNuTA workbench at desktop width](images/input-builder/bionuta-desktop.png)
+
+![BioNuTA workbench at narrow width](images/input-builder/bionuta-narrow.png)
+
+![AtomWorks Studio editor](images/input-builder/atomworks-editor.png)
+
+![AtomWorks Studio after applying a hotspot](images/input-builder/atomworks-edited.png)
 
 ## Deployment
 

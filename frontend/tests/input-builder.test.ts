@@ -217,10 +217,10 @@ describe('generic Input Builder capability', () => {
     installHarness(vi.stubGlobal);
     builderAdapters.synthetic = { async mount() { throw new BuilderUnavailableError('builder is offline'); } };
     const { instance, files } = mountPlugin();
-    await instance.restoreAuthoring!({
+    await expect(instance.restoreAuthoring!({
       capability_id: 'builder', builder: 'synthetic', target: 'af3', builder_version: 3, state_schema_version: 1,
       revision: 1, outputs: [], dependencies: [], state_available: true, compatible: true, reason: null,
-    }, { native: 'recorded' });
+    }, { native: 'recorded' })).rejects.toThrow(/unavailable|offline/);
     expect((instance.validate!() as string[]).join(' ')).toContain('could not be restored');
 
     const upload = new File(['{"prepared":true}'], 'prepared.json', { type: 'application/json' });

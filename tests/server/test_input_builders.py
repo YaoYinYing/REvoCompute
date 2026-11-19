@@ -274,6 +274,19 @@ def test_clone_plan_carries_bounded_metadata_and_never_the_document():
     assert entry["outputs"][0]["sha256"] == DIGEST
 
 
+def test_clone_plan_warns_when_the_builder_capability_was_removed():
+    plan = build_plan(
+        {"md5sum": "a" * 32, "task_type": "alphafold3", "input_form": json.dumps(_source_form()), "uploaded_at": 1},
+        current_type=None,
+        target_enabled=None,
+        files_owned=True,
+        snapshot_root=None,
+        builder_bindings={},
+    )
+    assert plan["authoring"] == []
+    assert any(item["code"] == "authoring_capability_removed" for item in plan["warnings"])
+
+
 def test_clone_plan_reports_a_tampered_or_incompatible_state_as_blocked():
     tampered = _plan(_source_form(output_digest="0" * 64))
     assert not tampered["authoring"][0]["compatible"]

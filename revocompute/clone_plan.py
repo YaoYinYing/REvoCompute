@@ -605,8 +605,9 @@ def _authoring(
     """
     workspace = (form or {}).get("workspace") if isinstance(form, dict) else None
     capabilities = workspace.get("capabilities") if isinstance(workspace, dict) else None
-    if not isinstance(capabilities, dict) or not builder_bindings:
+    if not isinstance(capabilities, dict):
         return [], []
+    bindings = builder_bindings or {}
     authoring: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     by_role: dict[str, list[dict[str, Any]]] = {}
@@ -614,7 +615,7 @@ def _authoring(
         if isinstance(entity.get("role"), str):
             by_role.setdefault(str(entity["role"]), []).append(entity)
     for capability_id, value in capabilities.items():
-        binding = builder_bindings.get(str(capability_id))
+        binding = bindings.get(str(capability_id))
         if binding is None:
             if isinstance(value, dict) and value.get("builder"):
                 warnings.append(

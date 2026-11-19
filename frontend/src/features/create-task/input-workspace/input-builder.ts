@@ -377,12 +377,14 @@ const inputBuilder: WorkspacePlugin = {
           await bind(instance, entry);
           context.changed();
         } catch (errorValue) {
-          restoreError = t('ct.builder.restoreFailed', {
-            message: errorValue instanceof Error ? errorValue.message : String(errorValue),
-          });
+          const failure = errorValue instanceof Error ? errorValue.message : String(errorValue);
+          restoreError = t('ct.builder.restoreFailed', { message: failure });
           status.textContent = restoreError;
           root.dataset.builderRestore = 'failed';
           context.changed();
+          // The host and the draft must learn that this restore failed; a
+          // resolved promise here would be reported as a successful clone.
+          throw new Error(failure);
         }
       },
       destroy: () => {
