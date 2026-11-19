@@ -33,6 +33,20 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Condition and scaffold files
+    - plugin: input-builder
+      id: atomworks_builder
+      title: Build an annotated CIF with AtomWorks Studio
+      description: Edit the scaffold and its RFD4 conditions in the native AtomWorks
+        Studio editor, then bind the exported annotated CIF as the condition input.
+        Studio produces a self-contained CIF, so it cannot be submitted together
+        with a separate scaffold; clear the scaffold upload or use the YAML/JSON
+        path above.
+      options:
+        builder: atomworks
+        target: rfd4
+        outputs:
+          input: condition
+        exclusive: true
   - id: settings
     title: Set generation parameters
     description: Choose bounded generation settings.

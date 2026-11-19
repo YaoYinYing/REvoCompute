@@ -35,11 +35,28 @@ export interface WorkspaceRefreshOptions {
   preset?: boolean;
 }
 
+/** One recorded builder state a clone plan may restore into a fresh draft. */
+export interface WorkspaceAuthoringEntry {
+  capability_id: string;
+  builder: string;
+  target: string;
+  builder_version?: number | null;
+  state_schema_version?: number | null;
+  revision?: number | null;
+  outputs: Array<{ logical: string; role: string; name?: string; size?: number; sha256?: string }>;
+  dependencies: unknown[];
+  state_available: boolean;
+  compatible: boolean;
+  reason?: string | null;
+}
+
 export interface WorkspacePluginInstance {
   readValue?(): unknown;
   summarize?(): WorkspaceSummary | WorkspaceSummary[] | null;
   validate?(): string | string[] | null;
   refresh?(options?: WorkspaceRefreshOptions): void | Promise<void>;
+  /** Rebuild a builder-owned input from one recorded authoring state. */
+  restoreAuthoring?(entry: WorkspaceAuthoringEntry, state: unknown): Promise<void>;
   destroy?(): void;
 }
 

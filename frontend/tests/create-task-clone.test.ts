@@ -29,6 +29,7 @@ const plan: ClonePlan = {
       files: [{ original_name: 'source.fasta', sha256: 'c'.repeat(64), size: 12, format: 'fasta', reuse: 'reupload_required', available: true, reason: null }],
     },
   ],
+  authoring: [],
   warnings: [{ code: 'source_schema_not_recorded', message: 'Checked against the current schema.' }],
   blocked_fields: [{ field: 'mode', code: 'parameter_choice_unavailable', message: 'Not offered anymore.', recorded_value: 'legacy' }],
   can_submit: false,

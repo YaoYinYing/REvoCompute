@@ -58,6 +58,7 @@ const PLAN = {
   target_schema_revision: null,
   compatible_parameters: [{ name: 'seed', value: '5', source: 'recorded' }],
   reusable_inputs: [],
+  authoring: [],
   warnings: [],
   blocked_fields: [
     { field: 'mode', code: 'parameter_choice_unavailable', message: 'The recorded choice is no longer accepted.', recorded_value: 'fast' },

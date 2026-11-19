@@ -5,7 +5,8 @@ import { t } from '../../../app/i18n';
 import { builtinPlugins } from './builtins';
 import { inputByParameter } from './builtins';
 import { PluginHost } from './PluginHost';
-import type { WorkspaceContext } from './plugin-contract';
+import type { WorkspaceAuthoringEntry, WorkspaceContext } from './plugin-contract';
+import { getCloneAuthoring } from '../../../api/app-api';
 import { element, filePath } from './utils';
 
 export interface InputWorkspaceOptions {
@@ -287,6 +288,20 @@ export class InputWorkspace {
   /** Restore a preset and report what changed, exactly as applying one does. */
   restore(preset: WorkspacePreset): PresetApplication {
     return this.apply(preset);
+  }
+
+  /**
+   * Rebuild builder-owned inputs from one owned clone plan.
+   *
+   * The state is fetched over the dedicated authenticated authoring path, one
+   * capability at a time, and handed to the mounted builder.  Materialization
+   * and the digest check stay in the builder plugin and the Server.
+   */
+  async restoreAuthoring(planId: string, entries: WorkspaceAuthoringEntry[]): Promise<void> {
+    await this.host.restoreAuthoring(entries, async capabilityId => {
+      const response = await getCloneAuthoring(planId, capabilityId);
+      return response.state;
+    });
   }
   inputFiles(): InputFile[] { return this.context?.inputFiles() || []; }
   sequence(): string { return this.context?.sequence() || ''; }

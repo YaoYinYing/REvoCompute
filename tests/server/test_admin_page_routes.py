@@ -58,6 +58,15 @@ _NON_ADMIN_PAGE_ROUTES = frozenset(
         "/compute/create_task",
         "/compute/dashboard",
         "/compute/results/<md5sum>",
+        # Pinned Input Builder surfaces: the same-origin workbench tree and the
+        # optional Studio shell. They are authenticated same-origin content, not
+        # Administration destinations.
+        "/compute/bionuta/<path:asset>",
+        "/compute/atomworks/",
+        "/compute/atomworks/<path:asset>",
+        # The Studio editor calls absolute /api/... paths, so the owner-scoped
+        # gateway is a browser-visible surface under the application root.
+        "/api/<path:path>",
         # Registered in every profile, but a production process answers 404: the
         # playground exists only in a demo deployment.
         "/compute/demo",

@@ -1137,6 +1137,26 @@
         }
       }
     },
+    "/compute/api/clone-plans/{plan_id}/authoring/{capability_id}": {
+      "get": {
+        "tags": ["Tasks"],
+        "summary": "Resolve one recorded Input Builder state for a clone draft",
+        "description": "Returns the bounded native authoring state and dependency metadata for exactly one capability, only to the caller who owns the plan. The source Task is re-read, so deletion, a visibility change, or an incompatible builder version is observed at read time. The returned state is never proof of scientific equivalence: the draft re-materializes it and the normal submission digest check remains authoritative.",
+        "operationId": "getCloneAuthoring",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {"name": "plan_id", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[A-Za-z0-9_-]{20,64}$"}},
+          {"name": "capability_id", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"}}
+        ],
+        "responses": {
+          "200": {"description": "Recorded authoring state for that capability", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"description": "Plan, source, or recorded state unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "409": {"description": "Recorded state is incompatible with the current Task contract", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        }
+      }
+    },
     "/compute/api/running/{task_id}": {
       "get": {
         "tags": ["Tasks"],
@@ -2917,6 +2937,7 @@
         "properties": {
           "version": {"type": "integer", "const": 3},
           "plugins": {"type": "array", "items": {"$ref": "#/components/schemas/WorkspacePlugin"}},
+          "builders": {"type": "array", "items": {"$ref": "#/components/schemas/WorkspaceBuilder"}},
           "steps": {
             "type": "array",
             "items": {
@@ -2943,6 +2964,24 @@
           "title": {"type": "string"},
           "description": {"type": "string"},
           "options": {"type": "object", "additionalProperties": true}
+        },
+        "additionalProperties": false
+      },
+      "WorkspaceBuilder": {
+        "type": "object",
+        "description": "One registered Input Builder referenced by this Task, with this deployment's operational availability. Availability is a fact, not a manifest claim; ordinary upload remains when it is false.",
+        "required": ["id", "owner", "api_version", "builder_version", "state_schema_version", "targets", "adapter", "available"],
+        "properties": {
+          "id": {"type": "string"},
+          "owner": {"type": ["string", "null"], "description": "null for a deployment-owned shared builder; otherwise the runner family."},
+          "api_version": {"type": "integer", "minimum": 1},
+          "builder_version": {"type": "integer", "minimum": 1},
+          "state_schema_version": {"type": "integer", "minimum": 1},
+          "targets": {"type": "object", "additionalProperties": {"type": "string"}},
+          "adapter": {"type": "string"},
+          "available": {"type": "boolean"},
+          "editor_path": {"type": "string"},
+          "adapter_path": {"type": "string"}
         },
         "additionalProperties": false
       },
@@ -4188,6 +4227,37 @@
       },
       "additionalProperties": false
     },
+    "CloneAuthoringOutput": {
+      "type": "object",
+      "required": ["logical", "role"],
+      "properties": {
+        "logical": {"type": "string"},
+        "role": {"type": "string"},
+        "name": {"type": "string"},
+        "size": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "CloneAuthoring": {
+      "type": "object",
+      "description": "Bounded compatibility metadata for one recorded Input Builder state. The native document is not carried here; it is resolved over the owner-scoped authoring path.",
+      "required": ["capability_id", "builder", "target", "state_available", "compatible", "outputs", "dependencies"],
+      "properties": {
+        "capability_id": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"},
+        "builder": {"type": "string"},
+        "target": {"type": "string"},
+        "builder_version": {"type": ["integer", "null"], "minimum": 0},
+        "state_schema_version": {"type": ["integer", "null"], "minimum": 0},
+        "revision": {"type": ["integer", "null"], "minimum": 0},
+        "state_available": {"type": "boolean"},
+        "compatible": {"type": "boolean"},
+        "reason": {"type": ["string", "null"]},
+        "outputs": {"type": "array", "items": {"$ref": "#/components/schemas/CloneAuthoringOutput"}},
+        "dependencies": {"type": "array", "items": {"type": "object"}}
+      },
+      "additionalProperties": false
+    },
     "CloneFinding": {
       "type": "object",
       "required": ["code", "message"],
@@ -4202,7 +4272,7 @@
     "ClonePlan": {
       "type": "object",
       "description": "A bounded, typed, read-only plan for a new draft. can_submit is always false: only a normal preflight and POST can create a Task.",
-      "required": ["source_task_id", "source_task_type", "source_submitted_at", "target_task_type", "target_display_name", "target_schema_revision", "compatible_parameters", "reusable_inputs", "warnings", "blocked_fields", "can_submit"],
+      "required": ["source_task_id", "source_task_type", "source_submitted_at", "target_task_type", "target_display_name", "target_schema_revision", "compatible_parameters", "reusable_inputs", "authoring", "warnings", "blocked_fields", "can_submit"],
       "properties": {
         "source_task_id": {"$ref": "#/components/schemas/TaskId"},
         "source_task_type": {"type": "string"},
@@ -4212,6 +4282,7 @@
         "target_schema_revision": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$", "description": "Canonical sha256 of the current parameter schema, or null when the Task type is no longer registered."},
         "compatible_parameters": {"type": "array", "items": {"$ref": "#/components/schemas/CloneParameter"}},
         "reusable_inputs": {"type": "array", "items": {"$ref": "#/components/schemas/CloneInputRole"}},
+        "authoring": {"type": "array", "items": {"$ref": "#/components/schemas/CloneAuthoring"}},
         "warnings": {"type": "array", "items": {"$ref": "#/components/schemas/CloneFinding"}},
         "blocked_fields": {"type": "array", "items": {"$ref": "#/components/schemas/CloneFinding"}},
         "can_submit": {"type": "boolean", "const": false}
@@ -4220,7 +4291,7 @@
     },
     "ClonePlanResponse": {
       "type": "object",
-      "required": ["plan_id", "expires_at", "source_task_id", "source_task_type", "source_submitted_at", "target_task_type", "target_display_name", "target_schema_revision", "compatible_parameters", "reusable_inputs", "warnings", "blocked_fields", "can_submit"],
+      "required": ["plan_id", "expires_at", "source_task_id", "source_task_type", "source_submitted_at", "target_task_type", "target_display_name", "target_schema_revision", "compatible_parameters", "reusable_inputs", "authoring", "warnings", "blocked_fields", "can_submit"],
       "properties": {
         "plan_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{20,64}$", "description": "Opaque owner-scoped reference; the only clone fact a URL may carry."},
         "expires_at": {"type": ["string", "null"], "format": "date-time"},
@@ -4232,6 +4303,7 @@
         "target_schema_revision": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
         "compatible_parameters": {"type": "array", "items": {"$ref": "#/components/schemas/CloneParameter"}},
         "reusable_inputs": {"type": "array", "items": {"$ref": "#/components/schemas/CloneInputRole"}},
+        "authoring": {"type": "array", "items": {"$ref": "#/components/schemas/CloneAuthoring"}},
         "warnings": {"type": "array", "items": {"$ref": "#/components/schemas/CloneFinding"}},
         "blocked_fields": {"type": "array", "items": {"$ref": "#/components/schemas/CloneFinding"}},
         "can_submit": {"type": "boolean", "const": false}

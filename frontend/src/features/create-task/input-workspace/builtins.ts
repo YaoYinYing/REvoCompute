@@ -1,6 +1,7 @@
 import { createIcons, Dice5 } from 'lucide';
 import { alignmentPreview, residueTone } from './alignment-preview';
 import { jaagBuilder } from './jaag-builder';
+import { inputBuilder } from './input-builder';
 import { parameterValue, seedConstant, validateParameter } from '../parameter-controls';
 import type { ParameterDefinition, TaskFormDefinition } from '../types';
 import { t } from '../../../app/i18n';
@@ -437,4 +438,4 @@ const reviewPlugin: WorkspacePlugin = {
   },
 };
 
-export const builtinPlugins: WorkspacePlugin[] = [filesPlugin, sequencePlugin, structurePlugin, parameterPlugin('regions'), parameterPlugin('parameters'), jaagBuilder, reviewPlugin];
+export const builtinPlugins: WorkspacePlugin[] = [filesPlugin, sequencePlugin, structurePlugin, parameterPlugin('regions'), parameterPlugin('parameters'), jaagBuilder, inputBuilder, reviewPlugin];

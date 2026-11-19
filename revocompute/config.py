@@ -184,6 +184,12 @@ class ComputeConfig:
     # them rather than having its manifest silently truncated.
     max_published_artifacts: int = 100_000
     max_published_bytes: int = 8 * 1024 * 1024 * 1024
+    #: Static tree of the pinned BioNuTA workbench.  Empty or absent means the
+    #: shared builder is unavailable and ordinary upload remains the only path.
+    bionuta_root: str = ""
+    #: Base URL of the optional, separately deployed AtomWorks Studio service.
+    #: Empty means the runner-scoped builder is disabled in this deployment.
+    atomworks_studio_url: str = ""
 
     def __post_init__(self) -> None:
         if self.job_executor == "slurm":
@@ -225,6 +231,8 @@ class ComputeConfig:
             ),
             max_published_artifacts=env_int("MAX_PUBLISHED_ARTIFACTS", 100_000),
             max_published_bytes=env_int("MAX_PUBLISHED_BYTES", 8 * 1024 * 1024 * 1024),
+            bionuta_root=env_path("REVOCOMPUTE_BIONUTA_ROOT", os.path.join(server_dir, "vendor", "bionuta")),
+            atomworks_studio_url=env_str("REVOCOMPUTE_ATOMWORKS_STUDIO_URL", "").rstrip("/"),
         )
 
 

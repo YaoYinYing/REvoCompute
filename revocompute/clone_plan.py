@@ -167,6 +167,29 @@ def _load_input_form(task: dict[str, Any]) -> dict[str, Any] | None:
     return form if isinstance(form, dict) else None
 
 
+def recorded_authoring(source: dict[str, Any], capability_id: str) -> dict[str, Any] | None:
+    """The source's recorded builder envelope for one capability, or ``None``.
+
+    Only the dedicated authenticated authoring path calls this; a plan carries
+    the compatibility metadata and never this document.
+    """
+    form = _load_input_form(source)
+    workspace = form.get("workspace") if isinstance(form, dict) else None
+    capabilities = workspace.get("capabilities") if isinstance(workspace, dict) else None
+    if not isinstance(capabilities, dict):
+        return None
+    value = capabilities.get(capability_id)
+    if not isinstance(value, dict) or not isinstance(value.get("state"), dict):
+        return None
+    try:
+        encoded = json.dumps(value.get("state"), separators=(",", ":"), ensure_ascii=True)
+    except (TypeError, ValueError):
+        return None
+    if len(encoded.encode("utf-8")) > 1_048_576:
+        return None
+    return value
+
+
 def _control_value(value: Any) -> str:
     """The string an owning parameter control holds for a recorded value.
 
@@ -564,6 +587,150 @@ def _within(path: str, root: str) -> bool:
         return False
 
 
+def _authoring(
+    form: dict[str, Any] | None,
+    builder_bindings: dict[str, tuple[Any, dict[str, Any]]] | None,
+    file_entities: list[dict[str, Any]],
+    *,
+    files_owned: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Describe recorded builder authoring state without carrying its document.
+
+    Only bounded compatibility metadata travels in a plan.  The native state is
+    resolved later over the dedicated authenticated authoring path, so a plan
+    URL, a shared page, or a visible result never exposes the source's editable
+    scientific document.
+    """
+    workspace = (form or {}).get("workspace") if isinstance(form, dict) else None
+    capabilities = workspace.get("capabilities") if isinstance(workspace, dict) else None
+    if not isinstance(capabilities, dict) or not builder_bindings:
+        return [], []
+    authoring: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    by_role: dict[str, list[dict[str, Any]]] = {}
+    for entity in file_entities:
+        if isinstance(entity.get("role"), str):
+            by_role.setdefault(str(entity["role"]), []).append(entity)
+    for capability_id, value in capabilities.items():
+        binding = builder_bindings.get(str(capability_id))
+        if binding is None:
+            if isinstance(value, dict) and value.get("builder"):
+                warnings.append(
+                    {
+                        "code": "authoring_capability_removed",
+                        "message": (
+                            "The source Task recorded builder state for a capability this Task no longer declares; "
+                            "re-author or upload the input."
+                        ),
+                        "field": str(capability_id),
+                    }
+                )
+            continue
+        descriptor, options = binding
+        recorded = value if isinstance(value, dict) else {}
+        item: dict[str, Any] = {
+            "capability_id": str(capability_id),
+            "builder": str(options.get("builder") or ""),
+            "target": str(options.get("target") or ""),
+            "builder_version": recorded.get("builder_version"),
+            "state_schema_version": recorded.get("state_schema_version"),
+            "revision": recorded.get("revision"),
+            "outputs": recorded.get("outputs") if isinstance(recorded.get("outputs"), list) else [],
+            "dependencies": [],
+            "state_available": False,
+            "compatible": False,
+            "reason": None,
+        }
+        reason: str | None = None
+        message = ""
+        if not files_owned:
+            # Seeing another user's shared result is not entitlement to their
+            # editable scientific document.
+            reason, message = (
+                "authoring_not_owner",
+                "The source Task belongs to another user; its editable authoring state is not available.",
+            )
+        elif recorded.get("version") != 1:
+            reason, message = "authoring_version_unsupported", "The recorded builder state version is not supported."
+        elif recorded.get("builder") != options.get("builder") or recorded.get("target") != options.get("target"):
+            reason, message = (
+                "authoring_binding_changed",
+                "This Task now declares a different builder or target; "
+                "the recorded authoring state was not carried over.",
+            )
+        elif (
+            descriptor is None
+            or recorded.get("builder_version") != descriptor.builder_version
+            or recorded.get("state_schema_version") != descriptor.state_schema_version
+        ):
+            reason, message = (
+                "authoring_incompatible",
+                "The recorded builder version differs from the current pinned builder; re-author the input.",
+            )
+        elif not isinstance(recorded.get("state"), dict):
+            reason, message = "authoring_state_invalid", "The recorded builder state is not a readable document."
+        elif recorded.get("dependencies"):
+            reason, message = (
+                "authoring_dependency_unsupported",
+                "The recorded builder state references supporting files this Task cannot stage.",
+            )
+        else:
+            outputs_map = options.get("outputs") if isinstance(options.get("outputs"), dict) else {}
+            outputs = item["outputs"]
+            if len(outputs) != len(outputs_map) or any(
+                not isinstance(output, dict)
+                or output.get("logical") not in outputs_map
+                or outputs_map.get(output.get("logical")) != output.get("role")
+                for output in outputs
+            ):
+                reason, message = (
+                    "authoring_binding_changed",
+                    "The recorded builder output no longer matches this Task's declared role mapping.",
+                )
+            else:
+                for output in outputs:
+                    role = str(output.get("role") or "")
+                    candidates = by_role.get(role, [])
+                    if len(candidates) != 1:
+                        reason, message = (
+                            "authoring_output_missing",
+                            "The source Task's recorded builder output is no longer available.",
+                        )
+                        break
+                    source_file = candidates[0]
+                    if (
+                        str(source_file.get("value") or "") != str(output.get("name") or "")
+                        or source_file.get("size") != output.get("size")
+                        or str(source_file.get("hash") or "").lower() != str(output.get("sha256") or "").lower()
+                    ):
+                        reason, message = (
+                            "authoring_output_mismatch",
+                            "The recorded builder output does not match the source Task's accepted input.",
+                        )
+                        break
+        item["state_available"] = reason is None
+        item["compatible"] = reason is None
+        item["reason"] = reason
+        if reason is None:
+            item["dependencies"] = [
+                {key: dependency[key] for key in ("id", "kind", "name", "size", "sha256") if key in dependency}
+                for dependency in recorded.get("dependencies") or []
+                if isinstance(dependency, dict)
+            ]
+        else:
+            warnings.append(
+                {
+                    "code": reason,
+                    "message": message,
+                    "field": str(capability_id),
+                }
+            )
+        authoring.append(item)
+    # Deterministic order: the capability ID the Task declared.
+    authoring.sort(key=lambda entry: entry["capability_id"])
+    return authoring, warnings
+
+
 def _source_execution_mode(form: dict[str, Any] | None) -> str | None:
     graph = (form or {}).get("execution_graph") if isinstance(form, dict) else None
     if not isinstance(graph, dict):
@@ -584,6 +751,7 @@ def build_plan(
     snapshot_root: str | None,
     access_granted: bool | None = None,
     submission_available: bool | None = None,
+    builder_bindings: dict[str, tuple[Any, dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Build the bounded, typed clone plan for one authorized source Task."""
     task_id = str(source.get("md5sum") or "")
@@ -615,6 +783,7 @@ def build_plan(
     blocked: list[dict[str, Any]] = []
     compatible: list[dict[str, Any]] = []
     reusable: list[dict[str, Any]] = []
+    authoring: list[dict[str, Any]] = []
 
     if form is None:
         warnings.append(
@@ -639,11 +808,26 @@ def build_plan(
         # plan's parameter section so a client has one list to render.
         workspace = form.get("workspace")
         capabilities = workspace.get("capabilities") if isinstance(workspace, dict) else None
-        if isinstance(capabilities, dict) and capabilities:
+        file_entities = [
+            entity
+            for entity in form.get("entities", [])
+            if isinstance(entity, dict) and entity.get("type") == "file"
+        ]
+        authoring, authoring_warnings = _authoring(
+            form, builder_bindings, file_entities, files_owned=files_owned
+        )
+        warnings.extend(authoring_warnings)
+        if isinstance(capabilities, dict) and set(capabilities) - {
+            str(key) for key, value in capabilities.items()
+            if isinstance(value, dict) and value.get("builder")
+        }:
             warnings.append(
                 {
                     "code": "workspace_state_not_reapplied",
-                    "message": "Runner-owned workspace selections are not carried over; re-select them in the draft.",
+                    "message": (
+                        "Workspace selections outside the recorded builder state are not carried over; "
+                        "re-select them in the draft."
+                    ),
                 }
             )
         source_mode = _source_execution_mode(form)
@@ -732,6 +916,7 @@ def build_plan(
         "target_schema_revision": revision,
         "compatible_parameters": compatible,
         "reusable_inputs": reusable,
+        "authoring": authoring,
         "warnings": warnings,
         "blocked_fields": blocked,
         "can_submit": False,

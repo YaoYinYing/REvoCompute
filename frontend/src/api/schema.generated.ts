@@ -1329,6 +1329,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/clone-plans/{plan_id}/authoring/{capability_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve one recorded Input Builder state for a clone draft
+         * @description Returns the bounded native authoring state and dependency metadata for exactly one capability, only to the caller who owns the plan. The source Task is re-read, so deletion, a visibility change, or an incompatible builder version is observed at read time. The returned state is never proof of scientific equivalence: the draft re-materializes it and the normal submission digest check remains authoritative.
+         */
+        get: operations["getCloneAuthoring"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/running/{task_id}": {
         parameters: {
             query?: never;
@@ -2842,6 +2862,7 @@ export interface components {
             /** @constant */
             version: 3;
             plugins: components["schemas"]["WorkspacePlugin"][];
+            builders?: components["schemas"]["WorkspaceBuilder"][];
             steps: {
                 id: string;
                 title: string;
@@ -2857,6 +2878,22 @@ export interface components {
             options: {
                 [key: string]: unknown;
             };
+        };
+        /** @description One registered Input Builder referenced by this Task, with this deployment's operational availability. Availability is a fact, not a manifest claim; ordinary upload remains when it is false. */
+        WorkspaceBuilder: {
+            id: string;
+            /** @description null for a deployment-owned shared builder; otherwise the runner family. */
+            owner: string | null;
+            api_version: number;
+            builder_version: number;
+            state_schema_version: number;
+            targets: {
+                [key: string]: string;
+            };
+            adapter: string;
+            available: boolean;
+            editor_path?: string;
+            adapter_path?: string;
         };
         WorkspacePlugin: {
             id: string;
@@ -3840,6 +3877,27 @@ export interface components {
             reuse: "reupload_required";
             files: components["schemas"]["CloneInputFile"][];
         };
+        CloneAuthoringOutput: {
+            logical: string;
+            role: string;
+            name?: string;
+            size?: number;
+            sha256?: string;
+        };
+        /** @description Bounded compatibility metadata for one recorded Input Builder state. The native document is not carried here; it is resolved over the owner-scoped authoring path. */
+        CloneAuthoring: {
+            capability_id: string;
+            builder: string;
+            target: string;
+            builder_version?: number | null;
+            state_schema_version?: number | null;
+            revision?: number | null;
+            state_available: boolean;
+            compatible: boolean;
+            reason?: string | null;
+            outputs: components["schemas"]["CloneAuthoringOutput"][];
+            dependencies: Record<string, never>[];
+        };
         CloneFinding: {
             /** @description Stable machine-readable reason; clients localize their own copy. */
             code: string;
@@ -3859,6 +3917,7 @@ export interface components {
             target_schema_revision: string | null;
             compatible_parameters: components["schemas"]["CloneParameter"][];
             reusable_inputs: components["schemas"]["CloneInputRole"][];
+            authoring: components["schemas"]["CloneAuthoring"][];
             warnings: components["schemas"]["CloneFinding"][];
             blocked_fields: components["schemas"]["CloneFinding"][];
             /** @constant */
@@ -3878,6 +3937,7 @@ export interface components {
             target_schema_revision: string | null;
             compatible_parameters: components["schemas"]["CloneParameter"][];
             reusable_inputs: components["schemas"]["CloneInputRole"][];
+            authoring: components["schemas"]["CloneAuthoring"][];
             warnings: components["schemas"]["CloneFinding"][];
             blocked_fields: components["schemas"]["CloneFinding"][];
             /** @constant */
@@ -6171,6 +6231,49 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             /** @description Reference expired, unavailable, or its source is no longer visible */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getCloneAuthoring: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plan_id: string;
+                capability_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recorded authoring state for that capability */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Plan, source, or recorded state unavailable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Recorded state is incompatible with the current Task contract */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

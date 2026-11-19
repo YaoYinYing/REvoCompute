@@ -104,6 +104,9 @@ export class CreateTask {
   private cloneRendered: Record<string, string> | null = null;
   private readonly cloneResolved = new Set<string>();
   private readonly cloneEdited = new Set<string>();
+  /** A recorded builder state is being re-materialized into this draft. */
+  private cloneRestoring = false;
+  private cloneAuthoringError: string | null = null;
   private applyingClone = false;
   // Lifts the sticky submit rail above a mobile virtual keyboard. Registered
   // with the route's lifetime: leaving the view must not leave a listener that
@@ -315,7 +318,10 @@ export class CreateTask {
       if (generation !== this.generation) return;
       // One preset, applied once, before the reader can have edited anything.
       // A later fetch never applies a second time.
-      if (plan && plan.target_task_type === definition.name) this.applyClone(plan);
+      if (plan && plan.target_task_type === definition.name) {
+        this.applyClone(plan);
+        await this.restoreCloneAuthoring(plan);
+      }
       if (generation !== this.generation) return;
       if (this.status.classList.contains('busy')) this.setStatus('');
       this.refreshValidation(); window.scrollTo({ top: 0, behavior: 'auto' });
@@ -414,6 +420,8 @@ export class CreateTask {
     // now shown, so an incompatible mode or seed can never be swapped in
     // silently.
     this.cloneConflicts().forEach(conflict => errors.push(t('ct.clone.unresolved', { field: conflict.label })));
+    if (this.cloneRestoring) errors.push(t('ct.clone.restoring'));
+    if (this.cloneAuthoringError) errors.push(this.cloneAuthoringError);
     const access = this.definition.access;
     if (access.restricted && !access.granted) errors.push(access.request_status === 'pending' ? t('ct.access.pending') : t('ct.access.required'));
     const preflight = this.preflight;
@@ -488,6 +496,35 @@ export class CreateTask {
     history.replaceState(null, '', url);
   }
 
+  /**
+   * Rebuild each compatible builder input from the plan's recorded native state.
+   *
+   * The state is fetched per capability over the authenticated authoring path;
+   * a failed restore is stated and leaves ordinary upload as the fallback.  A
+   * re-materialized output whose digest differs from the source is kept but
+   * labelled as a changed input, never silently called the same one.
+   */
+  private async restoreCloneAuthoring(plan: ClonePlan): Promise<void> {
+    const entries = plan.authoring.filter(entry => entry.compatible && entry.state_available);
+    if (!entries.length) return;
+    this.cloneRestoring = true;
+    this.cloneAuthoringError = null;
+    this.refreshValidation();
+    this.setStatus(t('ct.clone.restoring'), 'busy');
+    try {
+      await this.workspace.restoreAuthoring(plan.plan_id, entries);
+    } catch (error) {
+      this.cloneAuthoringError = t('ct.clone.authoringFailed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.cloneRestoring = false;
+      this.refreshValidation();
+      this.setStatus(this.cloneAuthoringError ?? t('ct.clone.authoringRestored'), this.cloneAuthoringError ? 'error' : 'ok');
+      if (!this.cloneAuthoringError) this.renderClone();
+    }
+  }
+
   /** The blocked parameters the reader has not resolved yet, in form order. */
   private cloneConflicts(): CloneConflict[] {
     const definition = this.definition; const plan = this.clonePlan;
@@ -555,6 +592,8 @@ export class CreateTask {
     this.cloneEdited.clear();
     this.clonePanel?.remove();
     this.clonePanel = null;
+    this.cloneRestoring = false;
+    this.cloneAuthoringError = null;
   }
 
   /**

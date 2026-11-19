@@ -27,6 +27,7 @@ from revocompute import resource_model as rm
 from revocompute import runtime_bundle as rb
 from revocompute.access_control import AccessPolicy, load_policy_documents, resolve_policy
 from revocompute.citations import Citation, load_citations
+from revocompute.input_builders import BuilderDescriptor, SHARED_BUILDERS, validate_capability_options
 from revocompute.io_contracts import NamedFileRole, load_named_file_roles
 from revocompute.placement import AcceleratorRequirement
 from revocompute.resource_policy import ResourceValidationError
@@ -779,6 +780,12 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             owner_plugin_ids.update(
                 descriptor.id for descriptor in manager.workspace_plugins() if descriptor.owner == workspace_owner
             )
+            # Shared builders are deployment-owned; a runner may additionally
+            # contribute its own.  A Task can only name a builder visible to it.
+            owner_builders = dict(SHARED_BUILDERS)
+            owner_builders.update(
+                {item.id: item for item in manager.input_builders() if item.owner == workspace_owner}
+            )
             task_inputs = _load_task_inputs(raw.get("inputs"), schema, task_id)
             workflow = _load_workflow(raw.get("workflow"), task_id, dict(raw.get("stage_markers", {})))
             if workflow and raw.get("gpus") and not any(stage.requires_gpu for stage in workflow):
@@ -812,6 +819,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 input_workspace=_load_input_workspace(
                     raw.get("input_workspace"), capability_schemas=owner_schemas,
                     plugin_ids=owner_plugin_ids, workspace_owner=workspace_owner, input_roles=task_inputs,
+                    builders=owner_builders,
                 ) if "input_workspace" in raw else (),
                 result_workspace=_load_result_workspace(raw.get("result_workspace")) if "result_workspace" in raw else (),
                 citations=load_citations(raw.get("citations"), task_id),
@@ -868,6 +876,9 @@ _INPUT_CAPABILITY_PLUGINS = {
     # Frontend builtin: a pinned third-party serializer that binds generated
     # content to a declared input role. The Server still owns role validation.
     "jaag-builder",
+    # Generic adapter host for a registered Input Builder (BioNuTA, AtomWorks
+    # Studio, ...). The builder and its logical-output mapping are declarative.
+    "input-builder",
 }
 _INPUT_CAPABILITY_OPTION_KEYS = {
     "files": {"primary_role"},
@@ -877,6 +888,7 @@ _INPUT_CAPABILITY_OPTION_KEYS = {
     "parameters": set(),
     "review": {"show_paths"},
     "jaag-builder": {"role", "target"},
+    "input-builder": {"builder", "target", "outputs", "exclusive"},
 }
 
 _RESULT_VIEW_SOURCE_KEYS = {
@@ -1057,6 +1069,22 @@ def workspace_plugin_descriptor(identifier: str, *, owner: str | None = None):
     return manager.workspace_plugin(identifier, owner=owner) if manager is not None else None
 
 
+def input_builder_descriptor(identifier: str, *, owner: str | None = None):
+    """Resolve a deployment-owned or runner-contributed Input Builder."""
+    from revocompute.input_builders import resolve_builder
+
+    return resolve_builder(identifier, owner=owner, manager=_active().plugin_manager)
+
+
+def input_builders_for(owner: str | None) -> tuple[BuilderDescriptor, ...]:
+    """Every builder a Task owned by ``owner`` may name, in stable ID order."""
+    manager = _active().plugin_manager
+    builders = dict(SHARED_BUILDERS)
+    if manager is not None:
+        builders.update({item.id: item for item in manager.input_builders() if item.owner == owner})
+    return tuple(builders[key] for key in sorted(builders))
+
+
 def workspace_backend(identifier: str, *, owner: str | None = None):
     """Resolve a runner-owned workspace backend from the active plugin graph."""
     manager = _active().plugin_manager
@@ -1076,6 +1104,7 @@ def _required_text(value: Any, field_name: str) -> str:
 def _load_input_capability(
     entry: Any, seen_ids: set[str], *, capability_schemas: dict[str, dict[str, Any]] | None = None,
     plugin_ids: set[str] | None = None, workspace_owner: str | None = None,
+    builders: dict[str, BuilderDescriptor] | None = None, input_roles: tuple[Any, ...] = (),
 ) -> InputCapability:
     if not isinstance(entry, dict):
         raise ValueError("Each input workspace capability must be a mapping")
@@ -1102,6 +1131,18 @@ def _load_input_capability(
     unknown_options = set(options) - allowed_options
     if unknown_options:
         raise ValueError(f"Unknown options for input workspace plugin {plugin!r}: {sorted(unknown_options)}")
+    if local_plugin == "input-builder":
+        # The Task declares which registered builder authors which declared
+        # role.  Unknown builders, invalid targets and role/format mismatches
+        # are contract errors, never deferred to a browser.
+        try:
+            validate_capability_options(
+                options,
+                builder=(builders or {}).get(str(options.get("builder"))),
+                roles={role.name: role for role in input_roles},
+            )
+        except ValueError as exc:
+            raise ValueError(f"Input builder capability {capability_id!r}: {exc}") from exc
     seen_ids.add(capability_id)
     return InputCapability(
         plugin=(f"{workspace_owner}:{local_plugin}" if workspace_owner and local_plugin not in _INPUT_CAPABILITY_PLUGINS else local_plugin),
@@ -1116,6 +1157,7 @@ def _load_input_workspace(
     raw: Any, *, capability_schemas: dict[str, dict[str, Any]] | None = None,
     plugin_ids: set[str] | None = None, workspace_owner: str | None = None,
     input_roles: tuple[TaskInputRole, ...] = (),
+    builders: dict[str, BuilderDescriptor] | None = None,
 ) -> tuple[InputStep, ...]:
     if raw is None:
         raise ValueError("Every task type must declare input_workspace")
@@ -1146,6 +1188,7 @@ def _load_input_workspace(
                     _load_input_capability(
                         item, capability_ids, capability_schemas=capability_schemas,
                         plugin_ids=plugin_ids, workspace_owner=workspace_owner,
+                        builders=builders, input_roles=input_roles,
                     )
                     for item in raw_capabilities
                 ),
@@ -1158,6 +1201,19 @@ def _load_input_workspace(
         raise ValueError("The last input workspace capability must be review")
     known_ids = {capability.id for capability in capabilities}
     roles_by_name = {role.name: role for role in input_roles}
+    # One builder owns one declared role.  Two builders writing the same role
+    # would race, and the last mount would silently destroy the other's input.
+    builder_roles: dict[str, str] = {}
+    for capability in capabilities:
+        if capability.plugin.split(":", 1)[-1] != "input-builder":
+            continue
+        for role_name in (capability.options.get("outputs") or {}).values():
+            owner = builder_roles.setdefault(str(role_name), capability.id)
+            if owner != capability.id:
+                raise ValueError(
+                    f"Input role {role_name!r} is claimed by both builder capabilities {owner!r} "
+                    f"and {capability.id!r}"
+                )
     for capability in capabilities:
         source = capability.options.get("source")
         if source and source not in known_ids:

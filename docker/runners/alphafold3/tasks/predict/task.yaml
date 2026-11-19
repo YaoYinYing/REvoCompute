@@ -98,6 +98,17 @@ input_workspace:
     - plugin: files
       id: source_files
       title: AlphaFold 3 JSON input
+    - plugin: input-builder
+      id: bionuta_builder
+      title: Build with BioNuTA
+      description: Assemble an AlphaFold 3 JSON input in the shared BioNuTA workbench,
+        or upload a prepared document above. Generating binds the JSON to the specification
+        role; a later upload through the file field replaces it.
+      options:
+        builder: bionuta
+        target: alphafold3
+        outputs:
+          input: specification
   - id: review
     title: Review and run
     description: Check the uploaded JSON before creating the task snapshot.

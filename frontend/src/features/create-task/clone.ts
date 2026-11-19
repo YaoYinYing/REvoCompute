@@ -3,6 +3,7 @@ import { t } from '../../app/i18n';
 import type { WorkspacePreset } from './input-workspace/InputWorkspace';
 
 export type ClonePlan = components['schemas']['ClonePlanResponse'];
+export type CloneAuthoring = components['schemas']['CloneAuthoring'];
 type CloneFinding = components['schemas']['CloneFinding'];
 type CloneInputRole = components['schemas']['CloneInputRole'];
 
@@ -164,6 +165,20 @@ export function renderClonePanel(plan: ClonePlan, actions: ClonePanelActions = {
       list.append(row);
     });
     panel.append(node('p', 'ct-clone-label', t('ct.clone.parameters')), list);
+  }
+
+  if (plan.authoring.length) {
+    const list = node('ul', 'ct-clone-authoring');
+    plan.authoring.forEach(entry => {
+      const row = node('li');
+      row.append(node('strong', '', entry.builder), node('span', '', ` · ${entry.target}`));
+      const detail = entry.compatible && entry.state_available
+        ? t('ct.clone.authoringRestores', { revision: String(entry.revision ?? '') })
+        : t('ct.clone.authoringUnavailable');
+      row.append(node('small', '', detail));
+      list.append(row);
+    });
+    panel.append(node('p', 'ct-clone-label', t('ct.clone.authoring')), list);
   }
 
   const roles = plan.reusable_inputs.filter(role => role.files.length || role.required);

@@ -1,0 +1,35 @@
+{
+  "component": "BioNuTA molecular input workbench and host adapter",
+  "repository": "https://github.com/YaoYinYing/JAAG",
+  "commit": "ec61f0e81566f9c6271d7693058cc644589c024e",
+  "license": "Apache-2.0",
+  "copyright": "Copyright (c) 2025 University of Georgia",
+  "tree_sha256": "f1a2a53e3e4a5f7ea0ef64bbe0e109d0930ecfdf0d548c58d7f92e64ad9ba076",
+  "file_count": 188,
+  "bytes": 4557287,
+  "include_files": [
+    "index.html",
+    "styles.css",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES",
+    "README.md",
+    "sugardrawer/LICENSE",
+    "sugardrawer/NOTICE"
+  ],
+  "include_prefixes": [
+    "js/",
+    "shared/",
+    "dist/",
+    "vendor/",
+    "integration/input-builder/",
+    "sugardrawer/image/"
+  ],
+  "tree_digest_rule": "sha256 over sorted files of relpath NUL byte-length NUL sha256(contents) newline",
+  "distribution": "Fetched at deploy/build time by tools/fetch_bionuta_assets.py from the pinned commit and verified against tree_sha256; not committed to the repository.",
+  "limitations": [
+    "SugarDrawer's dist/index.html is an upstream build artifact and is not present in the pinned source tree; glycan drawing stays unavailable unless the deployment stages that built directory itself.",
+    "The optional UniProt and external glycan lookups are not reachable through the deployment CSP, which permits only this origin.",
+    "The workbench is served same-origin; the embedding iframe is not a security sandbox."
+  ]
+}
