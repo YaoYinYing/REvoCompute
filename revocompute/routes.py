@@ -816,6 +816,9 @@ def bionuta_asset(asset: str):
         abort(404)
     response = send_from_directory(root, requested, conditional=True)
     response.headers["Content-Security-Policy"] = _BIONUTA_CSP
+    # The workbench is iframed by Create Task on this origin; the app-wide
+    # DENY default would contradict frame-ancestors for older engines.
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
     response.headers["X-Content-Type-Options"] = "nosniff"
     # The tree is content-pinned by commit and digest; a short private cache
@@ -891,11 +894,13 @@ def atomworks_editor(asset: str = ""):
     response = _atomworks_proxy_response(result)
     # The proxied shell is framed by the Create Task page on this same origin.
     response.headers["Content-Security-Policy"] = "frame-ancestors 'self'"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
     return response
 
 
 @app.route("/api/<path:path>", methods=["GET", "POST", "DELETE", "PUT", "PATCH"])
 @login_required
+@rate_limit(max_requests=120, window_seconds=60)
 def atomworks_api(path: str):
     """Owner-scoped gateway for the editor's small, explicit HTTP surface."""
     base = _atomworks_base()
@@ -1532,8 +1537,9 @@ def _input_builder_available(builder) -> bool:
     if builder.adapter == "atomworks":
         # Guests share one account, so a per-user session binding cannot keep
         # two anonymous visitors apart.  The builder stays off for them rather
-        # than presenting an editor the gateway will refuse.
-        if g.get("current_user", {}).get("role") == "guest":
+        # than presenting an editor the gateway will refuse.  Anonymous task
+        # detail requests set `current_user` to None.
+        if (g.get("current_user") or {}).get("role") == "guest":
             return False
         return bool(getattr(CONFIG, "atomworks_studio_url", ""))
     return False

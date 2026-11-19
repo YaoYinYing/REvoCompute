@@ -176,7 +176,7 @@ The workbench is third-party Apache-2.0 code and is not committed. Stage the
 pinned commit before starting the server:
 
 ```bash
-python tools/fetch_bionuta_assets.py
+python tools/fetch_bionuta_assets.py --destination "$SERVER_DIR/vendor/bionuta"
 ```
 
 The tool downloads the exact commit archive, extracts only an explicit
@@ -184,7 +184,9 @@ allowlist of static files, and verifies `frontend/provenance/bionuta.json`
 (`tree_sha256`, file count, bytes) before swapping the tree into place. It
 never builds or executes anything from the archive.
 
-- Default tree: `<SERVER_DIR>/vendor/bionuta` (`REVOCOMPUTE_BIONUTA_ROOT`).
+- The server reads `<SERVER_DIR>/vendor/bionuta` (`REVOCOMPUTE_BIONUTA_ROOT`).
+  The fetch tool stages into the checkout's `vendor/bionuta` by default, so a
+  deployment must pass `--destination` as shown above.
 - Served same-origin at `/compute/bionuta/<asset>` behind login.
 - The response CSP permits only this origin for scripts, styles, frames and
   data (`connect-src 'self'`), so optional external UniProt/glycan lookups are

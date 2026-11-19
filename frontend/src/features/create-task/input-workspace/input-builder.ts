@@ -90,7 +90,9 @@ const inputBuilder: WorkspacePlugin = {
     const editorHost = element('div', 'ct-builder-editor');
     editorHost.hidden = true;
     const status = element('p', 'muted');
+    status.setAttribute('role', 'status');
     const error = element('p', 'param-error');
+    error.setAttribute('role', 'alert');
     error.hidden = true;
     const actions = element('div', 'ct-actions');
     const apply = element('button', 'btn btn-soft', t('ct.builder.apply'));
@@ -190,7 +192,8 @@ const inputBuilder: WorkspacePlugin = {
       if (adapter) return adapter;
       if (opening) return opening;
       const current = epoch;
-      opening = (async () => {
+      let pendingMount!: Promise<BuilderAdapterInstance | null>;
+      pendingMount = (async () => {
         const factory = builderAdapters[builder.adapter];
         if (!factory) throw new BuilderUnavailableError(t('ct.builder.unavailable'));
         status.textContent = t('ct.builder.opening');
@@ -202,6 +205,7 @@ const inputBuilder: WorkspacePlugin = {
         // Switching back to Upload detaches the host while the mount may still
         // be running; that mount must not install itself afterwards.
         if (destroyed || current !== epoch) { mounted.destroy(); return null; }
+        if (adapter) { mounted.destroy(); return adapter; }
         adapter = mounted;
         unsubscribe = mounted.subscribe(invalidate);
         status.textContent = t('ct.builder.ready');
@@ -210,8 +214,13 @@ const inputBuilder: WorkspacePlugin = {
         setError(errorValue instanceof Error ? errorValue.message : String(errorValue));
         status.textContent = '';
         return null;
-      }).finally(() => { opening = null; });
-      return opening;
+      }).finally(() => {
+        // Only the current mount may clear the slot: a superseded mount must
+        // not let a newer in-flight mount be started twice.
+        if (opening === pendingMount) opening = null;
+      });
+      opening = pendingMount;
+      return pendingMount;
     };
 
     const bind = async (state: BuilderAdapterInstance, recorded: WorkspaceAuthoringEntry | null): Promise<void> => {

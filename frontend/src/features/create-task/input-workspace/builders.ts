@@ -204,7 +204,7 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
     section.className = 'ct-atomworks';
     const label = document.createElement('label');
     label.className = 'ct-label';
-    label.textContent = 'Starting CIF';
+    label.textContent = t('ct.builder.atomworksStartingCif');
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.cif,.mmcif';
@@ -212,9 +212,10 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'btn btn-soft';
-    open.textContent = 'Open AtomWorks Studio';
+    open.textContent = t('ct.builder.atomworksOpen');
     const status = document.createElement('p');
     status.className = 'muted';
+    status.setAttribute('role', 'status');
     const frameHost = document.createElement('div');
     frameHost.className = 'ct-atomworks-frame';
     section.append(label, open, status, frameHost);
@@ -222,11 +223,11 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
     open.addEventListener('click', () => {
       const file = input.files?.[0];
       if (!file) {
-        status.textContent = 'Choose a starting CIF first.';
+        status.textContent = t('ct.builder.atomworksChooseCif');
         return;
       }
       open.disabled = true;
-      status.textContent = 'Opening the editor…';
+      status.textContent = t('ct.builder.opening');
       void this.open(file, frameHost, status).catch(error => {
         open.disabled = false;
         status.textContent = error instanceof Error ? error.message : String(error);
@@ -251,7 +252,7 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
     this.sessionId = created.session_id;
     this.revision = 0;
     const frame = document.createElement('iframe');
-    frame.title = 'AtomWorks Studio annotated CIF editor';
+    frame.title = t('ct.builder.atomworksFrame');
     // The editor only posts `changed`/`ready` to its parent when told the
     // trusted parent origin.  Without it, edits would not invalidate a capture.
     const editorUrl = new URL(created.editor_path, window.location.origin);
@@ -261,7 +262,7 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
     frame.style.width = '100%';
     frame.style.minHeight = '640px';
     frame.style.border = '0';
-    frame.addEventListener('load', () => { status.textContent = 'Editor ready. Apply captures the current annotated snapshot.'; });
+    frame.addEventListener('load', () => { status.textContent = t('ct.builder.atomworksReady'); });
     host.append(frame);
     this.frame = frame;
   }
@@ -288,7 +289,7 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
     });
     if (response.status === 404) {
       await this.closeSession();
-      throw new Error('The editor session expired. Re-open the structure and apply again.');
+      throw new Error(t('ct.builder.atomworksSessionExpired'));
     }
     if (!response.ok) throw new Error(`AtomWorks Studio export failed (HTTP ${response.status}).`);
     const exported = await response.json() as {
@@ -296,7 +297,7 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
       issues?: Array<{ severity?: string; message?: string }>;
     };
     if (typeof exported.cif !== 'string' || !exported.cif.trim()) {
-      throw new Error('AtomWorks Studio exported no annotated CIF.');
+      throw new Error(t('ct.builder.atomworksExportEmpty'));
     }
     const bytes = new TextEncoder().encode(exported.cif);
     const errors = (exported.issues || []).filter(issue => issue.severity === 'error').map(issue => issue.message || 'Invalid annotated CIF');
@@ -322,7 +323,7 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
     if (typeof cif !== 'string' || !cif.trim()) throw new Error('The recorded AtomWorks state carries no annotated CIF.');
     const host = this.container.querySelector<HTMLElement>('.ct-atomworks-frame');
     const status = this.container.querySelector<HTMLElement>('.muted');
-    if (!host || !status) throw new Error('The AtomWorks editor is unavailable.');
+    if (!host || !status) throw new Error(t('ct.builder.atomworksUnavailable'));
     await this.open(cif, host, status);
   }
 

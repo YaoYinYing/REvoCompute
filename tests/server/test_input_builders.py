@@ -150,6 +150,18 @@ def test_envelope_rejects_a_stale_builder_version():
     assert error.value.code == "builder_version_mismatch"
 
 
+@pytest.mark.parametrize("logical", [["input"], {"name": "input"}])
+def test_envelope_rejects_a_non_string_logical_output(logical):
+    with pytest.raises(BuilderValidationError) as error:
+        validate_envelope(
+            _capability(),
+            _envelope(outputs=[{**_envelope()["outputs"][0], "logical": logical}]),
+            _saved(),
+            builder=BIONUTA,
+        )
+    assert error.value.code == "builder_output_invalid"
+
+
 def test_envelope_rejects_an_extra_file_in_a_builder_owned_role():
     with pytest.raises(BuilderValidationError, match="only accepted file"):
         validate_envelope(
@@ -195,6 +207,10 @@ def test_contribution_descriptor_validates_identity_and_targets():
         owner="synthetic_runner",
     )
     assert descriptor.global_id == "synthetic_runner:atomworks"
+    with pytest.raises(ValueError, match="api_version is not supported"):
+        BuilderDescriptor.from_contribution(
+            "x", {"api_version": 2, "targets": {"af3": "json"}}, owner="synthetic_runner"
+        )
     with pytest.raises(ValueError):
         BuilderDescriptor.from_contribution("x", {"targets": {}}, owner="synthetic_runner")
     with pytest.raises(ValueError):

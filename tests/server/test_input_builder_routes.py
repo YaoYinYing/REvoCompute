@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+from types import SimpleNamespace
 
 from conftest import _load_pssm_module, _test_client_auth
 from revocompute import atomworks
@@ -33,6 +34,7 @@ def test_bionuta_assets_require_login_are_same_origin_and_refuse_traversal(monke
     policy = served.headers["Content-Security-Policy"]
     assert "connect-src 'self'" in policy and "frame-ancestors 'self'" in policy
     assert served.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+    assert served.headers["X-Frame-Options"] == "SAMEORIGIN"
     assert served.headers["X-Content-Type-Options"] == "nosniff"
     adapter = client.get("/compute/bionuta/integration/input-builder/index.mjs", headers=auth)
     assert adapter.status_code == 200
@@ -140,6 +142,21 @@ def test_atomworks_gateway_refuses_the_shared_guest_account(monkeypatch, tmp_pat
     assert client.get("/api/health", headers=headers).status_code == 403
     assert client.get("/compute/atomworks/", headers=headers).status_code == 403
     assert called == []
+
+
+def test_anonymous_task_detail_does_not_crash_on_an_atomworks_builder(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path,
+        extra_env={"REVOCOMPUTE_ATOMWORKS_STUDIO_URL": None, "RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    from revocompute import routes
+    from flask import g
+
+    monkeypatch.setattr(routes, "CONFIG", module.CONFIG)
+    with module.app.test_request_context("/compute/api/types/builder_runner"):
+        # `optional_user` leaves an anonymous request with no current user.
+        g.current_user = None
+        assert routes._input_builder_available(SimpleNamespace(adapter="atomworks")) is False
 
 
 def test_atomworks_gateway_is_absent_without_a_configured_service(monkeypatch, tmp_path):

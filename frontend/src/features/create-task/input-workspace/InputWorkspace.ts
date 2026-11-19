@@ -299,7 +299,10 @@ export class InputWorkspace {
    */
   async restoreAuthoring(planId: string, entries: WorkspaceAuthoringEntry[]): Promise<void> {
     await this.host.restoreAuthoring(entries, async capabilityId => {
-      const response = await getCloneAuthoring(planId, capabilityId);
+      // A stalled authoring fetch must not leave the clone draft permanently
+      // blocked; after this bound the restore is reported as failed and the
+      // ordinary upload path is available.
+      const response = await getCloneAuthoring(planId, capabilityId, AbortSignal.timeout(30_000));
       return response.state;
     });
   }

@@ -80,8 +80,13 @@ export const createClonePlan = (taskId: string): Promise<ClonePlan> =>
 export const getClonePlan = (planId: string, signal?: AbortSignal): Promise<ClonePlan> =>
   requestJson<ClonePlan>(`/compute/api/clone-plans/${encodeURIComponent(planId)}`, { signal });
 /** Resolve one recorded builder state for an owned clone plan. */
-export const getCloneAuthoring = (planId: string, capabilityId: string): Promise<{ state: unknown }> =>
-  authorizedJson(`/compute/api/clone-plans/${encodeURIComponent(planId)}/authoring/${encodeURIComponent(capabilityId)}`);
+export const getCloneAuthoring = (
+  planId: string, capabilityId: string, signal?: AbortSignal,
+): Promise<{ state: unknown }> =>
+  authorizedJson(
+    `/compute/api/clone-plans/${encodeURIComponent(planId)}/authoring/${encodeURIComponent(capabilityId)}`,
+    { signal },
+  );
 
 export async function login(username: string, password: string): Promise<components['schemas']['LoginResponse']> {
   const response = await jsonRequest<components['schemas']['LoginResponse']>('/compute/api/auth/login', { username, password });

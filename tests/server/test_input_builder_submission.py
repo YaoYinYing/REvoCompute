@@ -75,6 +75,30 @@ def test_submission_persists_the_verified_builder_envelope(monkeypatch, tmp_path
     assert form["workspace"]["capabilities"]["bionuta_builder"]["outputs"][0]["sha256"] == DIGEST
 
 
+def test_clone_authoring_is_owner_scoped_and_returns_the_recorded_state(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    auth = _test_client_auth(module)
+    other = _test_client_auth(module, "other")
+
+    submitted = _submit(client, auth, _workspace())
+    assert submitted.status_code == 302
+    task_id = submitted.headers["Location"].rstrip("/").rsplit("/", 1)[-1]
+    plan = client.post(f"/compute/api/tasks/{task_id}/clone-plan", headers=auth).get_json()
+    assert plan["authoring"][0]["capability_id"] == "bionuta_builder"
+    assert plan["authoring"][0]["state_available"] is True
+
+    own = client.get(
+        f"/compute/api/clone-plans/{plan['plan_id']}/authoring/bionuta_builder", headers=auth
+    )
+    assert own.status_code == 200
+    assert own.get_json()["state"]["document"]["job"]["entities"] == []
+    assert own.headers["Cache-Control"] == "private, no-store"
+    assert client.get(
+        f"/compute/api/clone-plans/{plan['plan_id']}/authoring/bionuta_builder", headers=other
+    ).status_code == 404
+
+
 def test_submission_rejects_a_stale_digest_and_commits_nothing(monkeypatch, tmp_path):
     module = _module(monkeypatch, tmp_path)
     client = module.app.test_client()

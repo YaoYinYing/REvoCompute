@@ -23,6 +23,8 @@ from typing import Any, Mapping
 
 #: The one envelope version this deployment understands.
 ENVELOPE_VERSION = 1
+#: The upstream adapter API version this Core implements.
+BUILDER_API_VERSION = 1
 #: Bound on one capability's opaque authoring state.  The whole workspace
 #: document is itself capped at 1 MiB, so this leaves room for the envelope and
 #: other capabilities; it is deliberately reachable rather than shadowed by the
@@ -91,6 +93,10 @@ class BuilderDescriptor:
         api_version = raw.get("api_version", 1)
         if not isinstance(api_version, int) or isinstance(api_version, bool) or api_version < 1:
             raise ValueError(f"Input builder {identifier!r} api_version must be a positive integer")
+        if api_version != BUILDER_API_VERSION:
+            # The adapter contract this Core implements is version 1; accepting
+            # another number would claim compatibility it cannot provide.
+            raise ValueError(f"Input builder {identifier!r} api_version is not supported")
         builder_version = raw.get("builder_version", 1)
         if not isinstance(builder_version, int) or isinstance(builder_version, bool) or builder_version < 1:
             raise ValueError(f"Input builder {identifier!r} builder_version must be a positive integer")
@@ -323,6 +329,10 @@ def validate_envelope(
             raise BuilderValidationError("builder_output_invalid", "Builder output binding is malformed.")
         logical = output.get("logical")
         role = output.get("role")
+        if not isinstance(logical, str) or not isinstance(role, str):
+            # `logical` is used as a dict key below; a JSON array/object here
+            # would otherwise raise instead of producing a validation error.
+            raise BuilderValidationError("builder_output_invalid", "Builder output binding is malformed.")
         if logical not in outputs_map or outputs_map[logical] != role:
             raise BuilderValidationError(
                 "builder_output_unbound", "A builder output does not match this capability's logical role mapping."
