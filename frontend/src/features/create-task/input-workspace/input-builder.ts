@@ -356,7 +356,7 @@ const inputBuilder: WorkspacePlugin = {
           if (restoreError) errors.push(restoreError);
           if (canBuild && !envelope) errors.push(t('ct.builder.applyRequired'));
         }
-        if (exclusive && context.roleFiles(role).length) {
+        if (exclusive && ownsRole()) {
           const extra = otherRoles.filter(item => context.roleFiles(item.id).length);
           if (extra.length) errors.push(t('ct.builder.exclusive', { roles: extra.map(item => item.title).join(', ') }));
         }

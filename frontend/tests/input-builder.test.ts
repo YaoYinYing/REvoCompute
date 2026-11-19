@@ -200,6 +200,69 @@ describe('generic Input Builder capability', () => {
     expect(errors.join(' ')).toContain('self-contained');
   });
 
+  it('releases exclusivity when an independent upload takes the role back', async () => {
+    installHarness(vi.stubGlobal);
+    installFake();
+    const files = new Map<string, File[]>();
+    const value = form([{ id: 'condition', title: 'Condition' }, { id: 'scaffold', title: 'Scaffold' }]);
+    const definition = {
+      ...value.input_workspace.steps[0]!.capabilities[1]!,
+      options: { builder: 'synthetic', target: 'af3', outputs: { input: 'condition' }, exclusive: true },
+    };
+    const target = new HarnessNode('DIV');
+    const instance = inputBuilder.mount(target as unknown as HTMLElement, definition as never, context(value, files), { fetch: async () => new Response('') }) as WorkspacePluginInstance;
+    findByText(target, 'Build input')!.dispatch('click', new Event('click'));
+    await tick();
+    findByText(target, 'Apply builder output')!.dispatch('click', new Event('click'));
+    await waitFor(() => expect(files.get('condition')?.length).toBe(1));
+    files.set('scaffold', [new File(['data_x'], 'scaffold.cif')]);
+    expect((instance.validate!() as string[]).join(' ')).toContain('self-contained');
+
+    const manual = new File(['{"condition":true}'], 'condition.json', { type: 'application/json' });
+    files.set('condition', [manual]);
+    instance.refresh!();
+    expect(files.get('condition')).toEqual([manual]);
+    expect(instance.readValue!()).toBeUndefined();
+    expect(instance.validate!()).toEqual([]);
+  });
+
+  it('allows an independently uploaded condition and scaffold in upload mode', () => {
+    installHarness(vi.stubGlobal);
+    const files = new Map<string, File[]>([
+      ['condition', [new File(['{"condition":true}'], 'condition.json', { type: 'application/json' })]],
+      ['scaffold', [new File(['data_x'], 'scaffold.cif')]],
+    ]);
+    const value = form([{ id: 'condition', title: 'Condition' }, { id: 'scaffold', title: 'Scaffold' }]);
+    const definition = {
+      ...value.input_workspace.steps[0]!.capabilities[1]!,
+      options: { builder: 'synthetic', target: 'af3', outputs: { input: 'condition' }, exclusive: true },
+    };
+    const target = new HarnessNode('DIV');
+    const instance = inputBuilder.mount(
+      target as unknown as HTMLElement, definition as never, context(value, files), { fetch: async () => new Response('') },
+    ) as WorkspacePluginInstance;
+    expect(instance.validate!()).toEqual([]);
+  });
+
+  it('keeps the manual two-file path when the exclusive builder is unavailable', () => {
+    installHarness(vi.stubGlobal);
+    const files = new Map<string, File[]>([
+      ['condition', [new File(['{"condition":true}'], 'condition.json', { type: 'application/json' })]],
+      ['scaffold', [new File(['data_x'], 'scaffold.cif')]],
+    ]);
+    const value = form([{ id: 'condition', title: 'Condition' }, { id: 'scaffold', title: 'Scaffold' }]);
+    value.input_workspace.builders = [{ ...builder, available: false }];
+    const definition = {
+      ...value.input_workspace.steps[0]!.capabilities[1]!,
+      options: { builder: 'synthetic', target: 'af3', outputs: { input: 'condition' }, exclusive: true },
+    };
+    const target = new HarnessNode('DIV');
+    const instance = inputBuilder.mount(
+      target as unknown as HTMLElement, definition as never, context(value, files), { fetch: async () => new Response('') },
+    ) as WorkspacePluginInstance;
+    expect(instance.validate!()).toEqual([]);
+  });
+
   it('offers upload only when the deployment cannot serve the builder', () => {
     installHarness(vi.stubGlobal);
     const files = new Map<string, File[]>();

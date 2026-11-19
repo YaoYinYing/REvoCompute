@@ -176,8 +176,13 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
   private sessionId: string | null = null;
   private revision = 0;
   private frame: HTMLIFrameElement | null = null;
+  private disposed = false;
+  //: Bumped whenever a document is replaced or the adapter is torn down, so a
+  //: delayed create response cannot install a session nobody owns any more.
+  private generation = 0;
   private readonly onMessage = (event: MessageEvent): void => {
     if (!this.frame || event.source !== this.frame.contentWindow) return;
+    if (event.origin !== window.location.origin) return;
     const payload = event.data as { source?: unknown; type?: unknown; session_id?: unknown } | null;
     // The pinned editor emits `changed` from `HOST_MESSAGE_SOURCE`; `selection`
     // is not a document edit.  Only this adapter's own session may invalidate.
@@ -185,10 +190,14 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
       payload && payload.source === 'atomworks-annotation-studio'
       && payload.type === 'changed' && payload.session_id === this.sessionId
     ) {
-      for (const listener of this.listeners) listener();
+      this.notifyChange();
     }
   };
   private readonly listeners = new Set<ChangeListener>();
+
+  private notifyChange(): void {
+    for (const listener of this.listeners) listener();
+  }
 
   private constructor(private readonly container: HTMLElement) {}
 
@@ -228,14 +237,27 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
       }
       open.disabled = true;
       status.textContent = t('ct.builder.opening');
-      void this.open(file, frameHost, status).catch(error => {
+      void this.open(file, frameHost, status).then(() => {
+        open.disabled = false;
+      }).catch(error => {
         open.disabled = false;
         status.textContent = error instanceof Error ? error.message : String(error);
       });
     });
   }
 
+  private async discardSession(session: string): Promise<void> {
+    await fetch(`/api/sessions/${encodeURIComponent(session)}`, {
+      method: 'DELETE', credentials: 'same-origin',
+    }).catch(() => undefined);
+  }
+
   private async open(file: File | string, host: HTMLElement, status: HTMLElement): Promise<void> {
+    const generation = ++this.generation;
+    // Replacing the document is an edit at initiation: a previously applied
+    // output must stop being submittable even if this new session is never
+    // edited, and even if creating it fails.
+    this.notifyChange();
     await this.closeSession();
     host.replaceChildren();
     const data = new FormData();
@@ -244,9 +266,17 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
       : file);
     data.append('parse_preset', 'minimal');
     const response = await fetch('/api/sessions', { method: 'POST', body: data, credentials: 'same-origin' });
+    const created = await response.json().catch(() => null) as { session_id?: unknown; editor_path?: unknown } | null;
+    if (this.disposed || generation !== this.generation) {
+      // The host tore this session down or opened another document while the
+      // request was in flight.  Nobody owns the created session now.
+      if (response.ok && created && typeof created.session_id === 'string') {
+        await this.discardSession(created.session_id);
+      }
+      return;
+    }
     if (!response.ok) throw new Error(`AtomWorks Studio refused the CIF (HTTP ${response.status}).`);
-    const created = await response.json() as { session_id?: unknown; editor_path?: unknown };
-    if (typeof created.session_id !== 'string' || typeof created.editor_path !== 'string') {
+    if (!created || typeof created.session_id !== 'string' || typeof created.editor_path !== 'string') {
       throw new Error('AtomWorks Studio returned an invalid session.');
     }
     this.sessionId = created.session_id;
@@ -268,15 +298,11 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
   }
 
   private async closeSession(): Promise<void> {
-    if (this.sessionId) {
-      const session = this.sessionId;
-      this.sessionId = null;
-      await fetch(`/api/sessions/${encodeURIComponent(session)}`, {
-        method: 'DELETE', credentials: 'same-origin',
-      }).catch(() => undefined);
-    }
+    const session = this.sessionId;
+    this.sessionId = null;
     this.frame?.remove();
     this.frame = null;
+    if (session) await this.discardSession(session);
   }
 
   async materialize(): Promise<BuilderMaterialized> {
@@ -333,6 +359,8 @@ class AtomWorksAdapter implements BuilderAdapterInstance {
   }
 
   destroy(): void {
+    this.disposed = true;
+    this.generation += 1;
     window.removeEventListener('message', this.onMessage);
     this.listeners.clear();
     void this.closeSession();
